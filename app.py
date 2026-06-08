@@ -9,8 +9,10 @@ from datetime import datetime, timedelta, timezone
 import feedparser
 import gradio as gr
 import pandas as pd
+import plotly.graph_objects as go
 import requests
 import yfinance as yf
+from plotly.subplots import make_subplots
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 
@@ -19,6 +21,8 @@ FRONTEND_POLL_SECONDS = 20
 NEWS_REFRESH_SECONDS = 75
 PRICE_REFRESH_SECONDS = 150
 FULL_REFRESH_SECONDS = 300
+HISTORY_PRICE_REFRESH_SECONDS = 1800
+MAX_HISTORY_PERIOD = "max"
 MAX_NEWS_PER_FEED = 35
 MAX_SOURCE_WORKERS = 18
 FEED_TIMEOUT_SECONDS = 7
@@ -152,12 +156,17 @@ HEADERS = {
 }
 
 analyzer = SentimentIntensityAnalyzer()
+_PRICE_CACHE_LOCK = threading.RLock()
+_PRICE_CACHE = {}
 
 
 def clamp(value, low=0.0, high=100.0):
     if value is None or pd.isna(value):
         return low
-    return max(low, min(high, float(value)))
+    number = float(value)
+    if not math.isfinite(number):
+        return low
+    return max(low, min(high, number))
 
 
 def scale(value, low, high):
@@ -170,7 +179,10 @@ def safe_float(value, default=math.nan):
     try:
         if pd.isna(value):
             return default
-        return float(value)
+        number = float(value)
+        if not math.isfinite(number):
+            return default
+        return number
     except (TypeError, ValueError):
         return default
 
@@ -462,9 +474,16 @@ def map_news_to_assets(news, assets):
     return pd.DataFrame(rows)
 
 
-def fetch_prices(symbols, period="18mo", interval="1d"):
+def fetch_prices(symbols, period=MAX_HISTORY_PERIOD, interval="1d"):
     if not symbols:
         return {}
+
+    key = (tuple(sorted(set(symbols))), period, interval)
+    ttl = HISTORY_PRICE_REFRESH_SECONDS if period == MAX_HISTORY_PERIOD and interval == "1d" else PRICE_REFRESH_SECONDS
+    with _PRICE_CACHE_LOCK:
+        cached = _PRICE_CACHE.get(key)
+        if cached and time.time() - cached["timestamp"] < ttl:
+            return {symbol: frame.copy() for symbol, frame in cached["frames"].items() if symbol in symbols}
 
     try:
         data = yf.download(
@@ -503,6 +522,12 @@ def fetch_prices(symbols, period="18mo", interval="1d"):
                 frames[symbol] = frame
         except Exception:
             continue
+
+    with _PRICE_CACHE_LOCK:
+        _PRICE_CACHE[key] = {
+            "timestamp": time.time(),
+            "frames": {symbol: frame.copy() for symbol, frame in frames.items()},
+        }
 
     return frames
 
@@ -569,12 +594,149 @@ def return_pct(close, periods):
     return (latest / base - 1) * 100
 
 
-def technicals(symbol, frame):
+def rounded(value, digits=2):
+    number = safe_float(value)
+    if pd.isna(number):
+        return None
+    return round(number, digits)
+
+
+def percent_from_ratio(value):
+    number = safe_float(value)
+    if pd.isna(number):
+        return math.nan
+    return number * 100
+
+
+def history_years(close):
+    if close is None or len(close) < 2:
+        return math.nan
+    try:
+        days = (pd.Timestamp(close.index[-1]) - pd.Timestamp(close.index[0])).days
+    except Exception:
+        days = 0
+    if days and days > 0:
+        return days / 365.25
+    return len(close) / 252
+
+
+def inception_label(close):
+    if close is None or close.empty:
+        return "n/a"
+    try:
+        return pd.Timestamp(close.index[0]).strftime("%Y-%m-%d")
+    except Exception:
+        return "n/a"
+
+
+def all_time_cagr(close):
+    if close is None or len(close) < 2:
+        return math.nan
+    first = safe_float(close.iloc[0])
+    latest = safe_float(close.iloc[-1])
+    years = history_years(close)
+    if first <= 0 or latest <= 0 or pd.isna(years) or years <= 0:
+        return math.nan
+    return ((latest / first) ** (1 / years) - 1) * 100
+
+
+def max_drawdown_pct(close):
+    if close is None or close.empty:
+        return math.nan
+    running_high = close.cummax()
+    drawdowns = (close / running_high - 1) * 100
+    return safe_float(drawdowns.min())
+
+
+def ulcer_index(close):
+    if close is None or close.empty:
+        return math.nan
+    drawdowns = (close / close.cummax() - 1) * 100
+    return safe_float(math.sqrt(float((drawdowns.pow(2)).mean())))
+
+
+def annualized_sharpe(returns):
+    if returns is None or len(returns) < 30:
+        return math.nan
+    std = safe_float(returns.std())
+    if std <= 0:
+        return math.nan
+    return safe_float((returns.mean() / std) * math.sqrt(252))
+
+
+def annualized_sortino(returns):
+    if returns is None or len(returns) < 30:
+        return math.nan
+    downside = returns[returns < 0]
+    downside_std = safe_float(downside.std())
+    if downside.empty or downside_std <= 0:
+        return math.nan
+    return safe_float((returns.mean() / downside_std) * math.sqrt(252))
+
+
+def benchmark_profile(close, benchmark_close):
+    blank = {
+        "beta_spy": None,
+        "corr_spy": None,
+        "relative_strength_1y": None,
+        "information_ratio_1y": None,
+        "up_capture_spy": None,
+        "down_capture_spy": None,
+    }
+    if benchmark_close is None or close is None or benchmark_close.empty or close.empty:
+        return blank
+
+    paired = pd.concat(
+        [
+            close.pct_change().rename("asset"),
+            benchmark_close.pct_change().rename("benchmark"),
+        ],
+        axis=1,
+        join="inner",
+    ).replace([math.inf, -math.inf], math.nan).dropna()
+
+    if len(paired) < 60:
+        return blank
+
+    recent = paired.tail(min(252, len(paired)))
+    bench_var = safe_float(recent["benchmark"].var())
+    beta = safe_float(recent["asset"].cov(recent["benchmark"]) / bench_var) if bench_var > 0 else math.nan
+    corr = safe_float(recent["asset"].corr(recent["benchmark"]))
+    active = recent["asset"] - recent["benchmark"]
+    active_std = safe_float(active.std())
+    information_ratio = safe_float((active.mean() / active_std) * math.sqrt(252)) if active_std > 0 else math.nan
+    asset_window_return = ((1 + recent["asset"]).prod() - 1) * 100
+    benchmark_window_return = ((1 + recent["benchmark"]).prod() - 1) * 100
+    relative_strength = safe_float(asset_window_return - benchmark_window_return)
+
+    up = recent[recent["benchmark"] > 0]
+    down = recent[recent["benchmark"] < 0]
+    up_capture = math.nan
+    down_capture = math.nan
+    up_bench = safe_float(up["benchmark"].mean()) if not up.empty else math.nan
+    down_bench = safe_float(down["benchmark"].mean()) if not down.empty else math.nan
+    if not pd.isna(up_bench) and up_bench != 0:
+        up_capture = safe_float(up["asset"].mean() / up_bench * 100)
+    if not pd.isna(down_bench) and down_bench != 0:
+        down_capture = safe_float(down["asset"].mean() / down_bench * 100)
+
+    return {
+        "beta_spy": rounded(beta, 2),
+        "corr_spy": rounded(corr, 2),
+        "relative_strength_1y": rounded(relative_strength, 2),
+        "information_ratio_1y": rounded(information_ratio, 2),
+        "up_capture_spy": rounded(up_capture, 1),
+        "down_capture_spy": rounded(down_capture, 1),
+    }
+
+
+def technicals(symbol, frame, benchmark_close=None):
     if frame is None or frame.empty or len(frame) < 50:
         return {"symbol": symbol, "error": "Insufficient price history"}
 
     close = frame["Close"].dropna()
     volume = frame["Volume"].dropna() if "Volume" in frame else pd.Series(dtype=float)
+    returns = close.pct_change().replace([math.inf, -math.inf], math.nan).dropna()
     latest = safe_float(close.iloc[-1])
     sma20 = safe_float(close.rolling(20).mean().iloc[-1])
     sma50 = safe_float(close.rolling(50).mean().iloc[-1])
@@ -586,9 +748,30 @@ def technicals(symbol, frame):
     ret63 = return_pct(close, 63)
     ret126 = return_pct(close, 126)
     ret252 = return_pct(close, 252)
+    ret504 = return_pct(close, 504)
+    ret756 = return_pct(close, 756)
     vol60 = safe_float(close.pct_change().tail(60).std() * math.sqrt(252) * 100)
+    vol252 = safe_float(returns.tail(min(252, len(returns))).std() * math.sqrt(252) * 100) if len(returns) >= 30 else math.nan
     high_252 = safe_float(close.tail(min(252, len(close))).max())
     drawdown = ((latest / high_252) - 1) * 100 if high_252 and not pd.isna(high_252) else math.nan
+    high_all_time = safe_float(close.max())
+    ath_distance = ((latest / high_all_time) - 1) * 100 if high_all_time and not pd.isna(high_all_time) else math.nan
+    hist_years = history_years(close)
+    cagr = all_time_cagr(close)
+    max_drawdown = max_drawdown_pct(close)
+    sharpe = annualized_sharpe(returns)
+    sortino = annualized_sortino(returns)
+    calmar = safe_float((cagr / abs(max_drawdown))) if not pd.isna(cagr) and not pd.isna(max_drawdown) and max_drawdown < 0 else math.nan
+    var95_daily = percent_from_ratio(returns.quantile(0.05)) if not returns.empty else math.nan
+    tail = returns[returns <= returns.quantile(0.05)] if not returns.empty else pd.Series(dtype=float)
+    cvar95_daily = percent_from_ratio(tail.mean()) if not tail.empty else math.nan
+    hit_rate = percent_from_ratio((returns > 0).mean()) if not returns.empty else math.nan
+    best_day = percent_from_ratio(returns.max()) if not returns.empty else math.nan
+    worst_day = percent_from_ratio(returns.min()) if not returns.empty else math.nan
+    skew = safe_float(returns.skew()) if len(returns) >= 30 else math.nan
+    kurtosis = safe_float(returns.kurtosis()) if len(returns) >= 30 else math.nan
+    ulcer = ulcer_index(close)
+    benchmark = benchmark_profile(close, benchmark_close)
 
     if not volume.empty and len(volume) > 20:
         avg_volume = safe_float(volume.tail(21).iloc[:-1].mean())
@@ -622,8 +805,28 @@ def technicals(symbol, frame):
         "63d": round(ret63, 2) if not pd.isna(ret63) else None,
         "126d": round(ret126, 2) if not pd.isna(ret126) else None,
         "252d": round(ret252, 2) if not pd.isna(ret252) else None,
+        "504d": round(ret504, 2) if not pd.isna(ret504) else None,
+        "756d": round(ret756, 2) if not pd.isna(ret756) else None,
         "vol60": round(vol60, 2) if not pd.isna(vol60) else None,
+        "vol252": rounded(vol252, 2),
         "drawdown_1y": round(drawdown, 2) if not pd.isna(drawdown) else None,
+        "history_years": rounded(hist_years, 1),
+        "inception_date": inception_label(close),
+        "all_time_return": rounded((latest / safe_float(close.iloc[0]) - 1) * 100 if safe_float(close.iloc[0]) > 0 else math.nan, 2),
+        "cagr": rounded(cagr, 2),
+        "max_drawdown": rounded(max_drawdown, 2),
+        "ath_distance": rounded(ath_distance, 2),
+        "sharpe": rounded(sharpe, 2),
+        "sortino": rounded(sortino, 2),
+        "calmar": rounded(calmar, 2),
+        "var95_daily": rounded(var95_daily, 2),
+        "cvar95_daily": rounded(cvar95_daily, 2),
+        "hit_rate": rounded(hit_rate, 1),
+        "best_day": rounded(best_day, 2),
+        "worst_day": rounded(worst_day, 2),
+        "skew": rounded(skew, 2),
+        "kurtosis": rounded(kurtosis, 2),
+        "ulcer_index": rounded(ulcer, 2),
         "volume_shock": round(volume_shock, 2),
         "sma20": round(sma20, 2),
         "sma50": round(sma50, 2),
@@ -631,6 +834,7 @@ def technicals(symbol, frame):
         "rsi14": round(rsi14, 1) if not pd.isna(rsi14) else None,
         "trend_score": trend_score,
         "technical_view": technical_view,
+        **benchmark,
         "error": "",
     }
 
@@ -730,6 +934,31 @@ def score_asset(asset, tech, news_stats, regime):
     volume_component = scale(tech.get("volume_shock"), -35, 80)
     volatility_penalty = scale(tech.get("vol60"), 55, 12)
     drawdown_component = scale(tech.get("drawdown_1y"), -35, 0)
+    history_depth = scale(tech.get("history_years"), 0.5, 15)
+    cagr_component = scale(tech.get("cagr"), -8, 22)
+    sharpe_component = scale(tech.get("sharpe"), -0.6, 2.2)
+    sortino_component = scale(tech.get("sortino"), -0.8, 3.0)
+    calmar_component = scale(tech.get("calmar"), -0.25, 1.6)
+    max_drawdown_component = scale(tech.get("max_drawdown"), -72, -8)
+    ath_component = scale(tech.get("ath_distance"), -55, 0)
+    relative_strength = scale(tech.get("relative_strength_1y"), -25, 25)
+    information_component = scale(tech.get("information_ratio_1y"), -1.1, 1.4)
+    beta_control = scale(tech.get("beta_spy"), 2.2, 0.55)
+    tail_risk = scale(tech.get("var95_daily"), -5.5, -0.8)
+    up_capture = scale(tech.get("up_capture_spy"), 45, 130)
+    down_capture = scale(tech.get("down_capture_spy"), 155, 55)
+    institutional_quality = (
+        history_depth * 0.07
+        + cagr_component * 0.16
+        + sharpe_component * 0.16
+        + sortino_component * 0.12
+        + calmar_component * 0.12
+        + max_drawdown_component * 0.12
+        + beta_control * 0.08
+        + tail_risk * 0.07
+        + up_capture * 0.05
+        + down_capture * 0.05
+    )
     rsi_value = tech.get("rsi14") or 50
     extension_penalty = 18 if rsi_value > 76 else 8 if rsi_value > 70 else 0
     oversold_bonus = 8 if rsi_value < 32 else 0
@@ -737,14 +966,18 @@ def score_asset(asset, tech, news_stats, regime):
     defensive_bonus = 5 if regime["label"] == "Risk-off" and asset["sector"] in {"Staples", "Healthcare", "Utilities", "Rates", "Commodities"} else 0
 
     short_score = (
-        sentiment_component * 0.30
-        + short_momentum * 0.25
-        + trend_component * 0.15
+        sentiment_component * 0.25
+        + short_momentum * 0.22
+        + trend_component * 0.12
+        + relative_strength * 0.08
+        + information_component * 0.04
         + relevance_boost * 0.08
-        + quality_boost * 0.08
+        + quality_boost * 0.07
         + diversity_boost * 0.05
-        + volume_component * 0.08
+        + volume_component * 0.07
         + volatility_penalty * 0.05
+        + ath_component * 0.04
+        + tail_risk * 0.03
         + regime_bonus
         + defensive_bonus
         + catalyst_boost
@@ -753,14 +986,20 @@ def score_asset(asset, tech, news_stats, regime):
     )
 
     long_score = (
-        long_momentum * 0.30
-        + trend_component * 0.22
-        + sentiment_component * 0.15
-        + drawdown_component * 0.10
-        + volatility_penalty * 0.10
-        + relevance_boost * 0.05
-        + quality_boost * 0.07
-        + diversity_boost * 0.06
+        institutional_quality * 0.28
+        + long_momentum * 0.18
+        + cagr_component * 0.10
+        + sharpe_component * 0.08
+        + max_drawdown_component * 0.08
+        + relative_strength * 0.07
+        + information_component * 0.05
+        + trend_component * 0.08
+        + sentiment_component * 0.07
+        + drawdown_component * 0.04
+        + volatility_penalty * 0.04
+        + relevance_boost * 0.03
+        + quality_boost * 0.04
+        + diversity_boost * 0.04
         + regime_bonus * 0.6
         + defensive_bonus * 0.7
         + catalyst_boost * 0.5
@@ -769,11 +1008,34 @@ def score_asset(asset, tech, news_stats, regime):
     short_score = round(clamp(short_score), 1)
     long_score = round(clamp(long_score), 1)
     alpha_score = round((short_score * 0.48) + (long_score * 0.52), 1)
+    catalyst_stack = (
+        sentiment_component * 0.34
+        + quality_boost * 0.28
+        + diversity_boost * 0.18
+        + relevance_boost * 0.20
+    )
+    institutional_edge = round(
+        clamp(
+            (
+                short_score * 0.26
+                + long_score * 0.34
+                + institutional_quality * 0.25
+                + catalyst_stack * 0.10
+                + relative_strength * 0.05
+            )
+            * 1.10,
+            0,
+            110,
+        ),
+        1,
+    )
 
     return {
         "short_score": short_score,
         "long_score": long_score,
         "alpha_score": alpha_score,
+        "institutional_edge": institutional_edge,
+        "institutional_quality": round(clamp(institutional_quality), 1),
     }
 
 
@@ -819,6 +1081,12 @@ def forward_lens(row, horizon):
 def first_rejection(row):
     if row["news_count"] == 0:
         return "No direct source proof yet; signal relies on broad market sentiment."
+    if row.get("history_years") and row["history_years"] < 1:
+        return "Public trading history is too short for institutional long-horizon confidence."
+    if row.get("max_drawdown") and row["max_drawdown"] < -70:
+        return "Full-history drawdown profile shows severe structural downside risk."
+    if row.get("sharpe") is not None and not pd.isna(row["sharpe"]) and row["sharpe"] < 0:
+        return "Negative full-history risk-adjusted return profile."
     if row.get("source_diversity", 0) < 2 and row.get("source_quality", 0) < 120:
         return "Catalyst is not yet independently confirmed across enough sources."
     if row.get("RSI 14") and row["RSI 14"] > 76:
@@ -827,6 +1095,8 @@ def first_rejection(row):
         return "Trend damage; require price repair before priority work."
     if row.get("vol60") and row["vol60"] > 48:
         return "High realized volatility may overwhelm the signal."
+    if row.get("beta_spy") and row["beta_spy"] > 1.8:
+        return "High beta versus SPY requires tighter sizing and cleaner catalyst proof."
     if row["avg_sentiment"] < -0.2:
         return "Negative news tone conflicts with the setup."
     return "Need stronger evidence that the catalyst affects revenue, margins, flows or estimates."
@@ -854,6 +1124,10 @@ def variant_wedge(row):
 
 
 def investable_trigger(row):
+    if row.get("history_years") and row["history_years"] < 1:
+        return "More public trading history plus direct source proof from filings, issuer data or tier-one coverage."
+    if row.get("sharpe") is not None and not pd.isna(row["sharpe"]) and row["sharpe"] < 0:
+        return "Risk-adjusted profile repair: positive trend, improved downside capture and cleaner catalyst evidence."
     if row["technical_view"] == "Extended":
         return "Pullback toward trend support without deterioration in news tone."
     if row["technical_view"] == "Downtrend":
@@ -887,6 +1161,8 @@ def make_rows(assets, metrics, matched_news, broad_sentiment, regime):
                     "short_score": 0.0,
                     "long_score": 0.0,
                     "alpha_score": 0.0,
+                    "institutional_edge": 0.0,
+                    "institutional_quality": 0.0,
                     "short_bucket": "Reject / wait",
                     "long_bucket": "Reject / wait",
                     "last": None,
@@ -896,6 +1172,25 @@ def make_rows(assets, metrics, matched_news, broad_sentiment, regime):
                     "63d %": None,
                     "252d %": None,
                     "vol60": None,
+                    "vol252": None,
+                    "history_years": None,
+                    "inception_date": "n/a",
+                    "all_time_return": None,
+                    "cagr": None,
+                    "max_drawdown": None,
+                    "ath_distance": None,
+                    "sharpe": None,
+                    "sortino": None,
+                    "calmar": None,
+                    "var95_daily": None,
+                    "cvar95_daily": None,
+                    "hit_rate": None,
+                    "beta_spy": None,
+                    "corr_spy": None,
+                    "relative_strength_1y": None,
+                    "information_ratio_1y": None,
+                    "up_capture_spy": None,
+                    "down_capture_spy": None,
                     "RSI 14": None,
                     "technical_view": "No data",
                     "news_count": news_stats["news_count"],
@@ -924,6 +1219,8 @@ def make_rows(assets, metrics, matched_news, broad_sentiment, regime):
             "short_score": scores["short_score"],
             "long_score": scores["long_score"],
             "alpha_score": scores["alpha_score"],
+            "institutional_edge": scores["institutional_edge"],
+            "institutional_quality": scores["institutional_quality"],
             "short_bucket": bucket(scores["short_score"]),
             "long_bucket": bucket(scores["long_score"]),
             "last": tech["last"],
@@ -933,6 +1230,25 @@ def make_rows(assets, metrics, matched_news, broad_sentiment, regime):
             "63d %": tech["63d"],
             "252d %": tech["252d"],
             "vol60": tech["vol60"],
+            "vol252": tech["vol252"],
+            "history_years": tech["history_years"],
+            "inception_date": tech["inception_date"],
+            "all_time_return": tech["all_time_return"],
+            "cagr": tech["cagr"],
+            "max_drawdown": tech["max_drawdown"],
+            "ath_distance": tech["ath_distance"],
+            "sharpe": tech["sharpe"],
+            "sortino": tech["sortino"],
+            "calmar": tech["calmar"],
+            "var95_daily": tech["var95_daily"],
+            "cvar95_daily": tech["cvar95_daily"],
+            "hit_rate": tech["hit_rate"],
+            "beta_spy": tech["beta_spy"],
+            "corr_spy": tech["corr_spy"],
+            "relative_strength_1y": tech["relative_strength_1y"],
+            "information_ratio_1y": tech["information_ratio_1y"],
+            "up_capture_spy": tech["up_capture_spy"],
+            "down_capture_spy": tech["down_capture_spy"],
             "RSI 14": tech["rsi14"],
             "technical_view": tech["technical_view"],
             "news_count": news_stats["news_count"],
@@ -984,10 +1300,11 @@ def signed(value):
     return f"{float(value):+.2f}%"
 
 
-def score_ring(score):
-    score = clamp(score)
+def score_ring(score, max_score=100):
+    score = clamp(score, 0, max_score)
+    ring_pct = (score / max_score) * 100 if max_score else score
     return f"""
-    <div class="score-ring" style="--score:{score};">
+    <div class="score-ring" style="--score:{ring_pct};">
       <span>{score:.0f}</span>
     </div>
     """
@@ -1025,6 +1342,179 @@ def sparkline_svg(frame, width=240, height=78):
     """
 
 
+def plotly_template(fig, title, height=360):
+    fig.update_layout(
+        title={"text": title, "font": {"size": 15, "color": "#ffd46a"}, "x": 0.02},
+        paper_bgcolor="#050608",
+        plot_bgcolor="#070a0f",
+        font={"color": "#f4f7fb", "family": "Inter, Arial, sans-serif"},
+        height=height,
+        margin={"l": 42, "r": 18, "t": 52, "b": 38},
+        legend={
+            "orientation": "h",
+            "yanchor": "bottom",
+            "y": 1.02,
+            "xanchor": "right",
+            "x": 1,
+            "font": {"size": 10},
+        },
+        hovermode="x unified",
+    )
+    fig.update_xaxes(
+        gridcolor="rgba(255,255,255,.06)",
+        zeroline=False,
+        showline=True,
+        linecolor="rgba(255,255,255,.14)",
+    )
+    fig.update_yaxes(
+        gridcolor="rgba(255,255,255,.06)",
+        zeroline=False,
+        showline=True,
+        linecolor="rgba(255,255,255,.14)",
+    )
+    return fig
+
+
+def empty_figure(title, message="Waiting for live data"):
+    fig = go.Figure()
+    fig.add_annotation(
+        text=message,
+        x=0.5,
+        y=0.5,
+        xref="paper",
+        yref="paper",
+        showarrow=False,
+        font={"color": "#9aa2ad", "size": 14},
+    )
+    return plotly_template(fig, title, height=320)
+
+
+def build_market_plot(intraday_frames, df):
+    if not intraday_frames:
+        return empty_figure("Live Market Board", "Intraday chart data is warming up")
+
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.06,
+        row_heights=[0.72, 0.28],
+        specs=[[{"secondary_y": False}], [{"secondary_y": False}]],
+    )
+    palette = {
+        "SPY": "#ffd46a",
+        "QQQ": "#4dd8ff",
+        "IWM": "#a78bfa",
+        "SMH": "#20e070",
+        "XLF": "#58a6ff",
+        "XLE": "#ff8f3d",
+        "TLT": "#c7d2fe",
+        "GLD": "#facc15",
+    }
+
+    for symbol in CHART_SYMBOLS:
+        frame = intraday_frames.get(symbol)
+        if frame is None or frame.empty or "Close" not in frame:
+            continue
+        close = frame["Close"].dropna().tail(160)
+        if len(close) < 3:
+            continue
+        normalized = close / close.iloc[0] * 100
+        fig.add_trace(
+            go.Scatter(
+                x=normalized.index,
+                y=normalized,
+                mode="lines",
+                name=symbol,
+                line={"width": 2, "color": palette.get(symbol, "#f4f7fb")},
+            ),
+            row=1,
+            col=1,
+        )
+
+    if not df.empty:
+        movers = df[df["symbol"].isin(CHART_SYMBOLS)].copy()
+        if not movers.empty:
+            movers = movers.sort_values("1d %", ascending=True)
+            colors = ["#20e070" if (v is not None and not pd.isna(v) and v >= 0) else "#ff4b5c" for v in movers["1d %"]]
+            fig.add_trace(
+                go.Bar(
+                    x=movers["1d %"],
+                    y=movers["symbol"],
+                    orientation="h",
+                    marker={"color": colors},
+                    name="1D %",
+                    hovertemplate="%{y}: %{x:.2f}%<extra></extra>",
+                ),
+                row=2,
+                col=1,
+            )
+
+    fig.update_yaxes(title_text="Indexed 100", row=1, col=1)
+    fig.update_yaxes(title_text="1D", row=2, col=1)
+    fig.update_xaxes(title_text="Intraday", row=2, col=1)
+    return plotly_template(fig, "Live Market Board - 5m Intraday + 1D Movers", height=430)
+
+
+def build_sector_plot(df):
+    if df.empty:
+        return empty_figure("Sector Command Map", "Waiting for ranked instruments")
+    grouped = (
+        df.groupby("sector")
+        .agg(
+            short_score=("short_score", "mean"),
+            long_score=("long_score", "mean"),
+            institutional_edge=("institutional_edge", "mean"),
+            tone=("avg_sentiment", "mean"),
+            count=("symbol", "count"),
+        )
+        .reset_index()
+    )
+    grouped["composite"] = grouped["institutional_edge"]
+    grouped = grouped.sort_values("composite", ascending=True)
+    colors = ["#20e070" if tone > 0.08 else "#ff4b5c" if tone < -0.08 else "#ffb000" for tone in grouped["tone"]]
+    fig = go.Figure(
+        go.Bar(
+            x=grouped["composite"],
+            y=grouped["sector"],
+            orientation="h",
+            marker={"color": colors, "line": {"color": "rgba(255,255,255,.16)", "width": 1}},
+            customdata=grouped[["tone", "count", "short_score", "long_score", "institutional_edge"]],
+            hovertemplate=(
+                "<b>%{y}</b><br>"
+                "Institutional Edge: %{x:.1f}/110<br>"
+                "Tone: %{customdata[0]:+.2f}<br>"
+                "Instruments: %{customdata[1]}<br>"
+                "Short: %{customdata[2]:.1f}<br>"
+                "Long: %{customdata[3]:.1f}<br>"
+                "Edge: %{customdata[4]:.1f}<extra></extra>"
+            ),
+        )
+    )
+    fig.update_xaxes(range=[0, 110])
+    return plotly_template(fig, "Sector Command Map - Institutional Edge / 110", height=360)
+
+
+def build_theme_plot(theme_df):
+    if theme_df is None or theme_df.empty:
+        return empty_figure("Theme Sentiment Radar", "Waiting for theme classification")
+    data = theme_df.sort_values("headlines", ascending=True).tail(10)
+    colors = ["#20e070" if tone > 0.08 else "#ff4b5c" if tone < -0.08 else "#ffb000" for tone in data["avg_sentiment"]]
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            x=data["headlines"],
+            y=data["theme"],
+            orientation="h",
+            marker={"color": colors},
+            text=[f"{tone:+.2f}" for tone in data["avg_sentiment"]],
+            textposition="outside",
+            hovertemplate="<b>%{y}</b><br>Headlines: %{x}<br>Tone: %{text}<extra></extra>",
+        )
+    )
+    return plotly_template(fig, "Theme Sentiment Radar", height=360)
+
+
 def build_chart_wall(df, price_frames):
     symbols = ["SPY", "QQQ", "IWM", "SMH", "XLF", "XLE", "TLT", "GLD"]
     cards = []
@@ -1052,13 +1542,13 @@ def build_sector_heatmap(df):
         return "<div class='empty-state'>No sector heatmap yet.</div>"
     grouped = (
         df.groupby("sector")
-        .agg(short_score=("short_score", "mean"), long_score=("long_score", "mean"), tone=("avg_sentiment", "mean"), count=("symbol", "count"))
+        .agg(short_score=("short_score", "mean"), long_score=("long_score", "mean"), institutional_edge=("institutional_edge", "mean"), tone=("avg_sentiment", "mean"), count=("symbol", "count"))
         .reset_index()
-        .sort_values("short_score", ascending=False)
+        .sort_values("institutional_edge", ascending=False)
     )
     cells = []
     for _, row in grouped.iterrows():
-        score = round(float((row["short_score"] * 0.55) + (row["long_score"] * 0.45)), 1)
+        score = round(float(row["institutional_edge"]), 1)
         tone = float(row["tone"])
         tone_class = "pos" if tone > 0.08 else "neg" if tone < -0.08 else "neu"
         cells.append(
@@ -1066,7 +1556,7 @@ def build_sector_heatmap(df):
             <div class="heat-cell {tone_class}" style="--heat:{score};">
               <span>{esc(row["sector"])}</span>
               <strong>{score:.0f}</strong>
-              <small>{int(row["count"])} instruments | tone {tone:+.2f}</small>
+              <small>{int(row["count"])} instruments | edge /110 | tone {tone:+.2f}</small>
             </div>
             """
         )
@@ -1130,19 +1620,20 @@ def build_market_ticker(df):
     return "<div class='market-ticker'>" + "".join(items) + "</div>"
 
 
-def build_shell_html(pulse, regime, df, warnings, theme_df, news, source_report, price_frames):
+def build_shell_html(pulse, regime, df, warnings, theme_df, news, source_report):
     top_short = df.sort_values("short_score", ascending=False).head(1).iloc[0] if not df.empty else None
     top_long = df.sort_values("long_score", ascending=False).head(1).iloc[0] if not df.empty else None
+    top_edge = df.sort_values("institutional_edge", ascending=False).head(1).iloc[0] if not df.empty else None
     advance_short = int((df["short_score"] >= 78).sum()) if not df.empty else 0
     advance_long = int((df["long_score"] >= 78).sum()) if not df.empty else 0
+    edge_count = int((df["institutional_edge"] >= 90).sum()) if not df.empty else 0
+    max_history = round(float(df["history_years"].fillna(0).max()), 1) if not df.empty and "history_years" in df else 0.0
     theme_leader = theme_df.head(1).iloc[0].to_dict() if not theme_df.empty else {"theme": "n/a", "avg_sentiment": 0, "headlines": 0}
 
     warning_html = ""
     if warnings:
         warning_html = "<div class='terminal-warning'>Source warnings: " + esc(" | ".join(warnings[:3])) + "</div>"
 
-    chart_wall = build_chart_wall(df, price_frames)
-    sector_heatmap = build_sector_heatmap(df)
     source_panel = build_source_panel(source_report)
     headline_radar = build_headline_radar(news)
     market_ticker = build_market_ticker(df)
@@ -1152,7 +1643,7 @@ def build_shell_html(pulse, regime, df, warnings, theme_df, news, source_report,
       <div>
         <div class="terminal-kicker">REALTIME PUBLIC MARKET INTELLIGENCE / CACHE UPDATED {esc(now_label())}</div>
         <h1>{APP_TITLE}</h1>
-        <p>Live RSS refinery, price-history engine and autonomous equity/ETF research queues. Backend refreshes continuously; the interface reads a clean market snapshot.</p>
+        <p>Live RSS refinery, full-history price engine and autonomous equity/ETF research queues. Backend refreshes continuously; the interface reads a clean market snapshot.</p>
       </div>
       <div class="regime-card">
         <span>MARKET REGIME</span>
@@ -1171,21 +1662,15 @@ def build_shell_html(pulse, regime, df, warnings, theme_df, news, source_report,
       <div class="metric"><span>AVG QUALITY</span><strong>{pulse["quality"]:.0f}</strong></div>
       <div class="metric"><span>SHORT A-LIST</span><strong>{advance_short}</strong></div>
       <div class="metric"><span>LONG A-LIST</span><strong>{advance_long}</strong></div>
+      <div class="metric"><span>EDGE 110</span><strong>{edge_count}</strong><small>{esc(top_edge["symbol"] if top_edge is not None else "n/a")} leads at {(top_edge["institutional_edge"] if top_edge is not None else 0):.0f}/110</small></div>
+      <div class="metric"><span>MAX HISTORY</span><strong>{max_history:.1f}y</strong><small>daily data, max available</small></div>
       <div class="metric"><span>HOT THEME</span><strong>{esc(theme_leader["theme"])}</strong><small>{theme_leader["headlines"]} headlines | {theme_leader["avg_sentiment"]:+.2f}</small></div>
     </section>
 
     <section class="cockpit-grid">
-      <div class="cockpit-panel wide">
-        <div class="panel-label">MARKET CHART WALL</div>
-        {chart_wall}
-      </div>
       <div class="cockpit-panel">
         <div class="panel-label">RSS SOURCE NETWORK</div>
         {source_panel}
-      </div>
-      <div class="cockpit-panel wide">
-        <div class="panel-label">SECTOR HEATMAP</div>
-        {sector_heatmap}
       </div>
       <div class="cockpit-panel">
         <div class="panel-label">LIVE HEADLINE RADAR</div>
@@ -1198,13 +1683,13 @@ def build_shell_html(pulse, regime, df, warnings, theme_df, news, source_report,
         <div class="panel-head"><span>TACTICAL LEADER</span>{score_ring(top_short["short_score"]) if top_short is not None else ""}</div>
         <h2>{esc(top_short["symbol"] if top_short is not None else "n/a")} <small>{esc(top_short["name"] if top_short is not None else "")}</small></h2>
         <p>{esc(top_short["tactical_setup"] if top_short is not None else "")}</p>
-        <div class="leader-meta">{esc(top_short["short_bucket"] if top_short is not None else "")} | {signed(top_short["5d %"] if top_short is not None else None)} 5d | sentiment {(top_short["avg_sentiment"] if top_short is not None else 0):+.2f}</div>
+        <div class="leader-meta">{esc(top_short["short_bucket"] if top_short is not None else "")} | {signed(top_short["5d %"] if top_short is not None else None)} 5d | Edge {(top_short["institutional_edge"] if top_short is not None else 0):.0f}/110 | sentiment {(top_short["avg_sentiment"] if top_short is not None else 0):+.2f}</div>
       </div>
       <div class="leader-panel">
         <div class="panel-head"><span>LONG-HORIZON LEADER</span>{score_ring(top_long["long_score"]) if top_long is not None else ""}</div>
         <h2>{esc(top_long["symbol"] if top_long is not None else "n/a")} <small>{esc(top_long["name"] if top_long is not None else "")}</small></h2>
         <p>{esc(top_long["theme"] if top_long is not None else "")}</p>
-        <div class="leader-meta">{esc(top_long["long_bucket"] if top_long is not None else "")} | {signed(top_long["252d %"] if top_long is not None else None)} 1y | trend {esc(top_long["technical_view"] if top_long is not None else "")}</div>
+        <div class="leader-meta">{esc(top_long["long_bucket"] if top_long is not None else "")} | {signed(top_long["252d %"] if top_long is not None else None)} 1y | CAGR {signed(top_long["cagr"] if top_long is not None else None)} | history {(top_long["history_years"] if top_long is not None and top_long["history_years"] is not None else 0):.1f}y</div>
       </div>
     </section>
     {warning_html}
@@ -1236,6 +1721,10 @@ def card(row, horizon):
         <div><span>RSI</span><strong>{esc(row["RSI 14"])}</strong></div>
         <div><span>News</span><strong>{int(row["news_count"])}</strong></div>
         <div><span>Sources</span><strong>{int(row["source_diversity"])}</strong></div>
+        <div><span>Edge</span><strong>{(row.get("institutional_edge", 0) or 0):.0f}/110</strong></div>
+        <div><span>CAGR</span><strong>{signed(row.get("cagr"))}</strong></div>
+        <div><span>Sharpe</span><strong>{esc(row.get("sharpe"))}</strong></div>
+        <div><span>MDD</span><strong>{signed(row.get("max_drawdown"))}</strong></div>
       </div>
       <div class="catalyst-chip">{esc(row["catalyst_class"])} | tone {row["avg_sentiment"]:+.2f}</div>
       <p class="thesis"><strong>Why now:</strong> {headline_html}</p>
@@ -1260,7 +1749,7 @@ def build_cards_html(df, horizon):
 
 def queue_html(df, horizon):
     title = "Short-Term Tactical Queue" if horizon == "short" else "Long-Term Investment Queue"
-    subtitle = "Fresh catalyst + near-term momentum" if horizon == "short" else "Durability + trend structure"
+    subtitle = "Fresh catalyst + near-term momentum + institutional risk filter" if horizon == "short" else "Full-history durability + trend structure"
     if df.empty:
         return f"""
         <section class="queue-panel">
@@ -1276,15 +1765,18 @@ def queue_html(df, horizon):
     for rank, (_, row) in enumerate(df.sort_values(score_key, ascending=False).head(10).iterrows(), start=1):
         score = float(row[score_key])
         score_class = "score-hot" if score >= 78 else "score-watch" if score >= 64 else "score-cold"
+        edge = float(row.get("institutional_edge", 0) or 0)
+        edge_class = "score-hot" if edge >= 90 else "score-watch" if edge >= 72 else "score-cold"
         rows.append(
             f"""
             <tr>
               <td class="rank-cell">{rank}</td>
               <td class="asset-cell"><strong>{esc(row["symbol"])}</strong><span>{esc(row["sector"])}</span></td>
-              <td><span class="score-pill {score_class}">{score:.0f}</span></td>
+              <td><span class="score-pill {score_class}">{score:.0f}</span><span class="edge-mini {edge_class}">Edge {edge:.0f}/110</span></td>
               <td><strong>{esc(row[bucket_key])}</strong><span>{esc(row["tactical_setup"])}</span></td>
               <td><strong>{esc(row["catalyst_class"])}</strong><span>{int(row["news_count"])} news / {int(row["source_diversity"])} sources / tone {row["avg_sentiment"]:+.2f}</span></td>
               <td><strong>{signed(row[move_key])}</strong><span>RSI {esc(row["RSI 14"])} / {esc(row["technical_view"])}</span></td>
+              <td><strong>{(row["history_years"] if row["history_years"] is not None and not pd.isna(row["history_years"]) else 0):.1f}y history</strong><span>CAGR {signed(row["cagr"])} / Sharpe {esc(row["sharpe"])} / MDD {signed(row["max_drawdown"])}</span><span>Beta {esc(row["beta_spy"])} / RS {signed(row["relative_strength_1y"])}</span></td>
               <td class="why-cell">{esc(clean_text(row["top_headline"], 150))}<span>{esc(clean_text(row["first_rejection"], 120))}</span></td>
             </tr>
             """
@@ -1302,6 +1794,7 @@ def queue_html(df, horizon):
               <th>Research Status</th>
               <th>Catalyst</th>
               <th>Market State</th>
+              <th>Full-History Risk</th>
               <th>Why Now / First Rejection</th>
             </tr>
           </thead>
@@ -1363,13 +1856,13 @@ def build_method_html():
     return """
     <section class="method">
       <h3>Engine prompt executed by this MVP</h3>
-      <p>Act as an autonomous public-market research terminal. Ingest a large public RSS network, classify themes, score source quality, remove low-signal headlines, map catalysts to a liquid equity/ETF universe, retrieve historical price behavior, calculate technical state, infer market regime and produce two ranked research queues: short-term tactical opportunities and long-term investment candidates. The backend maintains a realtime cache; the frontend reads the latest snapshot every few seconds without refetching every source on each render.</p>
+      <p>Act as an autonomous public-market research terminal. Ingest a large public RSS network, classify themes, score source quality, remove low-signal headlines, map catalysts to a liquid equity/ETF universe, retrieve maximum available public price history, calculate technical and institutional risk state, infer market regime and produce two ranked research queues: short-term tactical opportunities and long-term investment candidates. The backend maintains a realtime cache; the frontend reads the latest snapshot every few seconds without refetching every source on each render.</p>
       <h3>Scoring model</h3>
-      <p>Short-term score emphasizes fresh news sentiment, 5d/20d momentum, trend state, relevance, source quality, source diversity, catalyst class, volume shock and regime alignment. Long-term score emphasizes 63d/126d/252d trend, 200-day structure, volatility, drawdown control, source diversity, sentiment persistence and thematic relevance.</p>
+      <p>Short-term score emphasizes fresh news sentiment, 5d/20d momentum, trend state, relevance, source quality, source diversity, catalyst class, volume shock, relative strength and regime alignment. Long-term score emphasizes full-history CAGR, Sharpe, Sortino, Calmar, maximum drawdown, daily VaR/CVaR, all-time-high distance, 63d/126d/252d trend, SPY beta/correlation/capture, information ratio, source diversity, sentiment persistence and thematic relevance. Institutional Edge is a 0-110 research-conviction scale, not a guaranteed success probability.</p>
       <h3>News refinery</h3>
       <p>Every headline receives theme tags, catalyst class, source tier, desk, quality score and canonical key for deduplication. Weak non-market headlines are filtered before they can influence any security ranking.</p>
       <h3>Realtime architecture</h3>
-      <p>RSS and market-data pulls run in backend worker threads. Daily data powers technical scoring; a lightweight Yahoo chart API adapter powers 5-minute intraday chart panels. Manual refresh forces a new snapshot; passive UI polling reads cache only.</p>
+      <p>RSS and market-data pulls run in backend worker threads. Full-history daily data powers institutional scoring and is cached separately; a lightweight Yahoo chart API adapter powers 5-minute intraday chart panels. Manual refresh forces a new snapshot; passive UI polling reads cache only.</p>
       <h3>Data caveat</h3>
       <p>This uses public RSS and Yahoo Finance. It is not licensed terminal data, not financial advice and not a replacement for regulated research, filings, earnings transcripts, valuation work or risk review.</p>
     </section>
@@ -1380,28 +1873,33 @@ def compute_terminal_outputs(universe_mode, custom_symbols, lookback_hours, rss_
     assets = selected_universe(universe_mode, custom_symbols)
     sources = parse_sources(rss_text)
     symbols = [asset["symbol"] for asset in assets]
+    price_symbols = list(dict.fromkeys(symbols + ["SPY"]))
 
     news, warnings, source_report = fetch_news(sources, int(lookback_hours))
     pulse = market_pulse(news, source_report)
     matched = map_news_to_assets(news, assets)
-    price_frames = fetch_prices(symbols, period="18mo", interval="1d")
+    price_frames = fetch_prices(price_symbols, period=MAX_HISTORY_PERIOD, interval="1d")
     intraday_frames = fetch_intraday_prices([symbol for symbol in CHART_SYMBOLS if symbol in symbols])
-    metrics = {symbol: technicals(symbol, price_frames.get(symbol)) for symbol in symbols}
+    benchmark_close = price_frames.get("SPY", pd.DataFrame()).get("Close") if "SPY" in price_frames else None
+    metrics = {symbol: technicals(symbol, price_frames.get(symbol), benchmark_close) for symbol in symbols}
     regime = infer_regime(metrics, pulse["avg"])
     rows = make_rows(assets, metrics, matched, pulse["avg"], regime)
     theme_df = theme_sentiment(news)
 
     if not rows.empty:
-        rows = rows.sort_values(["alpha_score", "short_score", "long_score"], ascending=False).reset_index(drop=True)
+        rows = rows.sort_values(["institutional_edge", "alpha_score", "short_score", "long_score"], ascending=False).reset_index(drop=True)
 
-    shell = build_shell_html(pulse, regime, rows, warnings, theme_df, news, source_report, intraday_frames or price_frames)
+    shell = build_shell_html(pulse, regime, rows, warnings, theme_df, news, source_report)
+    market_plot = build_market_plot(intraday_frames or price_frames, rows)
+    sector_plot = build_sector_plot(rows)
+    theme_plot = build_theme_plot(theme_df)
     short_queue = queue_html(rows, "short")
     long_queue = queue_html(rows, "long")
     news_html = build_news_html(news)
     source_html = source_health_html(source_report)
     method = build_method_html()
 
-    return shell, short_queue, long_queue, news_html, source_html, method
+    return shell, market_plot, sector_plot, theme_plot, short_queue, long_queue, news_html, source_html, method
 
 
 def loading_outputs(message="Building the first market snapshot. Live feeds and price history are warming up."):
@@ -1421,6 +1919,9 @@ def loading_outputs(message="Building the first market snapshot. Live feeds and 
     """
     return (
         shell,
+        empty_figure("Live Market Board"),
+        empty_figure("Sector Command Map"),
+        empty_figure("Theme Sentiment Radar"),
         queue_html(pd.DataFrame(), "short"),
         queue_html(pd.DataFrame(), "long"),
         "<div class='empty-state'>Waiting for the first live news tape.</div>",
@@ -1592,6 +2093,9 @@ label, .block-title, .wrap, .prose {
   text-transform: uppercase;
   letter-spacing: .08em;
   margin: 18px 0 8px !important;
+}
+.plot-container, .js-plotly-plot {
+  border-radius: 10px !important;
 }
 button {
   border-radius: 4px !important;
@@ -1984,6 +2488,7 @@ textarea, input, select {
   padding: 11px 8px;
   vertical-align: top;
   font-size: 12px;
+  overflow-wrap: anywhere;
 }
 .terminal-table tr:hover, .source-table tr:hover {
   background: rgba(255,176,0,.055);
@@ -2004,6 +2509,14 @@ textarea, input, select {
   color: var(--text);
   font-size: 15px;
 }
+.terminal-table th:nth-child(1), .terminal-table td:nth-child(1) { width: 42px; }
+.terminal-table th:nth-child(2), .terminal-table td:nth-child(2) { width: 12%; }
+.terminal-table th:nth-child(3), .terminal-table td:nth-child(3) { width: 86px; }
+.terminal-table th:nth-child(4), .terminal-table td:nth-child(4) { width: 16%; }
+.terminal-table th:nth-child(5), .terminal-table td:nth-child(5) { width: 15%; }
+.terminal-table th:nth-child(6), .terminal-table td:nth-child(6) { width: 12%; }
+.terminal-table th:nth-child(7), .terminal-table td:nth-child(7) { width: 19%; }
+.terminal-table th:nth-child(8), .terminal-table td:nth-child(8) { width: auto; }
 .score-pill {
   display: inline-grid !important;
   place-items: center;
@@ -2014,9 +2527,24 @@ textarea, input, select {
   font-weight: 900;
   margin: 0 !important;
 }
+.edge-mini {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  margin: 6px 0 0 !important;
+  border-radius: 4px;
+  padding: 4px 7px;
+  color: #050608 !important;
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+}
 .score-hot { background: var(--green); }
 .score-watch { background: var(--amber); }
 .score-cold { background: #5f6b7a; color: var(--text) !important; }
+.edge-mini.score-cold { color: var(--text) !important; }
 .why-cell {
   color: #dbe5f1 !important;
   line-height: 1.35;
@@ -2182,6 +2710,13 @@ with gr.Blocks(title=APP_TITLE, css=CSS, theme=gr.themes.Base()) as demo:
                     lines=12,
                 )
 
+    gr.Markdown("### Market Graphs")
+    market_plot_output = gr.Plot(label="Live Market Board")
+    with gr.Row():
+        sector_plot_output = gr.Plot(label="Sector Command Map")
+        theme_plot_output = gr.Plot(label="Theme Sentiment Radar")
+
+    gr.Markdown("### Research Queues")
     short_queue_output = gr.HTML()
     long_queue_output = gr.HTML()
 
@@ -2198,6 +2733,9 @@ with gr.Blocks(title=APP_TITLE, css=CSS, theme=gr.themes.Base()) as demo:
     inputs = [universe_mode, custom_symbols, lookback_hours, rss_text]
     outputs = [
         shell_output,
+        market_plot_output,
+        sector_plot_output,
+        theme_plot_output,
         short_queue_output,
         long_queue_output,
         news_output,
