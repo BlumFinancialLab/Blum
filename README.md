@@ -23,7 +23,7 @@ This is not a consumer trading app and not a simple dashboard. The project is a 
 | Frontend | Next.js, React, Plotly, dark financial intelligence UI |
 | Backend | FastAPI, Pydantic, APScheduler-ready services |
 | Database | PostgreSQL, SQLAlchemy, Alembic |
-| Market data | yfinance provider module, designed for future providers |
+| Market data | yfinance, Yahoo Chart API and Stooq provider chain |
 | News ingestion | RSS feeds, deduplication, ticker linking |
 | AI sentiment | FinBERT primary, VADER baseline |
 | Semantic layer | sentence-transformers embeddings, semantic search, theme discovery |
@@ -45,7 +45,7 @@ Blum does not use one generic AI model for everything.
 ## Data Workflow
 
 1. Seed the asset universe with stocks, ETFs, sectors, countries, industries and descriptions.
-2. Download OHLCV price history from yfinance.
+2. Download OHLCV price history from yfinance, Yahoo Chart API and Stooq public daily data.
 3. Store prices in PostgreSQL.
 4. Fetch public RSS news.
 5. Deduplicate articles.
@@ -164,7 +164,8 @@ Backtesting is included for research validation only. It reports historical hit 
 
 ## Limitations
 
-- Public RSS and yfinance are demo-grade public data sources, not licensed institutional feeds.
+- Public RSS, Yahoo and Stooq are demo-grade public data sources, not licensed institutional feeds.
+- The system does not generate synthetic prices. If public providers fail or rate-limit, the affected assets are reported as missing instead of being filled with fake data.
 - FinBERT, embeddings and LLM model loading depend on runtime memory and Hugging Face model availability.
 - The reasoning layer must not invent data; it is constrained to retrieved evidence.
 - Signal classifications are research triage outputs, not investment recommendations.

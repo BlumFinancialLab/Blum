@@ -29,6 +29,8 @@ Goal: make prices, assets and news ingestion reliable enough for a serious demo.
 Deliverables:
 
 - Harden yfinance provider with retries, partial failures and provider status.
+- Keep real-data-only behavior: no synthetic OHLCV fallback in production or demo paths.
+- Maintain a public provider chain for prices: yfinance, Yahoo Chart API and Stooq.
 - Add incremental OHLCV updates instead of replacing recent rows blindly.
 - Improve RSS source health diagnostics.
 - Add article text extraction fallback with `newspaper3k` and BeautifulSoup.
@@ -227,4 +229,3 @@ Every roadmap step should ship as a complete increment:
 - documentation update;
 - verification command;
 - explicit limitation or disclaimer when relevant.
-

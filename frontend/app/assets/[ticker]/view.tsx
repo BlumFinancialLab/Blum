@@ -11,13 +11,21 @@ import { StatusBadge } from "@/components/StatusBadge";
 export function AssetDetailClient({ ticker }: { ticker: string }) {
   const [data, setData] = useState<{ asset: any; prices: PricePoint[]; latest_signal: Signal | null; related_news: RelatedNews[] } | null>(null);
   const [insight, setInsight] = useState<any>(null);
+  const [insightError, setInsightError] = useState("");
   const [error, setError] = useState("");
 
   useEffect(() => {
     api.asset(ticker).then(setData).catch((err) => setError((err as Error).message));
   }, [ticker]);
 
-  const explain = async () => setInsight(await api.explain(ticker));
+  const explain = async () => {
+    setInsightError("");
+    try {
+      setInsight(await api.explain(ticker));
+    } catch (err) {
+      setInsightError("No AI explanation is available yet. Run the dashboard pipeline first so the backend can create a signal snapshot.");
+    }
+  };
 
   if (error) return <div className="empty-state">API error: {error}</div>;
   if (!data) return <LoadingState label={`Loading ${ticker}`} />;
@@ -59,6 +67,7 @@ export function AssetDetailClient({ ticker }: { ticker: string }) {
         </div>
         <div className="panel">
           <div className="panel-head"><span>AI Explanation</span></div>
+          {insightError && <div className="empty-state">{insightError}</div>}
           <p>{insight?.reason ?? signal?.explanation ?? "No explanation available yet."}</p>
           <ul>{(insight?.watch_points ?? signal?.watch_points?.items ?? []).map((item: string) => <li key={item}>{item}</li>)}</ul>
         </div>
@@ -78,4 +87,3 @@ export function AssetDetailClient({ ticker }: { ticker: string }) {
     </>
   );
 }
-
