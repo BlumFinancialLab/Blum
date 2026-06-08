@@ -1,12 +1,14 @@
 ---
 title: Blum Alpha Terminal
 emoji: 📈
-colorFrom: yellow
+colorFrom: green
 colorTo: gray
 sdk: gradio
-sdk_version: 5.34.0
+sdk_version: 6.17.3
 app_file: app.py
-pinned: false
+pinned: true
+short_description: Autonomous financial analysis dashboard for live market news
+tags: [financial-analysis, finance, stock-market, market-analysis, sentiment-analysis, time-series, data-visualization, gradio]
 ---
 
 # Blum Alpha Terminal
