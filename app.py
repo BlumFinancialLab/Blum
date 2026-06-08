@@ -1,6 +1,7 @@
 import html
 import math
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 
 import feedparser
@@ -13,15 +14,47 @@ from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 APP_TITLE = "Blum Alpha Terminal"
 AUTO_REFRESH_SECONDS = 300
-MAX_NEWS_PER_FEED = 45
+MAX_NEWS_PER_FEED = 35
+MAX_SOURCE_WORKERS = 18
+FEED_TIMEOUT_SECONDS = 7
 
-DEFAULT_FEEDS = [
-    "https://finance.yahoo.com/news/rssindex",
-    "https://www.cnbc.com/id/100003114/device/rss/rss.html",
-    "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",
-    "https://www.marketwatch.com/rss/topstories",
-    "https://www.investing.com/rss/news.rss",
+SOURCE_CATALOG = [
+    {"name": "Yahoo Finance", "url": "https://finance.yahoo.com/news/rssindex", "desk": "Markets", "tier": 1},
+    {"name": "CNBC Top News", "url": "https://www.cnbc.com/id/100003114/device/rss/rss.html", "desk": "Markets", "tier": 1},
+    {"name": "CNBC Markets", "url": "https://www.cnbc.com/id/15839135/device/rss/rss.html", "desk": "Markets", "tier": 1},
+    {"name": "MarketWatch Top Stories", "url": "https://www.marketwatch.com/rss/topstories", "desk": "Markets", "tier": 1},
+    {"name": "MarketWatch Real-Time", "url": "https://www.marketwatch.com/rss/realtimeheadlines", "desk": "Markets", "tier": 1},
+    {"name": "WSJ Markets", "url": "https://feeds.a.dj.com/rss/RSSMarketsMain.xml", "desk": "Markets", "tier": 1},
+    {"name": "WSJ World", "url": "https://feeds.a.dj.com/rss/RSSWorldNews.xml", "desk": "Macro", "tier": 1},
+    {"name": "Investing.com News", "url": "https://www.investing.com/rss/news.rss", "desk": "Markets", "tier": 2},
+    {"name": "Seeking Alpha Market Currents", "url": "https://seekingalpha.com/market_currents.xml", "desk": "Markets", "tier": 2},
+    {"name": "Nasdaq Markets", "url": "https://www.nasdaq.com/feed/rssoutbound?category=Markets", "desk": "Markets", "tier": 2},
+    {"name": "Nasdaq Stocks", "url": "https://www.nasdaq.com/feed/rssoutbound?category=Stocks", "desk": "Equities", "tier": 2},
+    {"name": "Financial Times Home", "url": "https://www.ft.com/rss/home", "desk": "Macro", "tier": 1},
+    {"name": "New York Times Business", "url": "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml", "desk": "Business", "tier": 1},
+    {"name": "New York Times Economy", "url": "https://rss.nytimes.com/services/xml/rss/nyt/Economy.xml", "desk": "Macro", "tier": 1},
+    {"name": "BBC Business", "url": "https://feeds.bbci.co.uk/news/business/rss.xml", "desk": "Business", "tier": 1},
+    {"name": "NPR Business", "url": "https://feeds.npr.org/1006/rss.xml", "desk": "Business", "tier": 2},
+    {"name": "The Guardian Business", "url": "https://www.theguardian.com/uk/business/rss", "desk": "Business", "tier": 2},
+    {"name": "AP Business", "url": "https://apnews.com/hub/business?output=rss", "desk": "Business", "tier": 1},
+    {"name": "Reuters Agency Business", "url": "https://www.reutersagency.com/feed/?best-topics=business-finance&post_type=best", "desk": "Business", "tier": 1},
+    {"name": "Federal Reserve Press", "url": "https://www.federalreserve.gov/feeds/press_all.xml", "desk": "Rates", "tier": 1},
+    {"name": "Federal Reserve Speeches", "url": "https://www.federalreserve.gov/feeds/speeches.xml", "desk": "Rates", "tier": 1},
+    {"name": "SEC Press Releases", "url": "https://www.sec.gov/news/pressreleases.rss", "desk": "Regulatory", "tier": 1},
+    {"name": "SEC Investor Alerts", "url": "https://www.sec.gov/news/investor-alerts.rss", "desk": "Regulatory", "tier": 2},
+    {"name": "IMF Blog", "url": "https://www.imf.org/en/Blogs/RSS", "desk": "Macro", "tier": 2},
+    {"name": "ECB Press", "url": "https://www.ecb.europa.eu/rss/press.html", "desk": "Rates", "tier": 2},
+    {"name": "CoinDesk", "url": "https://www.coindesk.com/arc/outboundfeeds/rss/", "desk": "Crypto", "tier": 2},
+    {"name": "Cointelegraph", "url": "https://cointelegraph.com/rss", "desk": "Crypto", "tier": 3},
+    {"name": "Oilprice", "url": "https://oilprice.com/rss/main", "desk": "Commodities", "tier": 2},
+    {"name": "PR Newswire Financial Services", "url": "https://www.prnewswire.com/rss/financial-services-latest-news/financial-services-latest-news-list.rss", "desk": "Company News", "tier": 3},
+    {"name": "PR Newswire Earnings", "url": "https://www.prnewswire.com/rss/earnings-latest-news/earnings-latest-news-list.rss", "desk": "Earnings", "tier": 3},
+    {"name": "Business Wire Finance", "url": "https://feed.businesswire.com/rss/home/?rss=G1QFDERJXkJeGVtQWA==", "desk": "Company News", "tier": 3},
+    {"name": "TechCrunch Fintech", "url": "https://techcrunch.com/category/fintech/feed/", "desk": "Fintech", "tier": 3},
+    {"name": "TechCrunch Enterprise", "url": "https://techcrunch.com/category/enterprise/feed/", "desk": "Technology", "tier": 3},
 ]
+
+DEFAULT_FEEDS = [source["url"] for source in SOURCE_CATALOG]
 
 ASSET_UNIVERSE = [
     {"symbol": "SPY", "name": "SPDR S&P 500 ETF", "type": "ETF", "sector": "US Equity", "theme": "Broad US large cap", "aliases": ["s&p 500", "sp 500", "large cap", "wall street", "us stocks"]},
@@ -79,6 +112,32 @@ THEME_KEYWORDS = {
     "Geopolitics & Policy": ["tariff", "sanction", "war", "election", "policy", "regulation", "china", "russia", "middle east"],
 }
 
+FINANCIAL_RELEVANCE_TERMS = [
+    "stock", "stocks", "shares", "equity", "market", "markets", "futures", "etf", "fund",
+    "bond", "bonds", "treasury", "yield", "yields", "rate", "rates", "fed", "central bank",
+    "inflation", "cpi", "pce", "gdp", "jobs", "payrolls", "recession", "growth",
+    "earnings", "revenue", "profit", "margin", "guidance", "forecast", "estimate",
+    "analyst", "upgrade", "downgrade", "valuation", "multiple", "cash flow",
+    "oil", "gold", "commodity", "credit", "spread", "default", "bank", "loan",
+    "merger", "acquisition", "ipo", "buyback", "dividend", "sec", "regulation",
+]
+
+NOISE_TERMS = [
+    "celebrity", "movie", "recipe", "sports", "lottery", "crime", "weather",
+    "royal", "fashion", "travel tips", "lifestyle", "dating",
+]
+
+CATALYST_KEYWORDS = {
+    "Earnings / Guidance": ["earnings", "results", "revenue", "profit", "margin", "guidance", "forecast", "estimates"],
+    "Rates / Macro": ["fed", "rate", "rates", "yield", "treasury", "inflation", "cpi", "pce", "payrolls", "gdp"],
+    "Credit / Liquidity": ["credit", "spread", "spreads", "default", "liquidity", "deposit", "loan", "lending"],
+    "Commodity Shock": ["oil", "crude", "brent", "wti", "gas", "gold", "copper", "opec"],
+    "Policy / Regulation": ["sec", "regulator", "regulation", "tariff", "sanction", "policy", "antitrust"],
+    "Corporate Action": ["merger", "acquisition", "takeover", "ipo", "buyback", "dividend", "spinoff"],
+    "AI / Capex Cycle": ["ai", "artificial intelligence", "gpu", "chip", "semiconductor", "data center", "datacenter"],
+    "Risk Event": ["lawsuit", "probe", "investigation", "warning", "cuts", "bankruptcy", "downgrade"],
+}
+
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -116,6 +175,42 @@ def clean_text(value, limit=None):
     if limit and len(text) > limit:
         return text[: limit - 1].rstrip() + "..."
     return text
+
+
+def canonical_title(title):
+    text = re.sub(r"[^a-z0-9]+", " ", str(title).lower()).strip()
+    text = re.sub(r"\b(breaking|update|exclusive|analysis|morning bid)\b", "", text)
+    return re.sub(r"\s+", " ", text)[:150]
+
+
+def source_catalog_text():
+    return "\n".join(source["url"] for source in SOURCE_CATALOG)
+
+
+def source_meta(url):
+    normalized = url.strip()
+    for source in SOURCE_CATALOG:
+        if source["url"] == normalized:
+            return dict(source)
+    return {"name": normalized, "url": normalized, "desk": "Custom", "tier": 3}
+
+
+def parse_sources(rss_text):
+    sources = []
+    seen = set()
+    for line in rss_text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "|" in line:
+            url = line.split("|")[-1].strip()
+        else:
+            url = line
+        if not url.startswith(("http://", "https://")) or url in seen:
+            continue
+        seen.add(url)
+        sources.append(source_meta(url))
+    return sources
 
 
 def now_label():
@@ -178,16 +273,44 @@ def classify_themes(title, summary):
     return themes or ["Macro & Index"]
 
 
-def fetch_feed(url, lookback_hours):
+def catalyst_class(title, summary):
+    text = f"{title} {summary}".lower()
+    scored = []
+    for catalyst, keywords in CATALYST_KEYWORDS.items():
+        hits = sum(1 for keyword in keywords if keyword in text)
+        if hits:
+            scored.append((hits, catalyst))
+    if not scored:
+        return "General Market Signal"
+    return sorted(scored, reverse=True)[0][1]
+
+
+def news_quality_score(title, summary, themes, catalyst, source_tier):
+    text = f"{title} {summary}".lower()
+    score = 12
+    score += max(0, 4 - int(source_tier)) * 7
+    score += min(len(themes), 4) * 8
+    score += 14 if catalyst != "General Market Signal" else 4
+    score += min(sum(1 for term in FINANCIAL_RELEVANCE_TERMS if term in text), 8) * 5
+    score -= sum(1 for term in NOISE_TERMS if term in text) * 12
+    if len(title) < 28:
+        score -= 8
+    if len(summary) > 80:
+        score += 5
+    return round(clamp(score, 0, 100), 1)
+
+
+def fetch_feed(source, lookback_hours):
+    url = source["url"]
     cutoff = datetime.now(timezone.utc) - timedelta(hours=int(lookback_hours))
     try:
-        response = requests.get(url, headers=HEADERS, timeout=9)
+        response = requests.get(url, headers=HEADERS, timeout=FEED_TIMEOUT_SECONDS)
         response.raise_for_status()
         parsed = feedparser.parse(response.content)
     except Exception as exc:
-        return [], f"{url}: {clean_text(exc, 130)}"
+        return [], f"{source['name']}: {clean_text(exc, 130)}"
 
-    source = clean_text(parsed.feed.get("title", url), 80)
+    source_name = clean_text(parsed.feed.get("title", source["name"]), 80)
     rows = []
     for entry in parsed.entries[:MAX_NEWS_PER_FEED]:
         published = None
@@ -205,38 +328,72 @@ def fetch_feed(url, lookback_hours):
         summary = clean_text(entry.get("summary", ""), 320)
         text = f"{title}. {summary}"
         score = analyzer.polarity_scores(text)["compound"]
+        themes = classify_themes(title, summary)
+        catalyst = catalyst_class(title, summary)
+        quality = news_quality_score(title, summary, themes, catalyst, source["tier"])
+        if quality < 28:
+            continue
         rows.append(
             {
                 "time": published.strftime("%Y-%m-%d %H:%M") if published else "latest",
-                "source": source,
+                "source": source_name,
+                "source_url": url,
+                "source_desk": source["desk"],
+                "source_tier": source["tier"],
                 "title": title,
                 "summary": summary,
                 "url": entry.get("link", ""),
                 "sentiment": round(float(score), 3),
                 "sentiment_label": sentiment_label(score),
-                "themes": ", ".join(classify_themes(title, summary)),
+                "themes": ", ".join(themes),
+                "catalyst_class": catalyst,
+                "quality_score": quality,
+                "canonical_key": canonical_title(title),
             }
         )
     return rows, None
 
 
-def fetch_news(feed_urls, lookback_hours):
+def fetch_news(sources, lookback_hours):
     rows = []
     warnings = []
-    for url in feed_urls:
-        url = url.strip()
-        if not url:
-            continue
-        items, warning = fetch_feed(url, lookback_hours)
-        rows.extend(items)
-        if warning:
-            warnings.append(warning)
+    source_report = []
+    if not sources:
+        empty_cols = ["time", "source", "source_url", "source_desk", "source_tier", "title", "summary", "url", "sentiment", "sentiment_label", "themes", "catalyst_class", "quality_score", "canonical_key"]
+        return pd.DataFrame(columns=empty_cols), ["No RSS sources configured."], pd.DataFrame()
 
+    with ThreadPoolExecutor(max_workers=min(MAX_SOURCE_WORKERS, len(sources))) as executor:
+        futures = {executor.submit(fetch_feed, source, lookback_hours): source for source in sources}
+        for future in as_completed(futures):
+            source = futures[future]
+            try:
+                items, warning = future.result()
+            except Exception as exc:
+                items, warning = [], f"{source['name']}: {clean_text(exc, 130)}"
+            rows.extend(items)
+            if warning:
+                warnings.append(warning)
+            source_report.append(
+                {
+                    "source": source["name"],
+                    "desk": source["desk"],
+                    "tier": source["tier"],
+                    "status": "active" if items else "empty/error",
+                    "headlines": len(items),
+                    "url": source["url"],
+                    "warning": warning or "",
+                }
+            )
+
+    report = pd.DataFrame(source_report).sort_values(["status", "headlines"], ascending=[True, False])
     if not rows:
-        return pd.DataFrame(columns=["time", "source", "title", "summary", "url", "sentiment", "sentiment_label", "themes"]), warnings
+        empty_cols = ["time", "source", "source_url", "source_desk", "source_tier", "title", "summary", "url", "sentiment", "sentiment_label", "themes", "catalyst_class", "quality_score", "canonical_key"]
+        return pd.DataFrame(columns=empty_cols), warnings, report
 
     news = pd.DataFrame(rows)
-    return news.drop_duplicates(subset=["title", "url"]).reset_index(drop=True), warnings
+    news = news.sort_values(["quality_score", "sentiment"], ascending=[False, False])
+    news = news.drop_duplicates(subset=["canonical_key"]).drop_duplicates(subset=["title", "url"])
+    return news.reset_index(drop=True), warnings, report
 
 
 def relevance_score(asset, title, summary):
@@ -267,30 +424,35 @@ def relevance_score(asset, title, summary):
 
 def map_news_to_assets(news, assets):
     if news.empty:
-        return pd.DataFrame(columns=["symbol", "name", "relevance", "time", "source", "title", "sentiment", "sentiment_label", "themes", "url"])
+        return pd.DataFrame(columns=["symbol", "name", "relevance", "time", "source", "source_desk", "source_tier", "title", "sentiment", "sentiment_label", "themes", "catalyst_class", "quality_score", "url"])
 
     rows = []
     for asset in assets:
         for _, item in news.iterrows():
             relevance = relevance_score(asset, item["title"], item["summary"])
             if relevance > 0:
+                conviction_relevance = int(relevance + max(1, item.get("quality_score", 50) / 18))
                 rows.append(
                     {
                         "symbol": asset["symbol"],
                         "name": asset["name"],
-                        "relevance": relevance,
+                        "relevance": conviction_relevance,
                         "time": item["time"],
                         "source": item["source"],
+                        "source_desk": item.get("source_desk", ""),
+                        "source_tier": item.get("source_tier", ""),
                         "title": item["title"],
                         "sentiment": item["sentiment"],
                         "sentiment_label": item["sentiment_label"],
                         "themes": item["themes"],
+                        "catalyst_class": item.get("catalyst_class", "General Market Signal"),
+                        "quality_score": item.get("quality_score", 0),
                         "url": item["url"],
                     }
                 )
 
     if not rows:
-        return pd.DataFrame(columns=["symbol", "name", "relevance", "time", "source", "title", "sentiment", "sentiment_label", "themes", "url"])
+        return pd.DataFrame(columns=["symbol", "name", "relevance", "time", "source", "source_desk", "source_tier", "title", "sentiment", "sentiment_label", "themes", "catalyst_class", "quality_score", "url"])
     return pd.DataFrame(rows)
 
 
@@ -445,22 +607,30 @@ def asset_news_stats(symbol, matched_news, broad_sentiment):
             "news_count": 0,
             "avg_sentiment": round(broad_sentiment * 0.35, 3),
             "relevance_total": 0,
+            "quality_total": 0,
+            "source_diversity": 0,
             "top_headline": "No direct headline match; using broad market pulse.",
             "top_source": "Market pulse",
             "top_url": "",
             "themes": "Macro & Index",
+            "catalyst_class": "General Market Signal",
         }
-    weighted = (subset["sentiment"] * subset["relevance"]).sum() / max(subset["relevance"].sum(), 1)
-    top = subset.sort_values(["relevance", "sentiment"], ascending=[False, False]).iloc[0]
+    weights = subset["relevance"] * (subset["quality_score"].fillna(50) / 50)
+    weighted = (subset["sentiment"] * weights).sum() / max(weights.sum(), 1)
+    top = subset.sort_values(["relevance", "quality_score", "sentiment"], ascending=[False, False, False]).iloc[0]
     themes = ", ".join(sorted(set(", ".join(subset["themes"].dropna()).split(", "))))[:120]
+    catalyst = subset["catalyst_class"].mode().iloc[0] if "catalyst_class" in subset and not subset["catalyst_class"].empty else "General Market Signal"
     return {
         "news_count": int(len(subset)),
         "avg_sentiment": round(float(weighted), 3),
         "relevance_total": int(subset["relevance"].sum()),
+        "quality_total": int(subset["quality_score"].fillna(0).sum()),
+        "source_diversity": int(subset["source"].nunique()),
         "top_headline": top["title"],
         "top_source": top["source"],
         "top_url": top["url"],
         "themes": themes or "Macro & Index",
+        "catalyst_class": catalyst,
     }
 
 
@@ -501,6 +671,9 @@ def score_asset(asset, tech, news_stats, regime):
 
     sentiment_component = scale(news_stats["avg_sentiment"], -0.45, 0.45)
     relevance_boost = scale(news_stats["relevance_total"], 0, 18)
+    quality_boost = scale(news_stats.get("quality_total", 0), 0, 420)
+    diversity_boost = scale(news_stats.get("source_diversity", 0), 0, 6)
+    catalyst_boost = 8 if news_stats.get("catalyst_class") != "General Market Signal" else 0
     short_momentum = (scale(tech.get("5d"), -5, 5) * 0.45) + (scale(tech.get("20d"), -10, 10) * 0.55)
     long_momentum = (scale(tech.get("63d"), -15, 18) * 0.25) + (scale(tech.get("126d"), -22, 28) * 0.30) + (scale(tech.get("252d"), -35, 45) * 0.45)
     trend_component = scale(tech.get("trend_score"), -3, 3)
@@ -517,11 +690,14 @@ def score_asset(asset, tech, news_stats, regime):
         sentiment_component * 0.30
         + short_momentum * 0.25
         + trend_component * 0.15
-        + relevance_boost * 0.12
+        + relevance_boost * 0.08
+        + quality_boost * 0.08
+        + diversity_boost * 0.05
         + volume_component * 0.08
         + volatility_penalty * 0.05
         + regime_bonus
         + defensive_bonus
+        + catalyst_boost
         + oversold_bonus
         - extension_penalty
     )
@@ -532,9 +708,12 @@ def score_asset(asset, tech, news_stats, regime):
         + sentiment_component * 0.15
         + drawdown_component * 0.10
         + volatility_penalty * 0.10
-        + relevance_boost * 0.08
+        + relevance_boost * 0.05
+        + quality_boost * 0.07
+        + diversity_boost * 0.06
         + regime_bonus * 0.6
         + defensive_bonus * 0.7
+        + catalyst_boost * 0.5
     )
 
     short_score = round(clamp(short_score), 1)
@@ -590,6 +769,8 @@ def forward_lens(row, horizon):
 def first_rejection(row):
     if row["news_count"] == 0:
         return "No direct source proof yet; signal relies on broad market sentiment."
+    if row.get("source_diversity", 0) < 2 and row.get("source_quality", 0) < 120:
+        return "Catalyst is not yet independently confirmed across enough sources."
     if row.get("RSI 14") and row["RSI 14"] > 76:
         return "Technically extended; strong headline flow may already be priced."
     if row["technical_view"] == "Downtrend":
@@ -599,6 +780,43 @@ def first_rejection(row):
     if row["avg_sentiment"] < -0.2:
         return "Negative news tone conflicts with the setup."
     return "Need stronger evidence that the catalyst affects revenue, margins, flows or estimates."
+
+
+def actionability(row, horizon):
+    score = row["short_score"] if horizon == "short" else row["long_score"]
+    if score >= 78:
+        return "High. Promote to deeper research immediately; validate valuation, source trail and risk sizing."
+    if score >= 64:
+        return "Medium. Keep on desk; require one more catalyst, technical confirmation or estimate linkage."
+    if score >= 52:
+        return "Low-medium. Monitor only; signal is visible but not yet research-grade."
+    return "Low. Do not prioritize until evidence changes."
+
+
+def variant_wedge(row):
+    if row["avg_sentiment"] > 0.22 and row["technical_view"] in {"Mixed", "Downtrend"}:
+        return "Positive news flow is not fully confirmed by price structure yet."
+    if row["avg_sentiment"] < -0.22 and row["technical_view"] == "Uptrend":
+        return "Price trend is resisting negative headlines; watch for squeeze or delayed break."
+    if row["news_count"] >= 4 and row["source_diversity"] >= 3:
+        return "Multiple independent sources are converging on the same market theme."
+    return "Evidence is still forming; the wedge is catalyst clarity versus market confirmation."
+
+
+def investable_trigger(row):
+    if row["technical_view"] == "Extended":
+        return "Pullback toward trend support without deterioration in news tone."
+    if row["technical_view"] == "Downtrend":
+        return "Close back above 50-day trend with improving catalyst quality."
+    if row["news_count"] == 0:
+        return "Direct source proof from issuer, macro data, filings or multiple tier-one headlines."
+    return "Sustained sentiment, better source diversity and evidence of impact on flows, estimates or margins."
+
+
+def kill_trigger(row):
+    if row["avg_sentiment"] > 0:
+        return "Sentiment reversal, failed breakout, or catalyst exposed as already priced."
+    return "Further negative news, broken support, worsening liquidity or missing source confirmation."
 
 
 def make_rows(assets, metrics, matched_news, broad_sentiment, regime):
@@ -632,6 +850,9 @@ def make_rows(assets, metrics, matched_news, broad_sentiment, regime):
                     "technical_view": "No data",
                     "news_count": news_stats["news_count"],
                     "avg_sentiment": news_stats["avg_sentiment"],
+                    "source_diversity": news_stats["source_diversity"],
+                    "source_quality": news_stats["quality_total"],
+                    "catalyst_class": news_stats["catalyst_class"],
                     "top_headline": news_stats["top_headline"],
                     "source": news_stats["top_source"],
                     "themes_detected": news_stats["themes"],
@@ -666,6 +887,9 @@ def make_rows(assets, metrics, matched_news, broad_sentiment, regime):
             "technical_view": tech["technical_view"],
             "news_count": news_stats["news_count"],
             "avg_sentiment": news_stats["avg_sentiment"],
+            "source_diversity": news_stats["source_diversity"],
+            "source_quality": news_stats["quality_total"],
+            "catalyst_class": news_stats["catalyst_class"],
             "top_headline": news_stats["top_headline"],
             "source": news_stats["top_source"],
             "themes_detected": news_stats["themes"],
@@ -682,9 +906,11 @@ def make_rows(assets, metrics, matched_news, broad_sentiment, regime):
     return pd.DataFrame(rows)
 
 
-def market_pulse(news):
+def market_pulse(news, source_report):
+    active_sources = int((source_report["status"] == "active").sum()) if source_report is not None and not source_report.empty else 0
+    total_sources = int(len(source_report)) if source_report is not None and not source_report.empty else 0
     if news.empty:
-        return {"headlines": 0, "positive": 0, "neutral": 0, "negative": 0, "avg": 0.0}
+        return {"headlines": 0, "positive": 0, "neutral": 0, "negative": 0, "avg": 0.0, "quality": 0.0, "active_sources": active_sources, "total_sources": total_sources}
     counts = news["sentiment_label"].value_counts()
     return {
         "headlines": int(len(news)),
@@ -692,6 +918,9 @@ def market_pulse(news):
         "neutral": int(counts.get("Neutral", 0)),
         "negative": int(counts.get("Negative", 0)),
         "avg": round(float(news["sentiment"].mean()), 3),
+        "quality": round(float(news["quality_score"].mean()), 1),
+        "active_sources": active_sources,
+        "total_sources": total_sources,
     }
 
 
@@ -714,7 +943,126 @@ def score_ring(score):
     """
 
 
-def build_shell_html(pulse, regime, df, warnings, theme_df):
+def sparkline_svg(frame, width=240, height=78):
+    if frame is None or frame.empty or "Close" not in frame:
+        return "<div class='spark-empty'>no chart</div>"
+    close = frame["Close"].dropna().tail(90)
+    if len(close) < 5:
+        return "<div class='spark-empty'>no chart</div>"
+    low = safe_float(close.min())
+    high = safe_float(close.max())
+    if high == low:
+        high = low + 1
+    points = []
+    for idx, value in enumerate(close):
+        x = idx / max(len(close) - 1, 1) * width
+        y = height - ((safe_float(value) - low) / (high - low) * (height - 8)) - 4
+        points.append(f"{x:.1f},{y:.1f}")
+    last = safe_float(close.iloc[-1])
+    first = safe_float(close.iloc[0])
+    color = "#00e676" if last >= first else "#ff4d5e"
+    return f"""
+    <svg class="sparkline" viewBox="0 0 {width} {height}" preserveAspectRatio="none">
+      <defs>
+        <linearGradient id="sparkFill{abs(hash(tuple(points))) % 100000}" x1="0" x2="0" y1="0" y2="1">
+          <stop offset="0%" stop-color="{color}" stop-opacity=".22"/>
+          <stop offset="100%" stop-color="{color}" stop-opacity="0"/>
+        </linearGradient>
+      </defs>
+      <polyline points="0,{height} {' '.join(points)} {width},{height}" fill="rgba(255,255,255,.03)" stroke="none"/>
+      <polyline points="{' '.join(points)}" fill="none" stroke="{color}" stroke-width="2.2" vector-effect="non-scaling-stroke"/>
+    </svg>
+    """
+
+
+def build_chart_wall(df, price_frames):
+    symbols = ["SPY", "QQQ", "IWM", "SMH", "XLF", "XLE", "TLT", "GLD"]
+    cards = []
+    for symbol in symbols:
+        row = df[df["symbol"] == symbol].head(1)
+        if row.empty:
+            continue
+        item = row.iloc[0]
+        cards.append(
+            f"""
+            <div class="chart-card">
+              <div class="chart-head"><strong>{esc(symbol)}</strong><span>{esc(item["technical_view"])}</span></div>
+              {sparkline_svg(price_frames.get(symbol))}
+              <div class="chart-foot"><span>1D {signed(item["1d %"])}</span><span>20D {signed(item["20d %"])}</span><span>RSI {esc(item["RSI 14"])}</span></div>
+            </div>
+            """
+        )
+    if not cards:
+        return "<div class='empty-state'>Market charts unavailable until price data loads.</div>"
+    return "<div class='chart-wall'>" + "".join(cards) + "</div>"
+
+
+def build_sector_heatmap(df):
+    if df.empty:
+        return "<div class='empty-state'>No sector heatmap yet.</div>"
+    grouped = (
+        df.groupby("sector")
+        .agg(short_score=("short_score", "mean"), long_score=("long_score", "mean"), tone=("avg_sentiment", "mean"), count=("symbol", "count"))
+        .reset_index()
+        .sort_values("short_score", ascending=False)
+    )
+    cells = []
+    for _, row in grouped.iterrows():
+        score = round(float((row["short_score"] * 0.55) + (row["long_score"] * 0.45)), 1)
+        tone = float(row["tone"])
+        tone_class = "pos" if tone > 0.08 else "neg" if tone < -0.08 else "neu"
+        cells.append(
+            f"""
+            <div class="heat-cell {tone_class}" style="--heat:{score};">
+              <span>{esc(row["sector"])}</span>
+              <strong>{score:.0f}</strong>
+              <small>{int(row["count"])} instruments | tone {tone:+.2f}</small>
+            </div>
+            """
+        )
+    return "<div class='heatmap'>" + "".join(cells) + "</div>"
+
+
+def build_source_panel(source_report):
+    if source_report is None or source_report.empty:
+        return "<div class='empty-state'>No source status yet.</div>"
+    active = int((source_report["status"] == "active").sum())
+    total = int(len(source_report))
+    headlines = int(source_report["headlines"].sum())
+    desks = source_report.groupby("desk")["headlines"].sum().sort_values(ascending=False).head(8)
+    desk_rows = "".join(
+        f"<div><span>{esc(desk)}</span><strong>{int(count)}</strong></div>"
+        for desk, count in desks.items()
+    )
+    return f"""
+    <div class="source-panel">
+      <div class="source-score"><span>RSS NETWORK</span><strong>{active}/{total}</strong><small>{headlines} high-quality headlines</small></div>
+      <div class="desk-grid">{desk_rows}</div>
+    </div>
+    """
+
+
+def build_headline_radar(news):
+    if news.empty:
+        return "<div class='empty-state'>No live headlines available.</div>"
+    rows = []
+    for _, item in news.head(10).iterrows():
+        tone_class = item["sentiment_label"].lower()
+        title = esc(item["title"])
+        link = f"<a href='{esc(item['url'])}' target='_blank'>{title}</a>" if item.get("url") else title
+        rows.append(
+            f"""
+            <div class="radar-line {tone_class}">
+              <span>{esc(item["source"])}</span>
+              <strong>{link}</strong>
+              <small>{esc(item["catalyst_class"])} | Q {item["quality_score"]:.0f} | {item["sentiment"]:+.2f}</small>
+            </div>
+            """
+        )
+    return "<div class='headline-radar'>" + "".join(rows) + "</div>"
+
+
+def build_shell_html(pulse, regime, df, warnings, theme_df, news, source_report, price_frames):
     top_short = df.sort_values("short_score", ascending=False).head(1).iloc[0] if not df.empty else None
     top_long = df.sort_values("long_score", ascending=False).head(1).iloc[0] if not df.empty else None
     advance_short = int((df["short_score"] >= 78).sum()) if not df.empty else 0
@@ -724,6 +1072,11 @@ def build_shell_html(pulse, regime, df, warnings, theme_df):
     warning_html = ""
     if warnings:
         warning_html = "<div class='terminal-warning'>Source warnings: " + esc(" | ".join(warnings[:3])) + "</div>"
+
+    chart_wall = build_chart_wall(df, price_frames)
+    sector_heatmap = build_sector_heatmap(df)
+    source_panel = build_source_panel(source_report)
+    headline_radar = build_headline_radar(news)
 
     return f"""
     <section class="terminal-hero">
@@ -741,13 +1094,34 @@ def build_shell_html(pulse, regime, df, warnings, theme_df):
 
     <section class="metric-grid">
       <div class="metric"><span>LIVE HEADLINES</span><strong>{pulse["headlines"]}</strong></div>
+      <div class="metric"><span>ACTIVE SOURCES</span><strong>{pulse["active_sources"]}/{pulse["total_sources"]}</strong></div>
       <div class="metric positive"><span>POSITIVE</span><strong>{pulse["positive"]}</strong></div>
       <div class="metric neutral"><span>NEUTRAL</span><strong>{pulse["neutral"]}</strong></div>
       <div class="metric negative"><span>NEGATIVE</span><strong>{pulse["negative"]}</strong></div>
       <div class="metric"><span>AVG NEWS TONE</span><strong>{pulse["avg"]:+.2f}</strong></div>
+      <div class="metric"><span>AVG QUALITY</span><strong>{pulse["quality"]:.0f}</strong></div>
       <div class="metric"><span>SHORT A-LIST</span><strong>{advance_short}</strong></div>
       <div class="metric"><span>LONG A-LIST</span><strong>{advance_long}</strong></div>
       <div class="metric"><span>HOT THEME</span><strong>{esc(theme_leader["theme"])}</strong><small>{theme_leader["headlines"]} headlines | {theme_leader["avg_sentiment"]:+.2f}</small></div>
+    </section>
+
+    <section class="cockpit-grid">
+      <div class="cockpit-panel wide">
+        <div class="panel-label">MARKET CHART WALL</div>
+        {chart_wall}
+      </div>
+      <div class="cockpit-panel">
+        <div class="panel-label">RSS SOURCE NETWORK</div>
+        {source_panel}
+      </div>
+      <div class="cockpit-panel wide">
+        <div class="panel-label">SECTOR HEATMAP</div>
+        {sector_heatmap}
+      </div>
+      <div class="cockpit-panel">
+        <div class="panel-label">LIVE HEADLINE RADAR</div>
+        {headline_radar}
+      </div>
     </section>
 
     <section class="split-leaders">
@@ -755,7 +1129,7 @@ def build_shell_html(pulse, regime, df, warnings, theme_df):
         <div class="panel-head"><span>TACTICAL LEADER</span>{score_ring(top_short["short_score"]) if top_short is not None else ""}</div>
         <h2>{esc(top_short["symbol"] if top_short is not None else "n/a")} <small>{esc(top_short["name"] if top_short is not None else "")}</small></h2>
         <p>{esc(top_short["tactical_setup"] if top_short is not None else "")}</p>
-        <div class="leader-meta">{esc(top_short["short_bucket"] if top_short is not None else "")} | {signed(top_short["5d %"] if top_short is not None else None)} 5d | sentiment {top_short["avg_sentiment"]:+.2f}</div>
+        <div class="leader-meta">{esc(top_short["short_bucket"] if top_short is not None else "")} | {signed(top_short["5d %"] if top_short is not None else None)} 5d | sentiment {(top_short["avg_sentiment"] if top_short is not None else 0):+.2f}</div>
       </div>
       <div class="leader-panel">
         <div class="panel-head"><span>LONG-HORIZON LEADER</span>{score_ring(top_long["long_score"]) if top_long is not None else ""}</div>
@@ -792,10 +1166,15 @@ def card(row, horizon):
         <div><span>{horizon_label}</span><strong>{horizon_metric}</strong></div>
         <div><span>RSI</span><strong>{esc(row["RSI 14"])}</strong></div>
         <div><span>News</span><strong>{int(row["news_count"])}</strong></div>
-        <div><span>Tone</span><strong>{row["avg_sentiment"]:+.2f}</strong></div>
+        <div><span>Sources</span><strong>{int(row["source_diversity"])}</strong></div>
       </div>
+      <div class="catalyst-chip">{esc(row["catalyst_class"])} | tone {row["avg_sentiment"]:+.2f}</div>
       <p class="thesis"><strong>Why now:</strong> {headline_html}</p>
+      <p><strong>Actionability:</strong> {esc(actionability(row, horizon))}</p>
+      <p><strong>Variant wedge:</strong> {esc(variant_wedge(row))}</p>
       <p><strong>Forward lens:</strong> {esc(skew)}. {esc(base)}</p>
+      <p><strong>What makes it investable:</strong> {esc(investable_trigger(row))}</p>
+      <p><strong>What kills it:</strong> {esc(kill_trigger(row))}</p>
       <p><strong>First rejection:</strong> {esc(row["first_rejection"])}</p>
       <p><strong>Next workflow:</strong> {esc(row["next_workflow"])}</p>
     </article>
@@ -821,7 +1200,7 @@ def build_news_html(news):
         items.append(
             f"""
             <article class="news-line {tone_class}">
-              <div><span>{esc(row["time"])}</span><span>{esc(row["source"])}</span><span>{esc(row["themes"])}</span><b>{row["sentiment"]:+.2f}</b></div>
+              <div><span>{esc(row["time"])}</span><span>{esc(row["source"])}</span><span>{esc(row.get("source_desk", ""))}</span><span>{esc(row["catalyst_class"])}</span><b>Q {row["quality_score"]:.0f} / {row["sentiment"]:+.2f}</b></div>
               <h4>{link}</h4>
             </article>
             """
@@ -833,9 +1212,11 @@ def build_method_html():
     return """
     <section class="method">
       <h3>Engine prompt executed by this MVP</h3>
-      <p>Act as an autonomous public-market research terminal. Ingest public RSS news, classify themes, map catalysts to a liquid equity/ETF universe, retrieve historical price behavior, calculate technical state, infer market regime and produce two ranked research queues: short-term tactical opportunities and long-term investment candidates. Never output final trade instructions; output research priority, evidence, first rejection risk and next workflow.</p>
+      <p>Act as an autonomous public-market research terminal. Ingest a large public RSS network, classify themes, score source quality, remove low-signal headlines, map catalysts to a liquid equity/ETF universe, retrieve historical price behavior, calculate technical state, infer market regime and produce two ranked research queues: short-term tactical opportunities and long-term investment candidates. Never output final trade instructions; output research priority, evidence, first rejection risk and next workflow.</p>
       <h3>Scoring model</h3>
-      <p>Short-term score emphasizes fresh news sentiment, 5d/20d momentum, trend state, relevance, volume shock and regime alignment. Long-term score emphasizes 63d/126d/252d trend, 200-day structure, volatility, drawdown control, sentiment persistence and thematic relevance.</p>
+      <p>Short-term score emphasizes fresh news sentiment, 5d/20d momentum, trend state, relevance, source quality, source diversity, catalyst class, volume shock and regime alignment. Long-term score emphasizes 63d/126d/252d trend, 200-day structure, volatility, drawdown control, source diversity, sentiment persistence and thematic relevance.</p>
+      <h3>News refinery</h3>
+      <p>Every headline receives theme tags, catalyst class, source tier, desk, quality score and canonical key for deduplication. Weak non-market headlines are filtered before they can influence any security ranking.</p>
       <h3>Data caveat</h3>
       <p>This uses public RSS and Yahoo Finance. It is not licensed terminal data, not financial advice and not a replacement for regulated research, filings, earnings transcripts, valuation work or risk review.</p>
     </section>
@@ -844,11 +1225,11 @@ def build_method_html():
 
 def run_terminal(universe_mode, custom_symbols, lookback_hours, rss_text):
     assets = selected_universe(universe_mode, custom_symbols)
-    feeds = [line.strip() for line in rss_text.splitlines() if line.strip()]
+    sources = parse_sources(rss_text)
     symbols = [asset["symbol"] for asset in assets]
 
-    news, warnings = fetch_news(feeds, int(lookback_hours))
-    pulse = market_pulse(news)
+    news, warnings, source_report = fetch_news(sources, int(lookback_hours))
+    pulse = market_pulse(news, source_report)
     matched = map_news_to_assets(news, assets)
     price_frames = fetch_prices(symbols)
     metrics = {symbol: technicals(symbol, price_frames.get(symbol)) for symbol in symbols}
@@ -862,18 +1243,18 @@ def run_terminal(universe_mode, custom_symbols, lookback_hours, rss_text):
     display_cols = [
         "symbol", "name", "type", "sector", "short_score", "short_bucket", "long_score", "long_bucket",
         "last", "1d %", "5d %", "20d %", "63d %", "252d %", "vol60", "RSI 14", "technical_view",
-        "news_count", "avg_sentiment", "tactical_setup", "first_rejection",
+        "news_count", "source_diversity", "source_quality", "avg_sentiment", "catalyst_class", "tactical_setup", "first_rejection",
     ]
     ranking = rows[display_cols] if not rows.empty else pd.DataFrame(columns=display_cols)
     news_table = matched.sort_values(["relevance", "sentiment"], ascending=False).head(150) if not matched.empty else matched
 
-    shell = build_shell_html(pulse, regime, rows, warnings, theme_df)
+    shell = build_shell_html(pulse, regime, rows, warnings, theme_df, news, source_report, price_frames)
     short_cards = build_cards_html(rows, "short")
     long_cards = build_cards_html(rows, "long")
     news_html = build_news_html(news)
     method = build_method_html()
 
-    return shell, short_cards, long_cards, ranking, news_table, theme_df, news_html, method
+    return shell, short_cards, long_cards, ranking, news_table, theme_df, source_report, news_html, method
 
 
 CSS = """
@@ -890,6 +1271,8 @@ CSS = """
   --green: #00e676;
   --red: #ff4d5e;
   --blue: #3ea6ff;
+  --cyan: #4dd8ff;
+  --violet: #a78bfa;
 }
 body, .gradio-container {
   background: var(--bg) !important;
@@ -918,7 +1301,7 @@ textarea, input, select {
   border-color: var(--line) !important;
 }
 .terminal-hero {
-  min-height: 250px;
+  min-height: 220px;
   display: grid;
   grid-template-columns: 1fr 360px;
   gap: 18px;
@@ -942,7 +1325,7 @@ textarea, input, select {
 .terminal-hero h1 {
   margin: 18px 0 10px;
   color: var(--text);
-  font-size: 56px;
+  font-size: 52px;
   line-height: .95;
   letter-spacing: 0;
 }
@@ -976,12 +1359,12 @@ textarea, input, select {
 }
 .metric-grid {
   display: grid;
-  grid-template-columns: repeat(8, minmax(120px, 1fr));
+  grid-template-columns: repeat(10, minmax(108px, 1fr));
   gap: 8px;
   margin: 10px 0;
 }
 .metric {
-  min-height: 98px;
+  min-height: 92px;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 4px;
@@ -991,7 +1374,7 @@ textarea, input, select {
   display: block;
   margin-top: 8px;
   color: var(--text);
-  font-size: 29px;
+  font-size: 25px;
   line-height: 1;
 }
 .metric small {
@@ -1003,6 +1386,178 @@ textarea, input, select {
 .metric.positive strong { color: var(--green); }
 .metric.negative strong { color: var(--red); }
 .metric.neutral strong { color: var(--amber); }
+.cockpit-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, .65fr);
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.cockpit-panel {
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.025), transparent),
+    var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 12px;
+  min-height: 220px;
+}
+.cockpit-panel.wide {
+  min-width: 0;
+}
+.panel-label {
+  color: var(--amber2);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  font-weight: 900;
+  margin-bottom: 10px;
+}
+.chart-wall {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(140px, 1fr));
+  gap: 8px;
+}
+.chart-card {
+  background: #070a0f;
+  border: 1px solid #202b3a;
+  border-radius: 4px;
+  padding: 9px;
+  min-height: 128px;
+}
+.chart-head, .chart-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  align-items: center;
+}
+.chart-head strong {
+  color: var(--text);
+  font-size: 17px;
+}
+.chart-head span, .chart-foot span {
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.sparkline {
+  width: 100%;
+  height: 78px;
+  margin: 6px 0;
+  background:
+    linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px);
+  background-size: 100% 26px, 48px 100%;
+}
+.spark-empty {
+  min-height: 78px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 11px;
+}
+.heatmap {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  gap: 8px;
+}
+.heat-cell {
+  min-height: 82px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 10px;
+  background:
+    linear-gradient(135deg, rgba(255,176,0,.18), transparent),
+    #070a0f;
+}
+.heat-cell.pos { border-color: rgba(0,230,118,.45); }
+.heat-cell.neg { border-color: rgba(255,77,94,.45); }
+.heat-cell.neu { border-color: rgba(255,176,0,.35); }
+.heat-cell span, .heat-cell small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+.heat-cell strong {
+  display: block;
+  color: var(--text);
+  font-size: 26px;
+  margin: 5px 0;
+}
+.source-panel {
+  display: grid;
+  gap: 10px;
+}
+.source-score {
+  background: #070a0f;
+  border: 1px solid rgba(77,216,255,.35);
+  border-radius: 4px;
+  padding: 12px;
+}
+.source-score span, .source-score small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+.source-score strong {
+  display: block;
+  color: var(--cyan);
+  font-size: 34px;
+  margin: 4px 0;
+}
+.desk-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(100px, 1fr));
+  gap: 6px;
+}
+.desk-grid div {
+  background: #070a0f;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 8px;
+}
+.desk-grid span {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+}
+.desk-grid strong {
+  color: var(--text);
+  font-size: 18px;
+}
+.headline-radar {
+  display: grid;
+  gap: 7px;
+  max-height: 340px;
+  overflow: auto;
+}
+.radar-line {
+  background: #070a0f;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--amber);
+  border-radius: 4px;
+  padding: 8px;
+}
+.radar-line.positive { border-left-color: var(--green); }
+.radar-line.negative { border-left-color: var(--red); }
+.radar-line span, .radar-line small {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+}
+.radar-line strong {
+  display: block;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.28;
+  margin: 3px 0;
+}
+.radar-line a {
+  color: var(--text);
+  text-decoration: none;
+}
+.radar-line a:hover {
+  color: var(--amber);
+}
 .split-leaders {
   display: grid;
   grid-template-columns: repeat(2, minmax(300px, 1fr));
@@ -1071,7 +1626,7 @@ textarea, input, select {
   gap: 10px;
 }
 .idea-card {
-  min-height: 410px;
+  min-height: 560px;
 }
 .mini-grid {
   display: grid;
@@ -1094,6 +1649,15 @@ textarea, input, select {
 .mini-grid strong {
   color: var(--text);
   font-size: 15px;
+}
+.catalyst-chip {
+  color: #050608;
+  background: linear-gradient(90deg, var(--amber), var(--cyan));
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 900;
+  margin: 10px 0;
 }
 .thesis a, .news-line a {
   color: var(--text);
@@ -1147,9 +1711,9 @@ textarea, input, select {
   padding: 14px;
 }
 @media (max-width: 1100px) {
-  .terminal-hero, .split-leaders { grid-template-columns: 1fr; }
+  .terminal-hero, .split-leaders, .cockpit-grid { grid-template-columns: 1fr; }
   .metric-grid { grid-template-columns: repeat(2, minmax(130px, 1fr)); }
-  .cards-grid, .news-tape { grid-template-columns: 1fr; }
+  .cards-grid, .news-tape, .chart-wall, .heatmap { grid-template-columns: 1fr; }
   .terminal-hero h1 { font-size: 40px; }
 }
 """
@@ -1185,14 +1749,16 @@ with gr.Blocks(title=APP_TITLE, css=CSS, theme=gr.themes.Base()) as demo:
             matched_output = gr.Dataframe(interactive=False, wrap=True, label="News mapped to instruments")
         with gr.Tab("Theme Radar"):
             theme_output = gr.Dataframe(interactive=False, wrap=True, label="Market theme sentiment")
+        with gr.Tab("Source Network"):
+            source_output = gr.Dataframe(interactive=False, wrap=True, label="RSS source health")
         with gr.Tab("Live News Tape"):
             news_output = gr.HTML()
         with gr.Tab("Engine"):
             method_output = gr.HTML()
             rss_text = gr.Textbox(
                 label="Public RSS feeds",
-                value="\n".join(DEFAULT_FEEDS),
-                lines=7,
+                value=source_catalog_text(),
+                lines=12,
             )
 
     inputs = [universe_mode, custom_symbols, lookback_hours, rss_text]
@@ -1203,6 +1769,7 @@ with gr.Blocks(title=APP_TITLE, css=CSS, theme=gr.themes.Base()) as demo:
         ranking_output,
         matched_output,
         theme_output,
+        source_output,
         news_output,
         method_output,
     ]
