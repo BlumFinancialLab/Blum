@@ -176,13 +176,7 @@ This project is for educational, research and technical case-study purposes only
 
 ## Roadmap
 
-- Add provider adapters for filings, transcripts, estimates and ownership.
-- Add real vector indexes with FAISS persisted by asset and article namespace.
-- Add Chronos, TimesFM or PatchTST time-series adapters when demo resources allow.
-- Add portfolio watchlist import/export.
-- Add more rigorous walk-forward validation.
-- Add source reliability scoring and stale-data controls.
-- Add contributor-friendly plugin system for data providers and model adapters.
+The execution roadmap is tracked in [`ROADMAP.md`](ROADMAP.md). It covers Docker Space stabilization, data ingestion reliability, AI model productionization, semantic intelligence, signal engine upgrades, ETF intelligence, backtesting, frontend UX, provider architecture, testing and open-source polish.
 
 ## Contributing
 
