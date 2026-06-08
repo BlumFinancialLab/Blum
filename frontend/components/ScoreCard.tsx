@@ -1,5 +1,6 @@
 import type { CSSProperties } from "react";
 import { Signal } from "@/lib/types";
+import { formatVolume, MarketSnapshotStrip } from "./MarketSnapshotStrip";
 import { StatusBadge } from "./StatusBadge";
 
 export function ScoreCard({ signal }: { signal: Signal }) {
@@ -8,18 +9,22 @@ export function ScoreCard({ signal }: { signal: Signal }) {
     <article className="score-card">
       <div className="score-card-top">
         <div>
-          <span>{signal.asset?.sector ?? "Asset"}</span>
+          <span>{signal.asset?.asset_type ?? "Asset"} | {signal.asset?.sector ?? "Sector pending"}</span>
           <h3>{signal.ticker}</h3>
+          <p className="asset-subtitle">{signal.asset?.name ?? "Instrument metadata pending"}</p>
         </div>
         <div className="score-ring" style={scoreStyle}>
           <strong>{Math.round(signal.blum_score)}</strong>
         </div>
       </div>
       <StatusBadge label={signal.classification} />
+      <MarketSnapshotStrip snapshot={signal.market_snapshot} compact />
       <p>{signal.explanation}</p>
       <div className="mini-metrics">
         <div><span>Risk</span><strong>{signal.risk_level}</strong></div>
         <div><span>Horizon</span><strong>{signal.time_horizon}</strong></div>
+        <div><span>Exchange</span><strong>{signal.asset?.exchange ?? "n/a"}</strong></div>
+        <div><span>Volume</span><strong>{formatVolume(signal.market_snapshot?.volume)}</strong></div>
       </div>
     </article>
   );

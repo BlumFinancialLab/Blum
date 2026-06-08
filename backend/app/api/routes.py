@@ -1,23 +1,28 @@
 from __future__ import annotations
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.ai.orchestrator import AIOrchestrator
+from app.core.config import get_settings
 from app.core.database import get_db
 from app.ingestion.news_ingestor import NewsIngestor
 from app.models import AIInsight, Asset, NewsArticle, NewsAssetLink, PriceHistory, SentimentAnalysis, SignalSnapshot
 from app.schemas import AssetOut, MarketUpdateRequest, NewsOut, NewsUpdateRequest, SemanticSearchRequest, SignalRunRequest
 from app.services.dashboard import dashboard_overview, signal_payload
 from app.services.etf import list_etf_trends, update_etf_trends
-from app.services.market_data import MarketDataService
+from app.services.live import live_news, market_sentiment
+from app.services.market_data import MarketDataService, market_snapshot_for_asset
+from app.services.pipeline import PipelineService
+from app.services.realtime import realtime_status
 from app.services.semantic import SemanticService
 from app.signals.backtest import run_simple_backtest
 from app.signals.engine import SignalEngine
 
 
 router = APIRouter()
+settings = get_settings()
 
 
 @router.get("/health")
@@ -25,7 +30,7 @@ def health() -> dict:
     return {"status": "ok", "service": "blum-ai-financial-intelligence"}
 
 
-@router.get("/assets", response_model=list[AssetOut])
+@router.get("/assets")
 def list_assets(
     asset_type: str | None = Query(default=None),
     country: str | None = Query(default=None),
@@ -39,7 +44,8 @@ def list_assets(
         query = query.where(Asset.country.ilike(country))
     if sector:
         query = query.where(Asset.sector.ilike(f"%{sector}%"))
-    return db.scalars(query).all()
+    assets = db.scalars(query).all()
+    return [asset_payload(db, asset) for asset in assets]
 
 
 @router.get("/assets/{ticker}")
@@ -50,11 +56,12 @@ def get_asset(ticker: str, db: Session = Depends(get_db)):
     linked = related_news_for_asset(db, asset.id, limit=12)
     return {
         "asset": AssetOut.model_validate(asset),
+        "market_snapshot": market_snapshot_for_asset(db, asset),
         "prices": [
             {"date": str(row.date), "open": row.open, "high": row.high, "low": row.low, "close": row.close, "volume": row.volume}
             for row in reversed(prices)
         ],
-        "latest_signal": signal_payload(signal) if signal else None,
+        "latest_signal": signal_payload(signal, db) if signal else None,
         "related_news": linked,
     }
 
@@ -69,13 +76,33 @@ def news_update(payload: NewsUpdateRequest, db: Session = Depends(get_db)):
     return NewsIngestor().update_news(db, lookback_hours=payload.lookback_hours, limit_per_feed=payload.limit_per_feed)
 
 
+@router.get("/news/live")
+def news_live(limit: int = Query(default=60, ge=1, le=200), db: Session = Depends(get_db)):
+    return live_news(db, limit=limit)
+
+
+@router.get("/sentiment/market")
+def sentiment_market(hours: int = Query(default=48, ge=1, le=720), db: Session = Depends(get_db)):
+    return market_sentiment(db, hours=hours)
+
+
 @router.post("/signals/run")
 def signals_run(payload: SignalRunRequest, db: Session = Depends(get_db)):
     if payload.refresh_prices:
-        MarketDataService().update_prices(db, tickers=payload.tickers, period="2y", limit=payload.limit)
+        MarketDataService().update_prices(db, tickers=payload.tickers, period=settings.historical_price_period, limit=payload.limit)
     result = SignalEngine().run(db, tickers=payload.tickers, limit=payload.limit)
     result.update(update_etf_trends(db))
     return result
+
+
+@router.post("/pipeline/run")
+def pipeline_run(payload: SignalRunRequest, db: Session = Depends(get_db)):
+    return PipelineService().run(db, tickers=payload.tickers, limit=payload.limit, period=settings.historical_price_period)
+
+
+@router.get("/pipeline/status")
+def pipeline_status():
+    return realtime_status()
 
 
 @router.get("/signals/top")
@@ -100,8 +127,9 @@ def signals_top(
         if signal.ticker in seen:
             continue
         seen.add(signal.ticker)
-        item = signal_payload(signal)
+        item = signal_payload(signal, db)
         item["asset"] = AssetOut.model_validate(asset)
+        item["market_snapshot"] = market_snapshot_for_asset(db, asset)
         output.append(item)
         if len(output) >= limit:
             break
@@ -114,7 +142,7 @@ def signal_detail(ticker: str, db: Session = Depends(get_db)):
     signal = latest_signal(db, asset.id)
     if not signal:
         raise HTTPException(status_code=404, detail="No signal available. Run /signals/run first.")
-    return signal_payload(signal)
+    return signal_payload(signal, db)
 
 
 @router.get("/sentiment/{ticker}")
@@ -175,16 +203,33 @@ def overview(db: Session = Depends(get_db)):
 def ai_explain(ticker: str, db: Session = Depends(get_db)):
     asset = require_asset(db, ticker)
     signal = latest_signal(db, asset.id)
+    hydration = {}
     if not signal:
-        raise HTTPException(status_code=404, detail="No signal available. Run /signals/run first.")
+        hydration = hydrate_asset_evidence(db, asset)
+        signal = latest_signal(db, asset.id)
     news = related_news_for_asset(db, asset.id, limit=8)
+    if not signal:
+        insight = insufficient_evidence_insight(db, asset, news, hydration)
+        db.add(
+            AIInsight(
+                asset_id=asset.id,
+                model_name=insight["models_used"]["reasoning"],
+                insight_type="asset_explanation_incomplete",
+                structured_output=insight,
+                explanation=insight["reason"],
+            )
+        )
+        db.commit()
+        return insight
     insight = AIOrchestrator().generate_asset_insight(
         ticker=asset.ticker,
-        signal=signal_payload(signal),
+        signal=signal_payload(signal, db),
         technical=signal.technical_summary,
         narrative=signal.narrative_summary,
         related_news=news,
     )
+    insight["evidence_status"] = "ready"
+    insight["auto_hydration"] = hydration
     db.add(AIInsight(asset_id=asset.id, model_name=insight["models_used"]["reasoning"], structured_output=insight, explanation=insight["reason"]))
     db.commit()
     return insight
@@ -203,8 +248,87 @@ def require_asset(db: Session, ticker: str) -> Asset:
     return asset
 
 
+def asset_payload(db: Session, asset: Asset) -> dict:
+    payload = AssetOut.model_validate(asset).model_dump()
+    payload["market_snapshot"] = market_snapshot_for_asset(db, asset)
+    return payload
+
+
 def latest_signal(db: Session, asset_id: int) -> SignalSnapshot | None:
     return db.scalar(select(SignalSnapshot).where(SignalSnapshot.asset_id == asset_id).order_by(desc(SignalSnapshot.created_at)).limit(1))
+
+
+def hydrate_asset_evidence(db: Session, asset: Asset) -> dict:
+    tickers = [asset.ticker]
+    benchmark = settings.default_benchmark.upper()
+    if benchmark != asset.ticker:
+        tickers.append(benchmark)
+    market = MarketDataService().update_prices(db, tickers=tickers, period=settings.historical_price_period, limit=len(tickers))
+    news = NewsIngestor().update_news(db, lookback_hours=168, limit_per_feed=20, tickers=[asset.ticker])
+    signals = SignalEngine().run(db, tickers=[asset.ticker], limit=1)
+    etf = update_etf_trends(db)
+    return {
+        "mode": "on_demand_real_data_hydration",
+        "market_update": market,
+        "news_update": news,
+        "signal_run": signals,
+        "etf_update": etf,
+    }
+
+
+def insufficient_evidence_insight(db: Session, asset: Asset, news: list[dict], hydration: dict) -> dict:
+    price_rows = int(db.scalar(select(func.count(PriceHistory.id)).where(PriceHistory.asset_id == asset.id)) or 0)
+    market = hydration.get("market_update", {})
+    news_update = hydration.get("news_update", {})
+    missing_assets = market.get("missing_assets", [])
+    provider_report = market.get("provider_report", [])
+    reason = (
+        f"{asset.ticker} does not have enough verified public market data to create a full Blum Intelligence Score yet. "
+        f"The backend attempted on-demand real-data hydration, stored {price_rows} OHLCV rows and found {len(news)} linked news items. "
+        "No synthetic prices, headlines, sentiment or signal evidence were generated."
+    )
+    if missing_assets:
+        reason += f" Public price providers did not return usable data for: {', '.join(missing_assets[:6])}."
+    return {
+        "ticker": asset.ticker,
+        "classification": "Insufficient Evidence",
+        "blum_score": 0,
+        "reason": reason,
+        "watch_points": [
+            "Keep the live worker running until public OHLCV providers return sufficient historical rows.",
+            "Review source diagnostics to identify blocked, empty or rate-limited public feeds.",
+            "Use the live news tape as narrative evidence while the quantitative signal waits for price history.",
+        ],
+        "risk_level": "Not Rated",
+        "time_horizon": "Not Rated",
+        "monitor_next": ["public OHLCV availability", "linked news count", "source diagnostics", "signal snapshot creation"],
+        "evidence_status": "insufficient_real_data",
+        "data_diagnostics": {
+            "price_rows": price_rows,
+            "linked_news": len(news),
+            "market_update": {
+                "data_mode": market.get("data_mode"),
+                "updated_assets": market.get("updated_assets", 0),
+                "price_rows": market.get("price_rows", 0),
+                "missing_assets": missing_assets,
+                "provider_report": provider_report,
+            },
+            "news_update": {
+                "mode": news_update.get("mode"),
+                "sources_requested": news_update.get("sources_requested", 0),
+                "sources_ok": news_update.get("sources_ok", 0),
+                "inserted_articles": news_update.get("inserted_articles", 0),
+                "linked_assets": news_update.get("linked_assets", 0),
+                "source_errors": news_update.get("source_errors", [])[:8],
+            },
+        },
+        "models_used": {
+            "sentiment": settings.finbert_model,
+            "embeddings": settings.embedding_model,
+            "reasoning": "evidence-readiness-engine",
+            "time_series": "statistical-regime-engine",
+        },
+    }
 
 
 def related_news_for_asset(db: Session, asset_id: int, limit: int = 20) -> list[dict]:
@@ -229,4 +353,3 @@ def related_news_for_asset(db: Session, asset_id: int, limit: int = 20) -> list[
         }
         for article, link in rows
     ]
-

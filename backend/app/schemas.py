@@ -71,11 +71,10 @@ class SignalRunRequest(BaseModel):
 
 class MarketUpdateRequest(BaseModel):
     tickers: list[str] | None = None
-    period: str = "2y"
+    period: str = "max"
     limit: int = Field(default=36, ge=1, le=120)
 
 
 class NewsUpdateRequest(BaseModel):
     lookback_hours: int = Field(default=72, ge=1, le=720)
     limit_per_feed: int = Field(default=35, ge=1, le=100)
-

@@ -1,0 +1,104 @@
+from __future__ import annotations
+
+from datetime import datetime
+import threading
+import traceback
+
+from apscheduler.schedulers.background import BackgroundScheduler
+
+from app.core.config import get_settings
+from app.core.database import SessionLocal
+from app.ingestion.news_ingestor import NewsIngestor
+from app.services.etf import update_etf_trends
+from app.services.market_data import MarketDataService
+from app.services.pipeline import PipelineService
+from app.signals.engine import SignalEngine
+
+
+settings = get_settings()
+_scheduler: BackgroundScheduler | None = None
+_state_lock = threading.RLock()
+_state = {
+    "started": False,
+    "running": False,
+    "last_started_at": None,
+    "last_completed_at": None,
+    "last_job": None,
+    "last_status": "idle",
+    "last_error": "",
+    "last_result": {},
+}
+
+
+def start_realtime_services() -> None:
+    global _scheduler
+    if _scheduler is not None:
+        return
+    _scheduler = BackgroundScheduler(timezone="UTC")
+    if settings.enable_live_startup:
+        threading.Thread(target=run_startup_pipeline, daemon=True).start()
+    _scheduler.add_job(run_news_refresh, "interval", minutes=settings.news_refresh_minutes, id="news_refresh", replace_existing=True, max_instances=1)
+    _scheduler.add_job(run_market_refresh, "interval", minutes=settings.market_refresh_minutes, id="market_refresh", replace_existing=True, max_instances=1)
+    _scheduler.start()
+    with _state_lock:
+        _state["started"] = True
+
+
+def stop_realtime_services() -> None:
+    global _scheduler
+    if _scheduler is not None:
+        _scheduler.shutdown(wait=False)
+        _scheduler = None
+
+
+def realtime_status() -> dict:
+    with _state_lock:
+        return dict(_state)
+
+
+def run_startup_pipeline() -> None:
+    _run_job(
+        "startup_pipeline",
+        lambda db: PipelineService().run(db, limit=settings.startup_pipeline_limit, period=settings.historical_price_period),
+    )
+
+
+def run_news_refresh() -> None:
+    _run_job("news_refresh", lambda db: NewsIngestor().update_news(db, lookback_hours=72, limit_per_feed=35))
+
+
+def run_market_refresh() -> None:
+    def work(db):
+        market = MarketDataService().update_prices(db, period=settings.refresh_price_period, limit=settings.max_update_assets)
+        signals = SignalEngine().run(db, limit=settings.max_update_assets)
+        etf = update_etf_trends(db)
+        return {"market_update": market, "signal_run": signals, "etf_update": etf}
+
+    _run_job("market_refresh", work)
+
+
+def _run_job(job_name: str, work):
+    with _state_lock:
+        if _state["running"]:
+            return
+        _state["running"] = True
+        _state["last_started_at"] = datetime.utcnow().isoformat()
+        _state["last_job"] = job_name
+        _state["last_status"] = "running"
+        _state["last_error"] = ""
+    try:
+        with SessionLocal() as db:
+            result = work(db)
+        with _state_lock:
+            _state["last_completed_at"] = datetime.utcnow().isoformat()
+            _state["last_status"] = "ok"
+            _state["last_result"] = result or {}
+    except Exception as exc:
+        with _state_lock:
+            _state["last_completed_at"] = datetime.utcnow().isoformat()
+            _state["last_status"] = "error"
+            _state["last_error"] = f"{type(exc).__name__}: {str(exc)}"
+            _state["last_result"] = {"traceback": traceback.format_exc(limit=4)}
+    finally:
+        with _state_lock:
+            _state["running"] = False

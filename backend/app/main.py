@@ -11,6 +11,7 @@ from app.api.routes import router
 from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.services.bootstrap import bootstrap_database
+from app.services.realtime import start_realtime_services, stop_realtime_services
 
 
 settings = get_settings()
@@ -46,6 +47,12 @@ if STATIC_DIR.exists():
 def startup() -> None:
     with SessionLocal() as db:
         bootstrap_database(db)
+    start_realtime_services()
+
+
+@app.on_event("shutdown")
+def shutdown() -> None:
+    stop_realtime_services()
 
 
 @app.get("/{full_path:path}", include_in_schema=False)

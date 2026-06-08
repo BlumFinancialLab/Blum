@@ -4,6 +4,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from app.models import Asset, ETFTrend, SignalSnapshot
+from app.services.market_data import market_snapshot_for_asset
 
 
 def update_etf_trends(db: Session) -> dict:
@@ -35,17 +36,34 @@ def update_etf_trends(db: Session) -> dict:
 
 
 def list_etf_trends(db: Session, limit: int = 30) -> list[dict]:
-    rows = db.scalars(select(ETFTrend).order_by(desc(ETFTrend.created_at), desc(ETFTrend.confirmation_score)).limit(limit)).all()
+    rows = db.execute(
+        select(ETFTrend, Asset)
+        .join(Asset, Asset.id == ETFTrend.asset_id)
+        .order_by(desc(ETFTrend.created_at), desc(ETFTrend.confirmation_score))
+        .limit(limit)
+    ).all()
     return [
         {
-            "ticker": row.ticker,
-            "category": row.category,
-            "momentum_score": round(row.momentum_score, 1),
-            "thematic_score": round(row.thematic_score, 1),
-            "confirmation_score": round(row.confirmation_score, 1),
-            "details": row.details,
-            "created_at": row.created_at,
+            "ticker": trend.ticker,
+            "category": trend.category,
+            "asset": {
+                "ticker": asset.ticker,
+                "name": asset.name,
+                "category": asset.category,
+                "sector": asset.sector,
+                "industry": asset.industry,
+                "country": asset.country,
+                "asset_type": asset.asset_type,
+                "currency": asset.currency,
+                "exchange": asset.exchange,
+                "description": asset.description,
+            },
+            "market_snapshot": market_snapshot_for_asset(db, asset),
+            "momentum_score": round(trend.momentum_score, 1),
+            "thematic_score": round(trend.thematic_score, 1),
+            "confirmation_score": round(trend.confirmation_score, 1),
+            "details": trend.details,
+            "created_at": trend.created_at,
         }
-        for row in rows
+        for trend, asset in rows
     ]
-

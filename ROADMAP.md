@@ -2,6 +2,17 @@
 
 This roadmap is the execution plan for turning Blum into a credible open-source AI financial intelligence platform. Each phase should ship with working code, API coverage, UI coverage, documentation and explicit limitations.
 
+## Current Increment - Live Intelligence Runtime
+
+Shipped in the current architecture:
+
+- FastAPI startup launches a background APScheduler worker.
+- Startup pipeline ingests public news first, then historical OHLCV, signals and ETF trends.
+- Public news ingestion combines publisher RSS feeds, thematic Google News RSS queries and asset-specific public web-search RSS queries.
+- `/news/live`, `/sentiment/market` and `/pipeline/status` expose live news, market sentiment and worker state.
+- Dashboard polls live endpoints every 30 seconds and surfaces news tape, sentiment mix, source/model state and signal readiness.
+- Price pipeline remains real-data-only through yfinance, Yahoo Chart API and Stooq; no synthetic OHLCV fallback is allowed.
+
 ## Phase 0 - Stabilize Docker Space Deployment
 
 Goal: make the Hugging Face Docker Space build and boot reliably.
@@ -157,7 +168,7 @@ Deliverables:
 - Add advanced Signal Lab filters.
 - Add exportable signal results.
 - Add responsive refinements for tablet/mobile.
-- Add screenshot placeholders or generated screenshots to README.
+- Add real screenshots generated from a running Space build to README.
 
 Exit criteria:
 
@@ -229,3 +240,5 @@ Every roadmap step should ship as a complete increment:
 - documentation update;
 - verification command;
 - explicit limitation or disclaimer when relevant.
+
+All implementation work must follow [`ENGINEERING_STANDARDS.md`](ENGINEERING_STANDARDS.md): no placeholders, no fabricated data, no synthetic market-data fallback, evidence-bound AI, efficient provider calls and explicit verification.

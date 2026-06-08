@@ -21,10 +21,10 @@ This is not a consumer trading app and not a simple dashboard. The project is a 
 | Layer | Stack |
 | --- | --- |
 | Frontend | Next.js, React, Plotly, dark financial intelligence UI |
-| Backend | FastAPI, Pydantic, APScheduler-ready services |
+| Backend | FastAPI, Pydantic, APScheduler live services |
 | Database | PostgreSQL, SQLAlchemy, Alembic |
 | Market data | yfinance, Yahoo Chart API and Stooq provider chain |
-| News ingestion | RSS feeds, deduplication, ticker linking |
+| News ingestion | RSS feeds, public web-search RSS, deduplication, ticker linking |
 | AI sentiment | FinBERT primary, VADER baseline |
 | Semantic layer | sentence-transformers embeddings, semantic search, theme discovery |
 | Reasoning | lightweight Qwen-compatible LLM evidence-only explanation layer |
@@ -45,16 +45,29 @@ Blum does not use one generic AI model for everything.
 ## Data Workflow
 
 1. Seed the asset universe with stocks, ETFs, sectors, countries, industries and descriptions.
-2. Download OHLCV price history from yfinance, Yahoo Chart API and Stooq public daily data.
+2. Download OHLCV price history from yfinance, Yahoo Chart API and Stooq public daily data, using maximum available history when requested.
 3. Store prices in PostgreSQL.
-4. Fetch public RSS news.
-5. Deduplicate articles.
-6. Link articles to tickers and sectors.
-7. Run FinBERT sentiment and VADER baseline.
-8. Generate embeddings for semantic retrieval.
-9. Compute technical indicators and time-series anomalies.
-10. Generate signal snapshots with a Blum Intelligence Score.
-11. Produce AI explanations using only retrieved evidence.
+4. Start the live pipeline on application boot.
+5. Fetch public RSS news plus dynamic public web-search RSS queries for assets and financial themes.
+6. Deduplicate articles.
+7. Link articles to tickers and sectors.
+8. Run FinBERT sentiment and VADER baseline.
+9. Generate embeddings for semantic retrieval.
+10. Compute technical indicators and time-series anomalies.
+11. Generate signal snapshots with a Blum Intelligence Score.
+12. Produce AI explanations using only retrieved evidence.
+
+## Live Runtime
+
+When the FastAPI application starts, APScheduler launches a background intelligence worker:
+
+- `startup_pipeline`: news ingestion, historical price collection, signal generation and ETF trend update.
+- `news_refresh`: public news refresh every 10 minutes by default.
+- `market_refresh`: recent OHLCV refresh and signal regeneration every 45 minutes by default.
+
+The dashboard polls live JSON endpoints every 30 seconds and shows worker state, latest public news, sentiment distribution, source/model diagnostics and signal readiness. No generated headlines, generated prices or fabricated sentiment are shown.
+
+Every equity and ETF surface includes an explicit market snapshot when real OHLCV data is available: last price, currency, date, provider, volume and 1D/5D/1M performance. If public providers have not returned usable prices yet, the UI shows a real-data pending state instead of a fabricated value.
 
 ## Signal Methodology
 
@@ -88,7 +101,11 @@ FastAPI exposes clean JSON endpoints:
 - `GET /assets/{ticker}`
 - `POST /market/update`
 - `POST /news/update`
+- `GET /news/live`
+- `GET /sentiment/market`
 - `POST /signals/run`
+- `POST /pipeline/run`
+- `GET /pipeline/status`
 - `GET /signals/top`
 - `GET /signals/{ticker}`
 - `GET /sentiment/{ticker}`
@@ -101,6 +118,8 @@ FastAPI exposes clean JSON endpoints:
 - `POST /backtest/{ticker}`
 
 Interactive API docs are available at `/docs`.
+
+`GET /ai/explain/{ticker}` is auto-hydrating: if no signal snapshot exists yet, the backend attempts on-demand real public price hydration, ticker-specific news ingestion and signal generation before returning an explanation. If verified data is still insufficient, it returns an `Insufficient Evidence` explanation with provider diagnostics instead of fabricating a signal.
 
 ## Frontend Pages
 
@@ -164,7 +183,7 @@ Backtesting is included for research validation only. It reports historical hit 
 
 ## Limitations
 
-- Public RSS, Yahoo and Stooq are demo-grade public data sources, not licensed institutional feeds.
+- Public RSS, Google News RSS search, Yahoo and Stooq are demo-grade public data sources, not licensed institutional feeds.
 - The system does not generate synthetic prices. If public providers fail or rate-limit, the affected assets are reported as missing instead of being filled with fake data.
 - FinBERT, embeddings and LLM model loading depend on runtime memory and Hugging Face model availability.
 - The reasoning layer must not invent data; it is constrained to retrieved evidence.
@@ -178,6 +197,10 @@ This project is for educational, research and technical case-study purposes only
 ## Roadmap
 
 The execution roadmap is tracked in [`ROADMAP.md`](ROADMAP.md). It covers Docker Space stabilization, data ingestion reliability, AI model productionization, semantic intelligence, signal engine upgrades, ETF intelligence, backtesting, frontend UX, provider architecture, testing and open-source polish.
+
+## Engineering Standards
+
+Development standards are tracked in [`ENGINEERING_STANDARDS.md`](ENGINEERING_STANDARDS.md). The project explicitly rejects placeholders, fabricated data and synthetic market-data fallbacks. Every shipped increment should be evidence-bound, efficient, explainable and verified.
 
 ## Contributing
 

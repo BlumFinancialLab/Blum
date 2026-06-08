@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, desc, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -13,7 +13,7 @@ class MarketDataService:
         self.settings = get_settings()
         self.providers = [YFinanceProvider(), YahooChartProvider(), StooqProvider()]
 
-    def update_prices(self, db: Session, tickers: list[str] | None = None, period: str = "2y", limit: int | None = None) -> dict:
+    def update_prices(self, db: Session, tickers: list[str] | None = None, period: str = "max", limit: int | None = None) -> dict:
         limit = limit or self.settings.max_update_assets
         query = select(Asset).where(Asset.is_active.is_(True)).order_by(Asset.asset_type, Asset.ticker)
         if tickers:
@@ -85,7 +85,49 @@ def latest_price_payload(db: Session, ticker: str) -> dict | None:
     asset = db.scalar(select(Asset).where(Asset.ticker == ticker.upper()))
     if not asset:
         return None
-    price = db.scalar(select(PriceHistory).where(PriceHistory.asset_id == asset.id).order_by(PriceHistory.date.desc()).limit(1))
-    if not price:
+    return market_snapshot_for_asset(db, asset)
+
+
+def market_snapshot_for_asset(db: Session, asset: Asset) -> dict:
+    rows = db.scalars(
+        select(PriceHistory)
+        .where(PriceHistory.asset_id == asset.id)
+        .order_by(desc(PriceHistory.date))
+        .limit(24)
+    ).all()
+    if not rows:
+        return {
+            "ticker": asset.ticker,
+            "currency": asset.currency,
+            "data_status": "missing_price_history",
+            "price": None,
+            "date": None,
+            "volume": None,
+            "provider": None,
+            "perf_1d": None,
+            "perf_5d": None,
+            "perf_1m": None,
+        }
+    latest = rows[0]
+    return {
+        "ticker": asset.ticker,
+        "currency": asset.currency,
+        "data_status": "ready",
+        "price": round(float(latest.close), 4),
+        "date": str(latest.date),
+        "volume": latest.volume,
+        "provider": latest.provider,
+        "perf_1d": pct_change(rows, 1),
+        "perf_5d": pct_change(rows, 5),
+        "perf_1m": pct_change(rows, 21),
+    }
+
+
+def pct_change(rows: list[PriceHistory], offset: int) -> float | None:
+    if len(rows) <= offset:
         return None
-    return {"ticker": asset.ticker, "date": str(price.date), "close": price.close, "volume": price.volume}
+    current = float(rows[0].close)
+    previous = float(rows[offset].close)
+    if previous == 0:
+        return None
+    return round((current / previous - 1) * 100, 4)
