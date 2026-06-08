@@ -1,6 +1,8 @@
 import html
 import math
 import re
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 
@@ -13,7 +15,10 @@ from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 
 APP_TITLE = "Blum Alpha Terminal"
-AUTO_REFRESH_SECONDS = 300
+FRONTEND_POLL_SECONDS = 20
+NEWS_REFRESH_SECONDS = 75
+PRICE_REFRESH_SECONDS = 150
+FULL_REFRESH_SECONDS = 300
 MAX_NEWS_PER_FEED = 35
 MAX_SOURCE_WORKERS = 18
 FEED_TIMEOUT_SECONDS = 7
@@ -37,12 +42,12 @@ SOURCE_CATALOG = [
     {"name": "NPR Business", "url": "https://feeds.npr.org/1006/rss.xml", "desk": "Business", "tier": 2},
     {"name": "The Guardian Business", "url": "https://www.theguardian.com/uk/business/rss", "desk": "Business", "tier": 2},
     {"name": "AP Business", "url": "https://apnews.com/hub/business?output=rss", "desk": "Business", "tier": 1},
-    {"name": "Reuters Agency Business", "url": "https://www.reutersagency.com/feed/?best-topics=business-finance&post_type=best", "desk": "Business", "tier": 1},
     {"name": "Federal Reserve Press", "url": "https://www.federalreserve.gov/feeds/press_all.xml", "desk": "Rates", "tier": 1},
     {"name": "Federal Reserve Speeches", "url": "https://www.federalreserve.gov/feeds/speeches.xml", "desk": "Rates", "tier": 1},
     {"name": "SEC Press Releases", "url": "https://www.sec.gov/news/pressreleases.rss", "desk": "Regulatory", "tier": 1},
-    {"name": "SEC Investor Alerts", "url": "https://www.sec.gov/news/investor-alerts.rss", "desk": "Regulatory", "tier": 2},
-    {"name": "IMF Blog", "url": "https://www.imf.org/en/Blogs/RSS", "desk": "Macro", "tier": 2},
+    {"name": "SEC Speeches and Statements", "url": "https://www.sec.gov/news/speeches-statements.rss", "desk": "Regulatory", "tier": 1},
+    {"name": "SEC Litigation Releases", "url": "https://www.sec.gov/enforcement-litigation/litigation-releases/rss", "desk": "Regulatory", "tier": 2},
+    {"name": "IMF News", "url": "https://www.imf.org/en/news/rss", "desk": "Macro", "tier": 2},
     {"name": "ECB Press", "url": "https://www.ecb.europa.eu/rss/press.html", "desk": "Rates", "tier": 2},
     {"name": "CoinDesk", "url": "https://www.coindesk.com/arc/outboundfeeds/rss/", "desk": "Crypto", "tier": 2},
     {"name": "Cointelegraph", "url": "https://cointelegraph.com/rss", "desk": "Crypto", "tier": 3},
@@ -55,6 +60,7 @@ SOURCE_CATALOG = [
 ]
 
 DEFAULT_FEEDS = [source["url"] for source in SOURCE_CATALOG]
+CHART_SYMBOLS = ["SPY", "QQQ", "IWM", "SMH", "XLF", "XLE", "TLT", "GLD"]
 
 ASSET_UNIVERSE = [
     {"symbol": "SPY", "name": "SPDR S&P 500 ETF", "type": "ETF", "sector": "US Equity", "theme": "Broad US large cap", "aliases": ["s&p 500", "sp 500", "large cap", "wall street", "us stocks"]},
@@ -456,15 +462,15 @@ def map_news_to_assets(news, assets):
     return pd.DataFrame(rows)
 
 
-def fetch_prices(symbols):
+def fetch_prices(symbols, period="18mo", interval="1d"):
     if not symbols:
         return {}
 
     try:
         data = yf.download(
             tickers=" ".join(symbols),
-            period="18mo",
-            interval="1d",
+            period=period,
+            interval=interval,
             group_by="ticker",
             auto_adjust=True,
             progress=False,
@@ -498,6 +504,50 @@ def fetch_prices(symbols):
         except Exception:
             continue
 
+    return frames
+
+
+def fetch_yahoo_intraday_symbol(symbol):
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+    params = {"range": "5d", "interval": "5m", "includePrePost": "false"}
+    try:
+        response = requests.get(url, params=params, headers=HEADERS, timeout=7)
+        response.raise_for_status()
+        payload = response.json()
+        result = payload.get("chart", {}).get("result", [])
+        if not result:
+            return symbol, pd.DataFrame()
+        data = result[0]
+        timestamps = data.get("timestamp", [])
+        quote = data.get("indicators", {}).get("quote", [{}])[0]
+        if not timestamps or not quote:
+            return symbol, pd.DataFrame()
+        frame = pd.DataFrame(
+            {
+                "Open": quote.get("open", []),
+                "High": quote.get("high", []),
+                "Low": quote.get("low", []),
+                "Close": quote.get("close", []),
+                "Volume": quote.get("volume", []),
+            },
+            index=pd.to_datetime(timestamps, unit="s", utc=True),
+        )
+        frame = frame.apply(pd.to_numeric, errors="coerce").dropna(subset=["Close"])
+        return symbol, frame
+    except Exception:
+        return symbol, pd.DataFrame()
+
+
+def fetch_intraday_prices(symbols):
+    frames = {}
+    if not symbols:
+        return frames
+    with ThreadPoolExecutor(max_workers=min(8, len(symbols))) as executor:
+        futures = [executor.submit(fetch_yahoo_intraday_symbol, symbol) for symbol in symbols]
+        for future in as_completed(futures):
+            symbol, frame = future.result()
+            if frame is not None and not frame.empty:
+                frames[symbol] = frame
     return frames
 
 
@@ -986,7 +1036,7 @@ def build_chart_wall(df, price_frames):
         cards.append(
             f"""
             <div class="chart-card">
-              <div class="chart-head"><strong>{esc(symbol)}</strong><span>{esc(item["technical_view"])}</span></div>
+              <div class="chart-head"><strong>{esc(symbol)}</strong><span>5M LIVE / {esc(item["technical_view"])}</span></div>
               {sparkline_svg(price_frames.get(symbol))}
               <div class="chart-foot"><span>1D {signed(item["1d %"])}</span><span>20D {signed(item["20d %"])}</span><span>RSI {esc(item["RSI 14"])}</span></div>
             </div>
@@ -1062,6 +1112,24 @@ def build_headline_radar(news):
     return "<div class='headline-radar'>" + "".join(rows) + "</div>"
 
 
+def build_market_ticker(df):
+    if df.empty:
+        return "<div class='market-ticker'><span>Waiting for market data...</span></div>"
+    symbols = ["SPY", "QQQ", "IWM", "SMH", "XLF", "XLE", "TLT", "GLD", "AAPL", "MSFT", "NVDA", "TSLA"]
+    items = []
+    for symbol in symbols:
+        row = df[df["symbol"] == symbol].head(1)
+        if row.empty:
+            continue
+        item = row.iloc[0]
+        move = item["1d %"]
+        direction = "up" if move is not None and not pd.isna(move) and float(move) >= 0 else "down"
+        items.append(
+            f"<span class='{direction}'><b>{esc(symbol)}</b> {signed(move)} <em>{esc(item['technical_view'])}</em></span>"
+        )
+    return "<div class='market-ticker'>" + "".join(items) + "</div>"
+
+
 def build_shell_html(pulse, regime, df, warnings, theme_df, news, source_report, price_frames):
     top_short = df.sort_values("short_score", ascending=False).head(1).iloc[0] if not df.empty else None
     top_long = df.sort_values("long_score", ascending=False).head(1).iloc[0] if not df.empty else None
@@ -1077,13 +1145,14 @@ def build_shell_html(pulse, regime, df, warnings, theme_df, news, source_report,
     sector_heatmap = build_sector_heatmap(df)
     source_panel = build_source_panel(source_report)
     headline_radar = build_headline_radar(news)
+    market_ticker = build_market_ticker(df)
 
     return f"""
     <section class="terminal-hero">
       <div>
-        <div class="terminal-kicker">PUBLIC MARKET INTELLIGENCE / LIVE RSS + PRICE HISTORY / {esc(now_label())}</div>
+        <div class="terminal-kicker">REALTIME PUBLIC MARKET INTELLIGENCE / CACHE UPDATED {esc(now_label())}</div>
         <h1>{APP_TITLE}</h1>
-        <p>Autonomous equity and ETF research queue. It screens the market, ranks short-term and long-term candidates, and explains why each instrument surfaced now.</p>
+        <p>Live RSS refinery, price-history engine and autonomous equity/ETF research queues. Backend refreshes continuously; the interface reads a clean market snapshot.</p>
       </div>
       <div class="regime-card">
         <span>MARKET REGIME</span>
@@ -1092,12 +1161,12 @@ def build_shell_html(pulse, regime, df, warnings, theme_df, news, source_report,
       </div>
     </section>
 
+    {market_ticker}
+
     <section class="metric-grid">
       <div class="metric"><span>LIVE HEADLINES</span><strong>{pulse["headlines"]}</strong></div>
       <div class="metric"><span>ACTIVE SOURCES</span><strong>{pulse["active_sources"]}/{pulse["total_sources"]}</strong></div>
-      <div class="metric positive"><span>POSITIVE</span><strong>{pulse["positive"]}</strong></div>
-      <div class="metric neutral"><span>NEUTRAL</span><strong>{pulse["neutral"]}</strong></div>
-      <div class="metric negative"><span>NEGATIVE</span><strong>{pulse["negative"]}</strong></div>
+      <div class="metric"><span>SENTIMENT MIX</span><strong>{pulse["positive"]}/{pulse["neutral"]}/{pulse["negative"]}</strong><small>positive / neutral / negative</small></div>
       <div class="metric"><span>AVG NEWS TONE</span><strong>{pulse["avg"]:+.2f}</strong></div>
       <div class="metric"><span>AVG QUALITY</span><strong>{pulse["quality"]:.0f}</strong></div>
       <div class="metric"><span>SHORT A-LIST</span><strong>{advance_short}</strong></div>
@@ -1189,6 +1258,88 @@ def build_cards_html(df, horizon):
     return "<div class='cards-grid'>" + "".join(card(row, horizon) for _, row in top.iterrows()) + "</div>"
 
 
+def queue_html(df, horizon):
+    title = "Short-Term Tactical Queue" if horizon == "short" else "Long-Term Investment Queue"
+    subtitle = "Fresh catalyst + near-term momentum" if horizon == "short" else "Durability + trend structure"
+    if df.empty:
+        return f"""
+        <section class="queue-panel">
+          <div class="section-head"><span>{title}</span><strong>{subtitle}</strong></div>
+          <div class="empty-state">No candidates available yet.</div>
+        </section>
+        """
+
+    score_key = "short_score" if horizon == "short" else "long_score"
+    bucket_key = "short_bucket" if horizon == "short" else "long_bucket"
+    move_key = "5d %" if horizon == "short" else "252d %"
+    rows = []
+    for rank, (_, row) in enumerate(df.sort_values(score_key, ascending=False).head(10).iterrows(), start=1):
+        score = float(row[score_key])
+        score_class = "score-hot" if score >= 78 else "score-watch" if score >= 64 else "score-cold"
+        rows.append(
+            f"""
+            <tr>
+              <td class="rank-cell">{rank}</td>
+              <td class="asset-cell"><strong>{esc(row["symbol"])}</strong><span>{esc(row["sector"])}</span></td>
+              <td><span class="score-pill {score_class}">{score:.0f}</span></td>
+              <td><strong>{esc(row[bucket_key])}</strong><span>{esc(row["tactical_setup"])}</span></td>
+              <td><strong>{esc(row["catalyst_class"])}</strong><span>{int(row["news_count"])} news / {int(row["source_diversity"])} sources / tone {row["avg_sentiment"]:+.2f}</span></td>
+              <td><strong>{signed(row[move_key])}</strong><span>RSI {esc(row["RSI 14"])} / {esc(row["technical_view"])}</span></td>
+              <td class="why-cell">{esc(clean_text(row["top_headline"], 150))}<span>{esc(clean_text(row["first_rejection"], 120))}</span></td>
+            </tr>
+            """
+        )
+    return f"""
+    <section class="queue-panel">
+      <div class="section-head"><span>{title}</span><strong>{subtitle}</strong></div>
+      <div class="queue-shell">
+        <table class="terminal-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Asset</th>
+              <th>Score</th>
+              <th>Research Status</th>
+              <th>Catalyst</th>
+              <th>Market State</th>
+              <th>Why Now / First Rejection</th>
+            </tr>
+          </thead>
+          <tbody>{''.join(rows)}</tbody>
+        </table>
+      </div>
+    </section>
+    """
+
+
+def source_health_html(source_report):
+    if source_report is None or source_report.empty:
+        return "<div class='empty-state'>No source health available yet.</div>"
+    rows = []
+    for _, row in source_report.sort_values(["status", "headlines"], ascending=[True, False]).head(18).iterrows():
+        status_class = "source-active" if row["status"] == "active" else "source-muted"
+        rows.append(
+            f"""
+            <tr>
+              <td><span class="source-dot {status_class}"></span>{esc(row["source"])}</td>
+              <td>{esc(row["desk"])}</td>
+              <td>{esc(row["tier"])}</td>
+              <td>{int(row["headlines"])}</td>
+              <td>{esc(row["status"])}</td>
+            </tr>
+            """
+        )
+    return f"""
+    <section class="source-health-card">
+      <div class="section-head"><span>Source Health</span><strong>RSS network diagnostics</strong></div>
+      <table class="source-table">
+        <thead><tr><th>Source</th><th>Desk</th><th>Tier</th><th>News</th><th>Status</th></tr></thead>
+        <tbody>{''.join(rows)}</tbody>
+      </table>
+    </section>
+    """
+
+
 def build_news_html(news):
     if news.empty:
         return "<div class='empty-state'>No live public headlines were retrieved. Widen the lookback or change RSS feeds.</div>"
@@ -1212,18 +1363,20 @@ def build_method_html():
     return """
     <section class="method">
       <h3>Engine prompt executed by this MVP</h3>
-      <p>Act as an autonomous public-market research terminal. Ingest a large public RSS network, classify themes, score source quality, remove low-signal headlines, map catalysts to a liquid equity/ETF universe, retrieve historical price behavior, calculate technical state, infer market regime and produce two ranked research queues: short-term tactical opportunities and long-term investment candidates. Never output final trade instructions; output research priority, evidence, first rejection risk and next workflow.</p>
+      <p>Act as an autonomous public-market research terminal. Ingest a large public RSS network, classify themes, score source quality, remove low-signal headlines, map catalysts to a liquid equity/ETF universe, retrieve historical price behavior, calculate technical state, infer market regime and produce two ranked research queues: short-term tactical opportunities and long-term investment candidates. The backend maintains a realtime cache; the frontend reads the latest snapshot every few seconds without refetching every source on each render.</p>
       <h3>Scoring model</h3>
       <p>Short-term score emphasizes fresh news sentiment, 5d/20d momentum, trend state, relevance, source quality, source diversity, catalyst class, volume shock and regime alignment. Long-term score emphasizes 63d/126d/252d trend, 200-day structure, volatility, drawdown control, source diversity, sentiment persistence and thematic relevance.</p>
       <h3>News refinery</h3>
       <p>Every headline receives theme tags, catalyst class, source tier, desk, quality score and canonical key for deduplication. Weak non-market headlines are filtered before they can influence any security ranking.</p>
+      <h3>Realtime architecture</h3>
+      <p>RSS and market-data pulls run in backend worker threads. Daily data powers technical scoring; a lightweight Yahoo chart API adapter powers 5-minute intraday chart panels. Manual refresh forces a new snapshot; passive UI polling reads cache only.</p>
       <h3>Data caveat</h3>
       <p>This uses public RSS and Yahoo Finance. It is not licensed terminal data, not financial advice and not a replacement for regulated research, filings, earnings transcripts, valuation work or risk review.</p>
     </section>
     """
 
 
-def run_terminal(universe_mode, custom_symbols, lookback_hours, rss_text):
+def compute_terminal_outputs(universe_mode, custom_symbols, lookback_hours, rss_text):
     assets = selected_universe(universe_mode, custom_symbols)
     sources = parse_sources(rss_text)
     symbols = [asset["symbol"] for asset in assets]
@@ -1231,7 +1384,8 @@ def run_terminal(universe_mode, custom_symbols, lookback_hours, rss_text):
     news, warnings, source_report = fetch_news(sources, int(lookback_hours))
     pulse = market_pulse(news, source_report)
     matched = map_news_to_assets(news, assets)
-    price_frames = fetch_prices(symbols)
+    price_frames = fetch_prices(symbols, period="18mo", interval="1d")
+    intraday_frames = fetch_intraday_prices([symbol for symbol in CHART_SYMBOLS if symbol in symbols])
     metrics = {symbol: technicals(symbol, price_frames.get(symbol)) for symbol in symbols}
     regime = infer_regime(metrics, pulse["avg"])
     rows = make_rows(assets, metrics, matched, pulse["avg"], regime)
@@ -1240,39 +1394,183 @@ def run_terminal(universe_mode, custom_symbols, lookback_hours, rss_text):
     if not rows.empty:
         rows = rows.sort_values(["alpha_score", "short_score", "long_score"], ascending=False).reset_index(drop=True)
 
-    display_cols = [
-        "symbol", "name", "type", "sector", "short_score", "short_bucket", "long_score", "long_bucket",
-        "last", "1d %", "5d %", "20d %", "63d %", "252d %", "vol60", "RSI 14", "technical_view",
-        "news_count", "source_diversity", "source_quality", "avg_sentiment", "catalyst_class", "tactical_setup", "first_rejection",
-    ]
-    ranking = rows[display_cols] if not rows.empty else pd.DataFrame(columns=display_cols)
-    news_table = matched.sort_values(["relevance", "sentiment"], ascending=False).head(150) if not matched.empty else matched
-
-    shell = build_shell_html(pulse, regime, rows, warnings, theme_df, news, source_report, price_frames)
-    short_cards = build_cards_html(rows, "short")
-    long_cards = build_cards_html(rows, "long")
+    shell = build_shell_html(pulse, regime, rows, warnings, theme_df, news, source_report, intraday_frames or price_frames)
+    short_queue = queue_html(rows, "short")
+    long_queue = queue_html(rows, "long")
     news_html = build_news_html(news)
+    source_html = source_health_html(source_report)
     method = build_method_html()
 
-    return shell, short_cards, long_cards, ranking, news_table, theme_df, source_report, news_html, method
+    return shell, short_queue, long_queue, news_html, source_html, method
+
+
+def loading_outputs(message="Building the first market snapshot. Live feeds and price history are warming up."):
+    shell = f"""
+    <section class="terminal-hero loading-hero">
+      <div>
+        <div class="terminal-kicker">REALTIME BACKEND / MARKET DATA CACHE / STARTING</div>
+        <h1>{APP_TITLE}</h1>
+        <p>{esc(message)}</p>
+      </div>
+      <div class="regime-card">
+        <span>ENGINE STATUS</span>
+        <strong>WARMING</strong>
+        <p>Backend refresh threads are initializing the RSS network and chart cache.</p>
+      </div>
+    </section>
+    """
+    return (
+        shell,
+        queue_html(pd.DataFrame(), "short"),
+        queue_html(pd.DataFrame(), "long"),
+        "<div class='empty-state'>Waiting for the first live news tape.</div>",
+        "<div class='empty-state'>Waiting for source health.</div>",
+        build_method_html(),
+    )
+
+
+class RealtimeMarketEngine:
+    def __init__(self):
+        self.lock = threading.RLock()
+        self.snapshot = None
+        self.config = None
+        self.last_full_refresh = 0.0
+        self.last_requested_at = 0.0
+        self.is_refreshing = False
+        self.started = False
+        self.stop_event = threading.Event()
+        self.worker = None
+        self.last_error = ""
+
+    def start(self):
+        with self.lock:
+            if self.started:
+                return
+            self.started = True
+            self.worker = threading.Thread(target=self._loop, daemon=True)
+            self.worker.start()
+
+    def configure(self, universe_mode, custom_symbols, lookback_hours, rss_text):
+        next_config = (
+            universe_mode,
+            custom_symbols or "",
+            int(lookback_hours),
+            rss_text or source_catalog_text(),
+        )
+        with self.lock:
+            changed = next_config != self.config
+            self.config = next_config
+            if changed:
+                self.last_requested_at = 0.0
+            return changed
+
+    def _loop(self):
+        while not self.stop_event.is_set():
+            should_refresh = False
+            with self.lock:
+                has_config = self.config is not None
+                stale = time.time() - self.last_full_refresh > FULL_REFRESH_SECONDS
+                should_refresh = has_config and stale and not self.is_refreshing
+            if should_refresh:
+                self.refresh_async()
+            self.stop_event.wait(5)
+
+    def refresh_async(self):
+        with self.lock:
+            if self.is_refreshing or self.config is None:
+                return
+            self.is_refreshing = True
+            config = self.config
+
+        def job():
+            try:
+                result = compute_terminal_outputs(*config)
+                with self.lock:
+                    self.snapshot = result
+                    self.last_full_refresh = time.time()
+                    self.last_error = ""
+            except Exception as exc:
+                with self.lock:
+                    self.last_error = clean_text(exc, 180)
+                    if self.snapshot is None:
+                        self.snapshot = loading_outputs(f"Market engine error: {self.last_error}")
+            finally:
+                with self.lock:
+                    self.is_refreshing = False
+
+        threading.Thread(target=job, daemon=True).start()
+
+    def refresh_now(self, universe_mode, custom_symbols, lookback_hours, rss_text):
+        self.start()
+        self.configure(universe_mode, custom_symbols, lookback_hours, rss_text)
+        with self.lock:
+            if self.is_refreshing:
+                return self.read()
+            self.is_refreshing = True
+            config = self.config
+        try:
+            result = compute_terminal_outputs(*config)
+            with self.lock:
+                self.snapshot = result
+                self.last_full_refresh = time.time()
+                self.last_error = ""
+                return self.snapshot
+        except Exception as exc:
+            with self.lock:
+                self.last_error = clean_text(exc, 180)
+                if self.snapshot is None:
+                    self.snapshot = loading_outputs(f"Market engine error: {self.last_error}")
+                return self.snapshot
+        finally:
+            with self.lock:
+                self.is_refreshing = False
+
+    def read(self):
+        with self.lock:
+            if self.snapshot is None:
+                return loading_outputs()
+            return self.snapshot
+
+    def read_or_start(self, universe_mode, custom_symbols, lookback_hours, rss_text):
+        self.start()
+        changed = self.configure(universe_mode, custom_symbols, lookback_hours, rss_text)
+        with self.lock:
+            empty = self.snapshot is None
+            stale_initial = time.time() - self.last_requested_at > min(NEWS_REFRESH_SECONDS, PRICE_REFRESH_SECONDS)
+            if empty or changed or stale_initial:
+                self.last_requested_at = time.time()
+                self.refresh_async()
+        return self.read()
+
+
+ENGINE = RealtimeMarketEngine()
+
+
+def run_terminal(universe_mode, custom_symbols, lookback_hours, rss_text):
+    return ENGINE.refresh_now(universe_mode, custom_symbols, lookback_hours, rss_text)
+
+
+def read_terminal(universe_mode, custom_symbols, lookback_hours, rss_text):
+    return ENGINE.read_or_start(universe_mode, custom_symbols, lookback_hours, rss_text)
 
 
 CSS = """
 :root {
-  --bg: #050608;
-  --panel: #0c1016;
-  --panel2: #111822;
-  --panel3: #151f2b;
-  --line: #2a3647;
+  --bg: #030405;
+  --panel: #0b0d10;
+  --panel2: #11151b;
+  --panel3: #171d25;
+  --line: #2a3038;
   --text: #f4f7fb;
-  --muted: #95a3b7;
+  --muted: #9aa2ad;
   --amber: #ffb000;
-  --amber2: #ffd166;
-  --green: #00e676;
-  --red: #ff4d5e;
-  --blue: #3ea6ff;
+  --amber2: #ffd46a;
+  --green: #20e070;
+  --red: #ff4b5c;
+  --blue: #58a6ff;
   --cyan: #4dd8ff;
   --violet: #a78bfa;
+  --soft: rgba(255,255,255,.055);
 }
 body, .gradio-container {
   background: var(--bg) !important;
@@ -1280,13 +1578,20 @@ body, .gradio-container {
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
 }
 .gradio-container {
-  max-width: 1680px !important;
+  max-width: 1720px !important;
 }
 .main {
   background: var(--bg) !important;
 }
 label, .block-title, .wrap, .prose {
   color: var(--text) !important;
+}
+.gradio-container h3 {
+  color: var(--amber2) !important;
+  font-size: 14px !important;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  margin: 18px 0 8px !important;
 }
 button {
   border-radius: 4px !important;
@@ -1301,19 +1606,20 @@ textarea, input, select {
   border-color: var(--line) !important;
 }
 .terminal-hero {
-  min-height: 220px;
+  min-height: 170px;
   display: grid;
   grid-template-columns: 1fr 360px;
-  gap: 18px;
+  gap: 12px;
   align-items: stretch;
-  padding: 28px;
+  padding: 22px;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 10px;
   background:
-    linear-gradient(120deg, rgba(255,176,0,.18), transparent 36%),
-    repeating-linear-gradient(90deg, rgba(255,255,255,.035) 0 1px, transparent 1px 80px),
-    linear-gradient(135deg, #0c1118, #050608);
-  box-shadow: 0 0 0 1px rgba(255,176,0,.12), 0 20px 80px rgba(0,0,0,.35);
+    linear-gradient(120deg, rgba(255,176,0,.16), transparent 34%),
+    linear-gradient(180deg, rgba(255,255,255,.06), transparent),
+    repeating-linear-gradient(90deg, rgba(255,255,255,.026) 0 1px, transparent 1px 88px),
+    #06080b;
+  box-shadow: 0 24px 80px rgba(0,0,0,.42), inset 0 1px rgba(255,255,255,.08);
 }
 .terminal-kicker {
   color: var(--amber2);
@@ -1323,23 +1629,23 @@ textarea, input, select {
   text-transform: uppercase;
 }
 .terminal-hero h1 {
-  margin: 18px 0 10px;
+  margin: 12px 0 8px;
   color: var(--text);
-  font-size: 52px;
+  font-size: 44px;
   line-height: .95;
   letter-spacing: 0;
 }
 .terminal-hero p {
   max-width: 900px;
   color: var(--muted);
-  font-size: 17px;
+  font-size: 15px;
   line-height: 1.5;
 }
 .regime-card {
-  background: rgba(5,6,8,.72);
+  background: rgba(5,6,8,.76);
   border: 1px solid rgba(255,176,0,.38);
-  border-radius: 6px;
-  padding: 22px;
+  border-radius: 10px;
+  padding: 18px;
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
@@ -1354,21 +1660,48 @@ textarea, input, select {
 .regime-card strong {
   display: block;
   color: var(--amber);
-  font-size: 38px;
+  font-size: 32px;
   margin: 8px 0;
 }
+.market-ticker {
+  display: flex;
+  gap: 8px;
+  overflow: auto;
+  padding: 8px 0 2px;
+  scrollbar-width: thin;
+}
+.market-ticker span {
+  flex: 0 0 auto;
+  color: var(--text);
+  background: #080b0f;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 7px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.market-ticker b {
+  margin-right: 6px;
+}
+.market-ticker em {
+  color: var(--muted);
+  font-style: normal;
+  margin-left: 6px;
+}
+.market-ticker .up { border-color: rgba(32,224,112,.38); }
+.market-ticker .down { border-color: rgba(255,75,92,.42); }
 .metric-grid {
   display: grid;
-  grid-template-columns: repeat(10, minmax(108px, 1fr));
+  grid-template-columns: repeat(8, minmax(118px, 1fr));
   gap: 8px;
   margin: 10px 0;
 }
 .metric {
-  min-height: 92px;
+  min-height: 84px;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 4px;
-  padding: 14px;
+  border-radius: 8px;
+  padding: 12px;
 }
 .metric strong {
   display: block;
@@ -1397,7 +1730,7 @@ textarea, input, select {
     linear-gradient(180deg, rgba(255,255,255,.025), transparent),
     var(--panel);
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 10px;
   padding: 12px;
   min-height: 220px;
 }
@@ -1420,7 +1753,7 @@ textarea, input, select {
 .chart-card {
   background: #070a0f;
   border: 1px solid #202b3a;
-  border-radius: 4px;
+  border-radius: 8px;
   padding: 9px;
   min-height: 128px;
 }
@@ -1463,7 +1796,7 @@ textarea, input, select {
 .heat-cell {
   min-height: 82px;
   border: 1px solid var(--line);
-  border-radius: 4px;
+  border-radius: 8px;
   padding: 10px;
   background:
     linear-gradient(135deg, rgba(255,176,0,.18), transparent),
@@ -1490,7 +1823,7 @@ textarea, input, select {
 .source-score {
   background: #070a0f;
   border: 1px solid rgba(77,216,255,.35);
-  border-radius: 4px;
+  border-radius: 8px;
   padding: 12px;
 }
 .source-score span, .source-score small {
@@ -1512,7 +1845,7 @@ textarea, input, select {
 .desk-grid div {
   background: #070a0f;
   border: 1px solid var(--line);
-  border-radius: 4px;
+  border-radius: 8px;
   padding: 8px;
 }
 .desk-grid span {
@@ -1534,7 +1867,7 @@ textarea, input, select {
   background: #070a0f;
   border: 1px solid var(--line);
   border-left: 3px solid var(--amber);
-  border-radius: 4px;
+  border-radius: 8px;
   padding: 8px;
 }
 .radar-line.positive { border-left-color: var(--green); }
@@ -1564,10 +1897,10 @@ textarea, input, select {
   gap: 10px;
   margin-bottom: 10px;
 }
-.leader-panel, .idea-card, .method {
+.leader-panel, .idea-card, .method, .queue-panel, .source-health-card {
   background: linear-gradient(180deg, var(--panel2), var(--panel));
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 10px;
   padding: 18px;
 }
 .panel-head, .idea-top {
@@ -1604,6 +1937,105 @@ textarea, input, select {
   font-size: 13px;
   font-weight: 700;
 }
+.section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+.section-head span {
+  color: var(--amber2);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  font-weight: 900;
+}
+.section-head strong {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+.queue-panel {
+  margin-bottom: 12px;
+  padding: 14px;
+}
+.queue-shell {
+  overflow-x: auto;
+}
+.terminal-table, .source-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+.terminal-table th, .source-table th {
+  color: var(--muted);
+  background: #070a0f;
+  border-bottom: 1px solid var(--line);
+  font-size: 10px;
+  text-align: left;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  padding: 9px 8px;
+}
+.terminal-table td, .source-table td {
+  color: var(--text);
+  border-bottom: 1px solid rgba(255,255,255,.055);
+  padding: 11px 8px;
+  vertical-align: top;
+  font-size: 12px;
+}
+.terminal-table tr:hover, .source-table tr:hover {
+  background: rgba(255,176,0,.055);
+}
+.terminal-table td span, .source-table td span {
+  display: block;
+  color: var(--muted);
+  margin-top: 3px;
+  line-height: 1.25;
+}
+.rank-cell {
+  color: var(--amber) !important;
+  font-weight: 900;
+  width: 34px;
+}
+.asset-cell strong {
+  display: block;
+  color: var(--text);
+  font-size: 15px;
+}
+.score-pill {
+  display: inline-grid !important;
+  place-items: center;
+  min-width: 42px;
+  height: 28px;
+  border-radius: 999px;
+  color: #050608 !important;
+  font-weight: 900;
+  margin: 0 !important;
+}
+.score-hot { background: var(--green); }
+.score-watch { background: var(--amber); }
+.score-cold { background: #5f6b7a; color: var(--text) !important; }
+.why-cell {
+  color: #dbe5f1 !important;
+  line-height: 1.35;
+}
+.source-health-card {
+  min-height: 100%;
+}
+.source-table th:nth-child(1), .source-table td:nth-child(1) {
+  width: 36%;
+}
+.source-dot {
+  display: inline-block !important;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin: 0 7px 0 0 !important;
+}
+.source-active { background: var(--green); }
+.source-muted { background: var(--red); }
 .score-ring {
   width: 58px;
   height: 58px;
@@ -1710,6 +2142,11 @@ textarea, input, select {
   border-radius: 6px;
   padding: 14px;
 }
+.queue-table {
+  border: 1px solid var(--line) !important;
+  border-radius: 6px !important;
+  overflow: hidden;
+}
 @media (max-width: 1100px) {
   .terminal-hero, .split-leaders, .cockpit-grid { grid-template-columns: 1fr; }
   .metric-grid { grid-template-columns: repeat(2, minmax(130px, 1fr)); }
@@ -1721,9 +2158,9 @@ textarea, input, select {
 
 with gr.Blocks(title=APP_TITLE, css=CSS, theme=gr.themes.Base()) as demo:
     with gr.Row():
-        with gr.Column(scale=8):
+        with gr.Column(scale=9):
             shell_output = gr.HTML()
-        with gr.Column(scale=2, elem_id="control-stack"):
+        with gr.Column(scale=3, elem_id="control-stack"):
             gr.Markdown("### Control Deck")
             universe_mode = gr.Dropdown(
                 ["Auto: Liquid US + ETF universe", "AI / Semis", "Macro ETFs", "Mega-cap stocks"],
@@ -1736,49 +2173,43 @@ with gr.Blocks(title=APP_TITLE, css=CSS, theme=gr.themes.Base()) as demo:
                 lines=2,
             )
             lookback_hours = gr.Slider(6, 168, value=48, step=6, label="News lookback, hours")
-            refresh = gr.Button("Run Live Market Scan", variant="primary")
+            refresh = gr.Button("Refresh Now", variant="primary")
 
-    with gr.Tabs():
-        with gr.Tab("Short-Term Alpha Queue"):
-            short_cards_output = gr.HTML()
-        with gr.Tab("Long-Term Investment Queue"):
-            long_cards_output = gr.HTML()
-        with gr.Tab("Full Ranking Matrix"):
-            ranking_output = gr.Dataframe(interactive=False, wrap=True, label="Autonomous stock / ETF ranking")
-        with gr.Tab("Matched Catalyst Map"):
-            matched_output = gr.Dataframe(interactive=False, wrap=True, label="News mapped to instruments")
-        with gr.Tab("Theme Radar"):
-            theme_output = gr.Dataframe(interactive=False, wrap=True, label="Market theme sentiment")
-        with gr.Tab("Source Network"):
-            source_output = gr.Dataframe(interactive=False, wrap=True, label="RSS source health")
-        with gr.Tab("Live News Tape"):
+            with gr.Accordion("RSS source configuration", open=False):
+                rss_text = gr.Textbox(
+                    label="Public RSS feeds",
+                    value=source_catalog_text(),
+                    lines=12,
+                )
+
+    short_queue_output = gr.HTML()
+    long_queue_output = gr.HTML()
+
+    gr.Markdown("### Live News And Source Health")
+    with gr.Row():
+        with gr.Column(scale=7):
             news_output = gr.HTML()
-        with gr.Tab("Engine"):
-            method_output = gr.HTML()
-            rss_text = gr.Textbox(
-                label="Public RSS feeds",
-                value=source_catalog_text(),
-                lines=12,
-            )
+        with gr.Column(scale=5):
+            source_output = gr.HTML()
+
+    with gr.Accordion("Engine notes and data caveats", open=False):
+        method_output = gr.HTML()
 
     inputs = [universe_mode, custom_symbols, lookback_hours, rss_text]
     outputs = [
         shell_output,
-        short_cards_output,
-        long_cards_output,
-        ranking_output,
-        matched_output,
-        theme_output,
-        source_output,
+        short_queue_output,
+        long_queue_output,
         news_output,
+        source_output,
         method_output,
     ]
 
     refresh.click(run_terminal, inputs=inputs, outputs=outputs)
     try:
-        demo.load(run_terminal, inputs=inputs, outputs=outputs, every=AUTO_REFRESH_SECONDS)
+        demo.load(read_terminal, inputs=inputs, outputs=outputs, every=FRONTEND_POLL_SECONDS)
     except TypeError:
-        demo.load(run_terminal, inputs=inputs, outputs=outputs)
+        demo.load(read_terminal, inputs=inputs, outputs=outputs)
 
 
 demo.launch()
