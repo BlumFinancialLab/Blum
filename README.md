@@ -181,4 +181,3 @@ The execution roadmap is tracked in [`ROADMAP.md`](ROADMAP.md). It covers Docker
 ## Contributing
 
 Contributions should preserve the project philosophy: transparent evidence, modular models, explainable scoring, no fabricated data and no investment recommendations.
-

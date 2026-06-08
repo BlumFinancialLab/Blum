@@ -10,6 +10,7 @@ FROM python:3.11-bookworm
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app/backend \
+    NEXT_TELEMETRY_DISABLED=1 \
     PORT=7860
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -24,6 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 COPY requirements.txt ./
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.5.1
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY backend ./backend
@@ -34,4 +36,3 @@ RUN chmod +x /app/scripts/start.sh
 
 EXPOSE 7860
 CMD ["/app/scripts/start.sh"]
-
