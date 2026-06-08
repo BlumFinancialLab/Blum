@@ -11,13 +11,13 @@ pinned: false
 license: other
 ---
 Blum Market Intelligence
-MVP Gradio per screening di ricerca su azioni ed ETF.
+English-language Gradio MVP for public-market intelligence across stocks and ETFs.
 
-Funzioni fase 1:
+Phase 1 features:
 
-acquisizione news da feed RSS pubblici;
-sentiment su headline e summary;
-download dati storici via Yahoo Finance;
-indicatori tecnici base: SMA 20/50/200, RSI 14, volatilita annualizzata;
-ranking qualitativo per priorita di ricerca.
-Limite: e uno strumento di triage, non una piattaforma equivalente a Bloomberg e non produce raccomandazioni finanziarie.
+live public RSS news polling on app load;
+headline and summary sentiment;
+historical price download via Yahoo Finance;
+basic technical indicators: SMA 20/50/200, RSI 14, annualized volatility;
+qualitative research-priority ranking.
+Limit: this is a research triage tool, not a licensed Bloomberg replacement and not financial advice.
