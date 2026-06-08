@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.next/
+node_modules/
+.git/
+.env
+frontend/node_modules/
+frontend/.next/
+backend/app/static/*
+!backend/app/static/.gitkeep
+
