@@ -17,6 +17,7 @@ from app.services.market_data import MarketDataService, market_snapshot_for_asse
 from app.services.pipeline import PipelineService
 from app.services.realtime import realtime_status
 from app.services.semantic import SemanticService
+from app.services.stock import stock_radar, update_stock_radar
 from app.signals.backtest import run_simple_backtest
 from app.signals.engine import SignalEngine
 
@@ -192,6 +193,16 @@ def themes(db: Session = Depends(get_db)):
 @router.get("/etf-trends")
 def etf_trends(db: Session = Depends(get_db)):
     return list_etf_trends(db)
+
+
+@router.get("/stock-radar")
+def stock_radar_endpoint(limit: int = Query(default=80, ge=1, le=120), db: Session = Depends(get_db)):
+    return stock_radar(db, limit=limit)
+
+
+@router.post("/stock-radar/update")
+def stock_radar_update(limit: int = Query(default=36, ge=1, le=80), db: Session = Depends(get_db)):
+    return update_stock_radar(db, limit=limit)
 
 
 @router.get("/dashboard/overview")

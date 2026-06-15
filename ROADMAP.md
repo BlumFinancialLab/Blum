@@ -12,6 +12,7 @@ Shipped in the current architecture:
 - `/news/live`, `/sentiment/market` and `/pipeline/status` expose live news, market sentiment and worker state.
 - Dashboard polls live endpoints every 30 seconds and surfaces news tape, sentiment mix, source/model state and signal readiness.
 - Price pipeline remains real-data-only through yfinance, Yahoo Chart API and Stooq; no synthetic OHLCV fallback is allowed.
+- Stock Radar is now a first-class research surface with dedicated API, on-demand stock hydration, sector leadership, factor views, research priorities and real market snapshots.
 
 ## Phase 0 - Stabilize Docker Space Deployment
 

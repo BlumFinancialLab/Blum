@@ -1,4 +1,4 @@
-import { Asset, DashboardOverview, LiveNewsArticle, MarketSentiment, PipelineStatus, RelatedNews, Signal } from "./types";
+import { Asset, DashboardOverview, LiveNewsArticle, MarketSentiment, PipelineStatus, RelatedNews, Signal, StockRadar } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
 
@@ -36,6 +36,8 @@ export const api = {
   relatedNews: (ticker: string) => getJson<RelatedNews[]>(`/related-news?ticker=${ticker}`),
   themes: () => getJson<any[]>("/themes"),
   etfTrends: () => getJson<any[]>("/etf-trends"),
+  stockRadar: (limit = 80) => getJson<StockRadar>(`/stock-radar?limit=${limit}`),
+  updateStockRadar: (limit = 36) => postJson<any>(`/stock-radar/update?limit=${limit}`, {}),
   semanticSearch: (query: string) => postJson<any[]>("/semantic-search", { query, limit: 12 }),
   marketUpdate: () => postJson("/market/update", { period: "max", limit: 36 }),
   newsUpdate: () => postJson("/news/update", { lookback_hours: 72, limit_per_feed: 35 }),

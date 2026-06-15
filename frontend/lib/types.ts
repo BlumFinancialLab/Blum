@@ -114,6 +114,53 @@ export type MarketSentiment = {
   themes: Array<{ theme: string; headline_count: number; avg_sentiment: number }>;
 };
 
+export type StockRadarSignal = {
+  classification: string;
+  blum_score: number;
+  risk_level: string;
+  time_horizon: string;
+  score_breakdown: Record<string, number>;
+  created_at: string;
+};
+
+export type StockRadarRow = {
+  ticker: string;
+  asset: Asset;
+  market_snapshot: MarketSnapshot;
+  signal: StockRadarSignal | null;
+  factor_scores?: Record<string, number>;
+  technical_flags?: Record<string, number | string | boolean | null>;
+  narrative_flags?: Record<string, number | string | boolean | null>;
+  research_priority: string;
+  radar_tags: string[];
+  why_watch: string;
+};
+
+export type StockRadar = {
+  status: string;
+  summary: {
+    stock_count: number;
+    signal_count: number;
+    missing_signal_count: number;
+    priced_count: number;
+    average_score: number;
+    top_score: number;
+    high_risk_count: number;
+    positive_1d_count: number;
+  };
+  sections: Record<string, StockRadarRow[]>;
+  sector_leaders: Array<{
+    sector: string;
+    asset_count: number;
+    average_score: number;
+    leader: string;
+    leader_score: number;
+    leader_price: MarketSnapshot;
+  }>;
+  rows: StockRadarRow[];
+  data_gaps: StockRadarRow[];
+};
+
 export type PricePoint = {
   date: string;
   open?: number;

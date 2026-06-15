@@ -164,6 +164,62 @@ p { color: var(--muted); line-height: 1.55; }
   line-height: 1.2;
 }
 
+.radar-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.radar-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #070a0f;
+  color: var(--muted);
+  padding: 9px 11px;
+  font-weight: 900;
+  cursor: pointer;
+}
+.radar-tabs button.active,
+.radar-tabs button:hover {
+  color: var(--text);
+  border-color: rgba(255,176,0,.42);
+  background: #101720;
+}
+.radar-tabs button span {
+  display: inline-flex;
+  min-width: 22px;
+  min-height: 22px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  background: #151d29;
+  color: var(--amber);
+  font-size: 11px;
+}
+
+.tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 9px 0;
+}
+.tag-row span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 2px 6px;
+  background: #0d131c;
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  font-weight: 900;
+}
+
 .realtime-strip {
   display: grid;
   grid-template-columns: 1.2fr 1fr 1fr;
@@ -324,7 +380,7 @@ p { color: var(--muted); line-height: 1.55; }
 .status-badge.neutral { background: rgba(85,170,255,.13); color: var(--blue); border: 1px solid rgba(85,170,255,.28); }
 
 .table-shell { overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
-.intel-table { width: 100%; border-collapse: collapse; min-width: 1040px; }
+.intel-table { width: 100%; border-collapse: collapse; min-width: 1280px; }
 .intel-table th { color: var(--muted); background: #070a0f; text-align: left; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; padding: 10px; border-bottom: 1px solid var(--line); }
 .intel-table td { padding: 11px 10px; border-bottom: 1px solid rgba(255,255,255,.06); vertical-align: top; font-size: 12px; }
 .intel-table td span { display: block; color: var(--muted); margin-top: 3px; }

@@ -2,13 +2,14 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Activity, BarChart3, Brain, Database, FlaskConical, Gauge, Home, Network, Radar, Search, ShieldAlert } from "lucide-react";
+import { Activity, BarChart3, Brain, Database, FlaskConical, Gauge, Home, Network, Radar, Search, ShieldAlert, TrendingUp } from "lucide-react";
 import clsx from "clsx";
 
 const nav = [
   { href: "/", label: "Case Study", icon: Home },
   { href: "/dashboard", label: "Intelligence Dashboard", icon: Gauge },
   { href: "/assets/NVDA", label: "Asset Detail", icon: Activity },
+  { href: "/stock-radar", label: "Stock Radar", icon: TrendingUp },
   { href: "/etf-radar", label: "ETF Radar", icon: Radar },
   { href: "/themes", label: "Theme Explorer", icon: Network },
   { href: "/signal-lab", label: "Signal Lab", icon: Search },
@@ -50,4 +51,3 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     </div>
   );
 }
-

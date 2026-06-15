@@ -113,6 +113,8 @@ FastAPI exposes clean JSON endpoints:
 - `GET /related-news?ticker=NVDA`
 - `GET /themes`
 - `GET /etf-trends`
+- `GET /stock-radar`
+- `POST /stock-radar/update`
 - `GET /dashboard/overview`
 - `GET /ai/explain/{ticker}`
 - `POST /backtest/{ticker}`
@@ -126,6 +128,7 @@ Interactive API docs are available at `/docs`.
 - Case Study Home
 - Intelligence Dashboard
 - Asset Detail
+- Stock Radar
 - ETF Radar
 - Theme Explorer
 - Signal Lab
