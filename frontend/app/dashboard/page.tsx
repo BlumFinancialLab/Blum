@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
-import { DashboardOverview, LiveNewsArticle, MarketSentiment, PipelineStatus } from "@/lib/types";
+import { DashboardOverview, LiveNewsArticle, MarketSentiment, PipelineStatus, SystemStatus } from "@/lib/types";
 import { LoadingState } from "@/components/LoadingState";
 import { ScoreCard } from "@/components/ScoreCard";
 import { SignalTable } from "@/components/SignalTable";
@@ -14,6 +14,7 @@ export default function DashboardPage() {
   const [liveNews, setLiveNews] = useState<LiveNewsArticle[]>([]);
   const [marketSentiment, setMarketSentiment] = useState<MarketSentiment | null>(null);
   const [pipelineStatus, setPipelineStatus] = useState<PipelineStatus | null>(null);
+  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [error, setError] = useState("");
   const [liveError, setLiveError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -25,19 +26,22 @@ export default function DashboardPage() {
       setError("");
       const overview = await api.overview();
       setData(overview);
-      const [newsResult, sentimentResult, statusResult] = await Promise.allSettled([
+      const [newsResult, sentimentResult, statusResult, systemResult] = await Promise.allSettled([
         api.liveNews(48),
         api.marketSentiment(48),
-        api.pipelineStatus()
+        api.pipelineStatus(),
+        api.systemStatus()
       ] as const);
       if (newsResult.status === "fulfilled") setLiveNews(newsResult.value);
       if (sentimentResult.status === "fulfilled") setMarketSentiment(sentimentResult.value);
       if (statusResult.status === "fulfilled") setPipelineStatus(statusResult.value);
+      if (systemResult.status === "fulfilled") setSystemStatus(systemResult.value);
       setLiveError(
         [
           newsResult.status === "rejected" ? `news ${errorMessage(newsResult.reason)}` : "",
           sentimentResult.status === "rejected" ? `sentiment ${errorMessage(sentimentResult.reason)}` : "",
-          statusResult.status === "rejected" ? `status ${errorMessage(statusResult.reason)}` : ""
+          statusResult.status === "rejected" ? `status ${errorMessage(statusResult.reason)}` : "",
+          systemResult.status === "rejected" ? `system ${errorMessage(systemResult.reason)}` : ""
         ].filter(Boolean).join(" | ")
       );
       setLastRefresh(new Date().toISOString());
@@ -95,6 +99,22 @@ export default function DashboardPage() {
 
       {realtime.last_error && <div className="empty-state" style={{ marginBottom: 12 }}>Realtime worker error: {realtime.last_error}</div>}
       {liveError && <div className="empty-state" style={{ marginBottom: 12 }}>Live endpoint warning: {liveError}</div>}
+      {systemStatus && (
+        <section className="deployment-banner">
+          <div>
+            <span>Deployment</span>
+            <strong>v{systemStatus.app_version} | {systemStatus.feature_set}</strong>
+          </div>
+          <div>
+            <span>Financial Brain</span>
+            <strong>{systemStatus.runtime_flags.financial_brain_model_enabled ? "7B finance model enabled" : "fallback mode"}</strong>
+          </div>
+          <div>
+            <span>Configured model</span>
+            <strong>{systemStatus.active_models.financial_brain_configured}</strong>
+          </div>
+        </section>
+      )}
 
       <section className="grid-4 market-metrics">
         <Metric label="Assets" value={data.market_pulse.asset_count} />

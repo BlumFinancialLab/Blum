@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime
+import os
+
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -32,6 +35,58 @@ settings = get_settings()
 @router.get("/health")
 def health() -> dict:
     return {"status": "ok", "service": "blum-ai-financial-intelligence"}
+
+
+@router.get("/system/status")
+def system_status(db: Session = Depends(get_db)) -> dict:
+    latest_brain = db.scalar(select(func.max(NewsArticle.created_at))) if db is not None else None
+    return {
+        "service": "blum-ai-financial-intelligence",
+        "app_version": settings.app_version,
+        "feature_set": "financial-brain-diagnostics-v0.5.1",
+        "environment": settings.environment,
+        "generated_at": datetime.utcnow().isoformat(),
+        "hugging_face": {
+            "space_id": os.getenv("SPACE_ID") or os.getenv("HF_SPACE_ID"),
+            "space_author": os.getenv("SPACE_AUTHOR_NAME") or os.getenv("HF_SPACE_AUTHOR_NAME"),
+            "space_repo": os.getenv("SPACE_REPO_NAME") or os.getenv("HF_SPACE_REPO_NAME"),
+            "commit_sha": os.getenv("SPACE_COMMIT_SHA") or os.getenv("HF_SPACE_COMMIT_SHA") or os.getenv("GIT_COMMIT_SHA"),
+        },
+        "runtime_flags": {
+            "model_loading_enabled": settings.enable_model_loading,
+            "financial_brain_model_enabled": settings.enable_financial_brain_model,
+            "live_startup_enabled": settings.enable_live_startup,
+        },
+        "active_models": {
+            "finbert": settings.finbert_model,
+            "embeddings": settings.embedding_model,
+            "reasoning_llm": settings.llm_model,
+            "financial_brain_configured": settings.financial_brain_model,
+            "financial_brain_runtime": FinancialBrainModel().status(),
+        },
+        "feature_visibility": {
+            "market_brain_page": True,
+            "financial_brain_panel": True,
+            "ipo_radar_page": True,
+            "stock_radar_page": True,
+            "theme_detail": True,
+            "signal_lifecycle": True,
+            "sec_submissions": True,
+        },
+        "database_counts": {
+            "assets": int(db.scalar(select(func.count(Asset.id))) or 0),
+            "news_articles": int(db.scalar(select(func.count(NewsArticle.id))) or 0),
+            "signals": int(db.scalar(select(func.count(SignalSnapshot.id))) or 0),
+            "embeddings": int(db.scalar(select(func.count(EmbeddingVector.id))) or 0),
+        },
+        "latest_news_created_at": latest_brain,
+        "why_gui_can_look_unchanged": [
+            "Hugging Face serves the previous image until the Docker build finishes successfully.",
+            "The finance-domain 7B model is disabled by default unless BLUM_ENABLE_FINANCIAL_BRAIN_MODEL=true.",
+            "Existing snapshots must be regenerated with Run brain or full pipeline after a new deployment.",
+            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.5.1.",
+        ],
+    }
 
 
 @router.get("/assets")

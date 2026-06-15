@@ -246,6 +246,17 @@ Use a Docker Space. Upload the repository with:
 - `package.json`
 - `README.md`
 
+## Deployment Visibility
+
+The UI exposes `/system/status` in the sidebar and dashboard. If the GUI looks unchanged after an upload, check:
+
+- `app_version` must show the latest deployed version.
+- `feature_set` must show the expected feature bundle.
+- `Financial Brain` shows `fallback mode` unless `BLUM_ENABLE_FINANCIAL_BRAIN_MODEL=true`.
+- Hugging Face serves the previous Docker image until the new build finishes successfully.
+- Existing Market Brain snapshots should be regenerated with `Run brain` after a deployment.
+- Hard-refresh the browser if old static Next.js chunks are cached.
+
 The Space serves the FastAPI backend and the exported Next.js frontend on port `7860`.
 
 ## Backtesting and Validation

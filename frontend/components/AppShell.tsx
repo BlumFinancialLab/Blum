@@ -2,8 +2,11 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 import { Activity, BarChart3, Brain, Cpu, Database, FlaskConical, Gauge, Home, Network, Radar, Rocket, Search, ShieldAlert, TrendingUp } from "lucide-react";
 import clsx from "clsx";
+import { api } from "@/lib/api";
+import { SystemStatus } from "@/lib/types";
 
 const nav = [
   { href: "/", label: "Case Study", icon: Home },
@@ -21,6 +24,12 @@ const nav = [
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
+
+  useEffect(() => {
+    api.systemStatus().then(setSystemStatus).catch(() => setSystemStatus(null));
+  }, []);
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -44,8 +53,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           })}
         </nav>
         <div className="system-card">
-          <div><Database size={15} /> PostgreSQL</div>
-          <div><BarChart3 size={15} /> FastAPI + Next.js</div>
+          <div><Database size={15} /> v{systemStatus?.app_version ?? "loading"}</div>
+          <div><BarChart3 size={15} /> {systemStatus?.feature_set ?? "checking deployment"}</div>
+          <div><Cpu size={15} /> {systemStatus?.runtime_flags.financial_brain_model_enabled ? "Financial LLM active" : "Financial Brain fallback"}</div>
           <div><ShieldAlert size={15} /> Research only</div>
         </div>
       </aside>

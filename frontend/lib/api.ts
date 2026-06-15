@@ -1,4 +1,4 @@
-import { Asset, DashboardOverview, IPORadar, LiveNewsArticle, MarketBrain, MarketBrainHistoryRow, MarketSentiment, PipelineStatus, RelatedNews, Signal, StockRadar } from "./types";
+import { Asset, DashboardOverview, IPORadar, LiveNewsArticle, MarketBrain, MarketBrainHistoryRow, MarketSentiment, PipelineStatus, RelatedNews, Signal, StockRadar, SystemStatus } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
 
@@ -23,6 +23,7 @@ async function postJson<T>(path: string, payload: unknown): Promise<T> {
 }
 
 export const api = {
+  systemStatus: () => getJson<SystemStatus>("/system/status"),
   assets: () => getJson<Asset[]>("/assets"),
   asset: (ticker: string) => getJson<{ asset: Asset; market_snapshot: Asset["market_snapshot"]; prices: any[]; latest_signal: Signal | null; related_news: RelatedNews[] }>(`/assets/${ticker}`),
   overview: () => getJson<DashboardOverview>("/dashboard/overview"),

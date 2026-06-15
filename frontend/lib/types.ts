@@ -25,6 +25,40 @@ export type MarketSnapshot = {
   perf_1m: number | null;
 };
 
+export type SystemStatus = {
+  service: string;
+  app_version: string;
+  feature_set: string;
+  environment: string;
+  generated_at: string;
+  hugging_face: {
+    space_id?: string | null;
+    space_author?: string | null;
+    space_repo?: string | null;
+    commit_sha?: string | null;
+  };
+  runtime_flags: {
+    model_loading_enabled: boolean;
+    financial_brain_model_enabled: boolean;
+    live_startup_enabled: boolean;
+  };
+  active_models: {
+    finbert: string;
+    embeddings: string;
+    reasoning_llm: string;
+    financial_brain_configured: string;
+    financial_brain_runtime: {
+      configured_model: string;
+      enabled: boolean;
+      load_policy: string;
+      purpose: string;
+    };
+  };
+  feature_visibility: Record<string, boolean>;
+  database_counts: Record<string, number>;
+  why_gui_can_look_unchanged: string[];
+};
+
 export type Signal = {
   ticker: string;
   classification: string;
