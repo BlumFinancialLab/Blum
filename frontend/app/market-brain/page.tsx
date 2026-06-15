@@ -131,6 +131,24 @@ export default function MarketBrainPage() {
         ))}
       </section>
 
+      <section className="panel" style={{ marginTop: 12 }}>
+        <div className="panel-head">
+          <span>Blum Financial Brain</span>
+          <strong>{brain.financial_brain?.model_name ?? brain.financial_brain?.configured_model ?? "financial brain"}</strong>
+        </div>
+        <div className="financial-brain-grid">
+          <div className="financial-brain-thesis">
+            <span>{brain.financial_brain?.model_status ?? "model status pending"}</span>
+            <h3>{brain.financial_brain?.confidence?.label ?? "Evidence"} Confidence {brain.financial_brain?.confidence?.score ?? "n/a"}</h3>
+            <p>{brain.financial_brain?.thesis ?? "Financial Brain analysis is waiting for a Market Brain packet."}</p>
+            <p>{brain.financial_brain?.evidence_policy}</p>
+          </div>
+          <BrainList title="Opportunity hypotheses" rows={brain.financial_brain?.opportunity_hypotheses ?? []} />
+          <BrainList title="Risk hypotheses" rows={brain.financial_brain?.risk_hypotheses ?? []} />
+          <BrainList title="Monitoring plan" rows={brain.financial_brain?.monitoring_plan ?? []} />
+        </div>
+      </section>
+
       <section className="grid-2" style={{ marginTop: 12 }}>
         <div className="panel">
           <div className="panel-head"><span>Brain changelog</span><strong>{brain.change_log.length}</strong></div>
@@ -237,6 +255,24 @@ export default function MarketBrainPage() {
         </div>
       </section>
     </>
+  );
+}
+
+function BrainList({ title, rows }: { title: string; rows: any[] }) {
+  return (
+    <div className="observed-model-panel">
+      <div className="panel-head"><span>{title}</span><strong>{rows.length}</strong></div>
+      <div className="brain-list dense">
+        {!rows.length && <div className="empty-state">No rows generated yet.</div>}
+        {rows.slice(0, 5).map((row, index) => (
+          <div key={`${title}-${index}`}>
+            <strong>{row.title ?? row.item ?? row.metric ?? "Evidence row"}</strong>
+            <p>{row.why_it_matters ?? row.metric ?? row.cadence ?? ""}</p>
+            {row.evidence_refs && <span>{row.evidence_refs.join(" | ")}</span>}
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 

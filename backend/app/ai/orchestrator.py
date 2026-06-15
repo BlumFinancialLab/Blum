@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.ai.embeddings import EmbeddingModel
+from app.ai.financial_brain import FinancialBrainModel
 from app.ai.llm import ReasoningModel
 from app.ai.sentiment import FinancialSentimentModel
 from app.ai.time_series import TimeSeriesIntelligence
@@ -19,6 +20,7 @@ class AIOrchestrator:
         self.embeddings = EmbeddingModel()
         self.reasoning = ReasoningModel()
         self.time_series = TimeSeriesIntelligence()
+        self.financial_brain = FinancialBrainModel()
 
     def generate_asset_insight(self, ticker: str, signal: dict, technical: dict, narrative: dict, related_news: list[dict]) -> dict:
         evidence = {
@@ -46,3 +48,5 @@ class AIOrchestrator:
             },
         }
 
+    def generate_market_brain_insight(self, market_packet: dict) -> dict:
+        return self.financial_brain.analyze_market(market_packet)

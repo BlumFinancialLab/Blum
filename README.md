@@ -29,6 +29,7 @@ This is not a consumer trading app and not a simple dashboard. The project is a 
 | AI sentiment | FinBERT primary, VADER baseline |
 | Semantic layer | sentence-transformers embeddings, semantic search, theme discovery |
 | Reasoning | lightweight Qwen-compatible LLM evidence-only explanation layer |
+| Financial Brain | finance-domain open model adapter, default `AdaptLLM/finance-chat` when enabled |
 | Time-series intelligence | statistical fallback compatible with future Chronos, TimesFM or PatchTST adapters |
 | Deployment | Hugging Face Docker Space |
 
@@ -40,6 +41,7 @@ Blum does not use one generic AI model for everything.
 - VADER: baseline comparator and fallback.
 - sentence-transformers: embeddings for semantic search, narrative clustering, recurring themes and links between assets, sectors and macro trends.
 - Qwen-compatible lightweight LLM: structured explanations from retrieved evidence only.
+- Blum Financial Brain: finance-domain reasoning adapter for regime interpretation, opportunity hypotheses, risk hypotheses and monitoring plans.
 - Statistical time-series module: anomalies, volatility regimes and scenario bands, ready for Chronos, TimesFM or PatchTST integration.
 - Rule-based quantitative engine: scoring, ranking, risk controls and classifications.
 
@@ -89,6 +91,12 @@ The Market Brain is Blum's high-level reasoning orchestrator. It is not a single
 The output includes current regime, forward scenarios, opportunity stack, risk alerts, model stack and an evidence ledger. It is a research-priority engine, not a recommendation system.
 
 The Brain also persists snapshot history and compares each run with the previous one. The change log highlights regime changes, score movement, top stock/ETF/IPO leader changes and risk-count shifts. A contradiction engine flags price/sentiment conflicts, overbought high-risk setups and market-wide narrative conflicts. An event graph links themes, stocks, ETFs, IPO candidates and live news into a compact intelligence map.
+
+### Blum Financial Brain
+
+Blum includes a dedicated financial-domain AI brain adapter. The default configured open model is `AdaptLLM/finance-chat`, a finance-domain chat model. It is opt-in through `BLUM_ENABLE_FINANCIAL_BRAIN_MODEL=true` because 7B finance models can exceed free CPU Space resources. When the model is disabled or cannot load, Blum serves the same JSON contract through a deterministic evidence engine, clearly labeled as fallback.
+
+The Financial Brain produces market thesis, regime interpretation, opportunity hypotheses, risk hypotheses, contradictions to resolve, monitoring plan, confidence and limitations. It receives only the Market Brain evidence packet and is instructed not to invent prices, target prices, listing dates, valuations, forecasts or recommendations.
 
 ## IPO And Pre-Listing Intelligence
 
@@ -200,6 +208,15 @@ npm --prefix frontend run build
 export DATABASE_URL=postgresql+psycopg2://postgres:postgres@127.0.0.1:5432/blum
 PYTHONPATH=backend uvicorn app.main:app --host 0.0.0.0 --port 7860
 ```
+
+Optional full Financial Brain model loading:
+
+```bash
+export BLUM_ENABLE_FINANCIAL_BRAIN_MODEL=true
+export BLUM_FINANCIAL_BRAIN_MODEL=AdaptLLM/finance-chat
+```
+
+Keep this disabled on constrained CPU demos unless enough memory is available. The deterministic Financial Brain fallback remains evidence-bound and transparent.
 
 ## Docker
 

@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.ai.orchestrator import AIOrchestrator
+from app.ai.financial_brain import FinancialBrainModel
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.ingestion.news_ingestor import NewsIngestor
@@ -281,8 +282,10 @@ def ai_model_status(db: Session = Depends(get_db)):
             "financial_sentiment": settings.finbert_model,
             "embeddings": settings.embedding_model,
             "reasoning_llm": settings.llm_model,
+            "financial_brain": settings.financial_brain_model,
             "time_series": "statistical-fallback with adapter-ready interface",
         },
+        "financial_brain": FinancialBrainModel().status(),
         "observed_models": {
             "sentiment": [{"model_name": model, "records": int(count)} for model, count in sentiment_models],
             "embeddings": [{"model_name": model, "records": int(count)} for model, count in embedding_models],

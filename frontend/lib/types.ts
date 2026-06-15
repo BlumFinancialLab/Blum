@@ -266,6 +266,20 @@ export type MarketBrain = {
   };
   evidence_ledger: Record<string, number | string>;
   change_log: Array<{ type: string; severity: string; message: string; previous?: any; current?: any }>;
+  financial_brain: {
+    model_name?: string;
+    configured_model?: string;
+    model_status?: string;
+    thesis?: string;
+    regime_interpretation?: Record<string, any>;
+    opportunity_hypotheses?: Array<Record<string, any>>;
+    risk_hypotheses?: Array<Record<string, any>>;
+    contradictions_to_resolve?: Array<Record<string, any>>;
+    monitoring_plan?: Array<Record<string, any>>;
+    confidence?: Record<string, any>;
+    limitations?: string[];
+    evidence_policy?: string;
+  };
   model_stack: Record<string, string>;
   disclaimer: string;
   update_diagnostics?: Record<string, any>;

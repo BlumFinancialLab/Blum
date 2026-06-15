@@ -21,6 +21,7 @@ Shipped in the current architecture:
 - Theme Explorer now supports theme detail with article list, source mix, linked assets and sentiment.
 - The signal engine now records score version, confidence score and lifecycle state for every signal snapshot.
 - `/ai/models/status` exposes configured models, observed model records and fallback policy.
+- Blum Financial Brain now adds a finance-domain open model adapter. The configured default is `AdaptLLM/finance-chat`, opt-in for model loading, with deterministic evidence-bound fallback on constrained demo hardware.
 - `/market-brain`, `/market-brain/run`, `/ipo-radar` and `/ipo-radar/update` expose the new intelligence layer through documented JSON APIs.
 
 ## Phase 0 - Stabilize Docker Space Deployment

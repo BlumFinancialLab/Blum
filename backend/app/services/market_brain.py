@@ -7,6 +7,7 @@ import uuid
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
+from app.ai.orchestrator import AIOrchestrator
 from app.models import MarketBrainSnapshot, SignalSnapshot
 from app.services.dashboard import dashboard_overview
 from app.services.etf import list_etf_trends
@@ -59,16 +60,19 @@ def build_market_brain(db: Session, persist: bool = True) -> dict:
         "event_graph": event_graph,
         "evidence_ledger": evidence,
         "change_log": [],
+        "financial_brain": {},
         "model_stack": {
             "sentiment": "FinBERT-led sentiment records when model loading is available; VADER remains a baseline comparator.",
             "semantic": "Sentence-transformer embeddings and theme clusters where stored news embeddings exist.",
             "time_series": "Statistical anomaly, trend, volatility and regime factors from stored OHLCV history.",
-            "reasoning": "Evidence-bound Market Brain orchestration, not a free-form trade recommender.",
+            "reasoning": "Evidence-bound Market Brain orchestration plus finance-domain Financial Brain adapter.",
+            "financial_brain": "AdaptLLM/finance-chat when enabled; deterministic evidence engine fallback when disabled or unavailable.",
             "rules": "Blum Intelligence Score, IPO readiness model and PM-style research-priority buckets.",
         },
         "disclaimer": "Educational research case study only. Not financial advice, not a recommendation and not an operational trading signal.",
     }
     payload["change_log"] = compare_with_previous(previous.structured_output if previous else None, payload)
+    payload["financial_brain"] = AIOrchestrator().generate_market_brain_insight(payload)
 
     if persist:
         db.add(
