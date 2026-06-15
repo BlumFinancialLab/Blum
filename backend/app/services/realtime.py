@@ -9,6 +9,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.ingestion.news_ingestor import NewsIngestor
+from app.services.data_continuity import repair_data_gaps
 from app.services.etf import update_etf_trends
 from app.services.ipo import update_ipo_radar
 from app.services.market_data import MarketDataService
@@ -40,6 +41,7 @@ def start_realtime_services() -> None:
         threading.Thread(target=run_startup_pipeline, daemon=True).start()
     _scheduler.add_job(run_news_refresh, "interval", minutes=settings.news_refresh_minutes, id="news_refresh", replace_existing=True, max_instances=1)
     _scheduler.add_job(run_market_refresh, "interval", minutes=settings.market_refresh_minutes, id="market_refresh", replace_existing=True, max_instances=1)
+    _scheduler.add_job(run_data_gap_repair, "interval", minutes=settings.data_gap_repair_minutes, id="data_gap_repair", replace_existing=True, max_instances=1)
     _scheduler.add_job(run_ipo_refresh, "interval", minutes=settings.ipo_refresh_minutes, id="ipo_refresh", replace_existing=True, max_instances=1)
     _scheduler.start()
     with _state_lock:
@@ -77,6 +79,10 @@ def run_market_refresh() -> None:
         return {"market_update": market, "signal_run": signals, "etf_update": etf}
 
     _run_job("market_refresh", work)
+
+
+def run_data_gap_repair() -> None:
+    _run_job("data_gap_repair", lambda db: repair_data_gaps(db, limit=settings.max_update_assets))
 
 
 def run_ipo_refresh() -> None:

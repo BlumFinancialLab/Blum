@@ -1,4 +1,4 @@
-import { Asset, DashboardOverview, IPORadar, LiveNewsArticle, MarketBrain, MarketBrainHistoryRow, MarketSentiment, PipelineStatus, RelatedNews, Signal, StockRadar, SystemStatus } from "./types";
+import { Asset, DashboardOverview, DataCoverage, IPORadar, LiveNewsArticle, MarketBrain, MarketBrainHistoryRow, MarketSentiment, PipelineStatus, RelatedNews, Signal, StockRadar, SystemStatus } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
 
@@ -39,6 +39,8 @@ export const api = {
   overview: () => getJson<DashboardOverview>("/dashboard/overview"),
   liveNews: (limit = 60) => getJson<LiveNewsArticle[]>(`/news/live?limit=${limit}`),
   marketSentiment: (hours = 48) => getJson<MarketSentiment>(`/sentiment/market?hours=${hours}`),
+  dataCoverage: () => getJson<DataCoverage>("/data/coverage"),
+  repairData: (limit = 36) => postJson<any>(`/data/repair?limit=${limit}`, {}),
   pipelineStatus: () => getJson<PipelineStatus>("/pipeline/status"),
   topSignals: (query = "") => getJson<Signal[]>(`/signals/top${query}`),
   signal: (ticker: string) => getJson<Signal>(`/signals/${ticker}`),

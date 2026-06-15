@@ -67,6 +67,16 @@ export default function DashboardPage() {
     }
   };
 
+  const runDataRepair = async () => {
+    setBusy(true);
+    try {
+      setPipelineResult(await api.repairData(36));
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (error) return <div className="empty-state">API error: {error}</div>;
   if (!data) return <LoadingState />;
 
@@ -130,6 +140,28 @@ export default function DashboardPage() {
         <LiveNewsTape articles={liveNews} />
       </section>
 
+      {data.data_coverage && (
+        <section className="panel" style={{ marginTop: 12 }}>
+          <div className="panel-head">
+            <span>Historical market memory</span>
+            <strong>{Math.round(data.data_coverage.coverage_ratio * 100)}% covered</strong>
+          </div>
+          <div className="grid-4">
+            <Metric label="Ready assets" value={`${data.data_coverage.ready_assets}/${data.data_coverage.asset_count}`} />
+            <Metric label="Stale assets" value={data.data_coverage.stale_assets} />
+            <Metric label="Missing" value={data.data_coverage.missing_assets} />
+            <Metric label="Short history" value={data.data_coverage.short_history_assets} />
+          </div>
+          <p>{data.data_coverage.data_policy}</p>
+          {!!data.data_coverage.repair_candidates.length && (
+            <p>Repair queue: {data.data_coverage.repair_candidates.slice(0, 14).join(", ")}</p>
+          )}
+          <div className="control-row" style={{ marginTop: 12, marginBottom: 0 }}>
+            <button className="button" onClick={runDataRepair} disabled={busy}>{busy ? "Repairing..." : "Repair data gaps"}</button>
+          </div>
+        </section>
+      )}
+
       {data.todays_strongest_signals.length ? (
         <section className="grid-3" style={{ marginTop: 12 }}>
           {data.todays_strongest_signals.slice(0, 6).map((signal) => <ScoreCard signal={signal} key={signal.ticker} />)}
@@ -149,6 +181,7 @@ export default function DashboardPage() {
           </div>
           <div className="control-row" style={{ marginTop: 12, marginBottom: 0 }}>
             <button className="button primary" onClick={runPipeline} disabled={busy}>{busy ? "Running pipeline..." : "Hydrate real data"}</button>
+            <button className="button" onClick={runDataRepair} disabled={busy}>{busy ? "Repairing..." : "Repair history"}</button>
             <Link className="button" href="/stock-radar">Open Radar</Link>
             <Link className="button" href="/market-brain">Open Market Brain</Link>
           </div>

@@ -15,6 +15,7 @@ from app.ingestion.news_ingestor import NewsIngestor
 from app.models import AIInsight, Asset, EmbeddingVector, NewsArticle, NewsAssetLink, PriceHistory, SentimentAnalysis, SignalSnapshot
 from app.schemas import AssetOut, MarketUpdateRequest, NewsOut, NewsUpdateRequest, SemanticSearchRequest, SignalRunRequest
 from app.services.dashboard import dashboard_overview, signal_payload
+from app.services.data_continuity import data_coverage_report, repair_data_gaps
 from app.services.etf import list_etf_trends, update_etf_trends
 from app.services.ipo import ipo_radar, sec_company_submissions, update_ipo_radar
 from app.services.live import live_news, market_sentiment
@@ -43,7 +44,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
     return {
         "service": "blum-ai-financial-intelligence",
         "app_version": settings.app_version,
-        "feature_set": "market-data-provider-hardening-v0.5.3",
+        "feature_set": "historical-memory-continuity-v0.5.4",
         "environment": settings.environment,
         "generated_at": datetime.utcnow().isoformat(),
         "hugging_face": {
@@ -57,6 +58,9 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "financial_brain_model_enabled": settings.enable_financial_brain_model,
             "live_startup_enabled": settings.enable_live_startup,
             "yfinance_fallback_enabled": settings.enable_yfinance_fallback,
+            "historical_price_seed_enabled": settings.seed_historical_prices_on_startup,
+            "startup_signal_seed_enabled": settings.seed_signals_on_startup,
+            "data_gap_repair_minutes": settings.data_gap_repair_minutes,
         },
         "active_models": {
             "finbert": settings.finbert_model,
@@ -85,7 +89,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "Hugging Face serves the previous image until the Docker build finishes successfully.",
             "The finance-domain 7B model is disabled by default unless BLUM_ENABLE_FINANCIAL_BRAIN_MODEL=true.",
             "Existing snapshots must be regenerated with Run brain or full pipeline after a new deployment.",
-            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.5.3.",
+            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.5.4.",
         ],
     }
 
@@ -129,6 +133,16 @@ def get_asset(ticker: str, db: Session = Depends(get_db)):
 @router.post("/market/update")
 def market_update(payload: MarketUpdateRequest, db: Session = Depends(get_db)):
     return MarketDataService().update_prices(db, tickers=payload.tickers, period=payload.period, limit=payload.limit)
+
+
+@router.get("/data/coverage")
+def data_coverage(db: Session = Depends(get_db)):
+    return data_coverage_report(db)
+
+
+@router.post("/data/repair")
+def data_repair(limit: int = Query(default=36, ge=1, le=120), db: Session = Depends(get_db)):
+    return repair_data_gaps(db, limit=limit)
 
 
 @router.post("/news/update")

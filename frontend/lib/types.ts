@@ -42,6 +42,8 @@ export type SystemStatus = {
     financial_brain_model_enabled: boolean;
     live_startup_enabled: boolean;
     yfinance_fallback_enabled?: boolean;
+    historical_price_seed_enabled?: boolean;
+    startup_signal_seed_enabled?: boolean;
   };
   active_models: {
     finbert: string;
@@ -88,6 +90,7 @@ export type DashboardOverview = {
     price_row_count: number;
     classification_mix: Record<string, number>;
   };
+  data_coverage?: DataCoverage;
   readiness: {
     price_row_count: number;
     news_article_count: number;
@@ -108,6 +111,32 @@ export type DashboardOverview = {
     momentum_score: number;
     thematic_score: number;
     confirmation_score: number;
+  }>;
+};
+
+export type DataCoverage = {
+  data_policy: string;
+  learning_mode: string;
+  minimum_history_rows: number;
+  stale_price_max_age_days: number;
+  asset_count: number;
+  ready_assets: number;
+  stale_assets: number;
+  missing_assets: number;
+  short_history_assets: number;
+  coverage_ratio: number;
+  repair_candidates: string[];
+  assets: Array<{
+    ticker: string;
+    name: string;
+    asset_type: string;
+    sector: string;
+    country: string;
+    rows: number;
+    first_date: string | null;
+    last_date: string | null;
+    age_days: number | null;
+    status: string;
   }>;
 };
 

@@ -1,0 +1,289 @@
+{
+  "created_at": "2026-06-15T12:11:11.178862Z",
+  "data_policy": "Real public OHLCV cache. Missing assets are not backfilled with synthetic data.",
+  "output": "historical_prices_seed.csv.gz",
+  "row_count": 75386,
+  "asset_count": 30,
+  "diagnostics": [
+    {
+      "ticker": "SPY",
+      "provider": "nasdaq_api",
+      "status": "ok",
+      "rows": 2515,
+      "start": "2016-06-13",
+      "end": "2026-06-12"
+    },
+    {
+      "ticker": "QQQ",
+      "provider": "nasdaq_api",
+      "status": "ok",
+      "rows": 2515,
+      "start": "2016-06-13",
+      "end": "2026-06-12"
+    },
+    {
+      "ticker": "IWM",
+      "provider": "nasdaq_api",
+      "status": "ok",
+      "rows": 2515,
+      "start": "2016-06-13",
+      "end": "2026-06-12"
+    },
+    {
+      "ticker": "DIA",
+      "provider": "nasdaq_api",
+      "status": "ok",
+      "rows": 2515,
+      "start": "2016-06-13",
+      "end": "2026-06-12"
+    },
+    {
+      "ticker": "SMH",
+      "provider": "nasdaq_api",
+      "status": "ok",
+      "rows": 2515,
+      "start": "2016-06-13",
+      "end": "2026-06-12"
+    },
+    {
+      "ticker": "XLK",
+      "provider": "nasdaq_api",
+      "status": "ok",
+      "rows": 2515,
+      "start": "2016-06-13",
+      "end": "2026-06-12"
+    },
+    {
+      "ticker": "XLF",
+      "provider": "nasdaq_api",
+      "status": "ok",
+      "rows": 2515,
+      "start": "2016-06-13",
+      "end": "2026-06-12"
+    },
+    {
+      "ticker": "XLE",
+      "provider": "nasdaq_api",
+      "status": "ok",
+      "rows": 2515,
+      "start": "2016-06-13",
+      "end": "2026-06-12"
+    },
+    {
+      "ticker": "XLV",
+      "provider": "nasdaq_api",
+      "status": "ok",
+      "rows": 2515,
+      "start": "2016-06-13",
+      "end": "2026-06-12"
+    },
+    {
+      "ticker": "XAR",
+      "provider": "nasdaq_api",
+      "status": "ok",
+      "rows": 2515,
+      "start": "2016-06-13",
+      "end": "2026-06-12"
+    },
+    {
+      "ticker": "BOTZ",
+      "provider": "nasdaq_api",
+      "status": "ok",
+      "rows": 2451,
+      "start": "2016-09-13",
+      "end": "2026-06-12"
+    },
+    {
+      "ticker": "HACK",
+      "provider": "nasdaq_api",
+      "status": "ok",
+      "rows": 2515,
+      "start": "2016-06-13",
+      "end": "2026-06-12"
+    },
+    {
+      "ticker": "ICLN",
+      "provider": "nasdaq_api",
+      "status": "ok",
+      "rows": 2515,
+      "start": "2016-06-13",
+      "end": "2026-06-12"
+    },
+    {
+      "ticker": "TLT",
+      "provider": "nasdaq_api",
+      "status": "ok",
+      "rows": 2515,
+      "start": "2016-06-13",
+      "end": "2026-06-12"
+    },
+    {
+      "ticker": "GLD",
+      "provider": "nasdaq_api",
+      "status": "ok",
+      "rows": 2515,
+      "start": "2016-06-13",
+      "end": "2026-06-12"
+    },
+    {
+      "ticker": "AAPL",
+      "provider": "nasdaq_api",
+      "status": "ok",
+      "rows": 2515,
+      "start": "2016-06-13",
+      "end": "2026-06-12"
+    },
+    {
+      "ticker": "MSFT",
+      "provider": "nasdaq_api",
+      "status": "ok",
+      "rows": 2515,
+      "start": "2016-06-13",
+      "end": "2026-06-12"
+    },
+    {
+      "ticker": "NVDA",
+      "provider": "nasdaq_api",
+      "status": "ok",
+      "rows": 2515,
+      "start": "2016-06-13",
+      "end": "2026-06-12"
+    },
+    {
+      "ticker": "AMD",
+      "provider": "nasdaq_api",
+      "status": "ok",
+      "rows": 2515,
+      "start": "2016-06-13",
+      "end": "2026-06-12"
+    },
+    {
+      "ticker": "AVGO",
+      "provider": "nasdaq_api",
+      "status": "ok",
+      "rows": 2515,
+      "start": "2016-06-13",
+      "end": "2026-06-12"
+    },
+    {
+      "ticker": "AMZN",
+      "provider": "nasdaq_api",
+      "status": "ok",
+      "rows": 2515,
+      "start": "2016-06-13",
+      "end": "2026-06-12"
+    },
+    {
+      "ticker": "GOOGL",
+      "provider": "nasdaq_api",
+      "status": "ok",
+      "rows": 2515,
+      "start": "2016-06-13",
+      "end": "2026-06-12"
+    },
+    {
+      "ticker": "META",
+      "provider": "nasdaq_api",
+      "status": "ok",
+      "rows": 2515,
+      "start": "2016-06-13",
+      "end": "2026-06-12"
+    },
+    {
+      "ticker": "TSLA",
+      "provider": "nasdaq_api",
+      "status": "ok",
+      "rows": 2515,
+      "start": "2016-06-13",
+      "end": "2026-06-12"
+    },
+    {
+      "ticker": "JPM",
+      "provider": "nasdaq_api",
+      "status": "ok",
+      "rows": 2515,
+      "start": "2016-06-13",
+      "end": "2026-06-12"
+    },
+    {
+      "ticker": "XOM",
+      "provider": "nasdaq_api",
+      "status": "ok",
+      "rows": 2515,
+      "start": "2016-06-13",
+      "end": "2026-06-12"
+    },
+    {
+      "ticker": "LLY",
+      "provider": "nasdaq_api",
+      "status": "ok",
+      "rows": 2515,
+      "start": "2016-06-13",
+      "end": "2026-06-12"
+    },
+    {
+      "ticker": "NVO",
+      "provider": "nasdaq_api",
+      "status": "ok",
+      "rows": 2515,
+      "start": "2016-06-13",
+      "end": "2026-06-12"
+    },
+    {
+      "ticker": "ASML",
+      "provider": "nasdaq_api",
+      "status": "ok",
+      "rows": 2515,
+      "start": "2016-06-13",
+      "end": "2026-06-12"
+    },
+    {
+      "ticker": "SAP",
+      "provider": "nasdaq_api",
+      "status": "ok",
+      "rows": 2515,
+      "start": "2016-06-13",
+      "end": "2026-06-12"
+    },
+    {
+      "ticker": "SIE.DE",
+      "provider": "none",
+      "status": "missing",
+      "rows": 0,
+      "start": null,
+      "end": null
+    },
+    {
+      "ticker": "AIR.PA",
+      "provider": "none",
+      "status": "missing",
+      "rows": 0,
+      "start": null,
+      "end": null
+    },
+    {
+      "ticker": "RHM.DE",
+      "provider": "none",
+      "status": "missing",
+      "rows": 0,
+      "start": null,
+      "end": null
+    },
+    {
+      "ticker": "MC.PA",
+      "provider": "none",
+      "status": "missing",
+      "rows": 0,
+      "start": null,
+      "end": null
+    },
+    {
+      "ticker": "ENR.DE",
+      "provider": "none",
+      "status": "missing",
+      "rows": 0,
+      "start": null,
+      "end": null
+    }
+  ]
+}
