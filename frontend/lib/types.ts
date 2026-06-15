@@ -44,6 +44,11 @@ export type SystemStatus = {
     yfinance_fallback_enabled?: boolean;
     historical_price_seed_enabled?: boolean;
     startup_signal_seed_enabled?: boolean;
+    startup_accuracy_seed_enabled?: boolean;
+    data_gap_repair_minutes?: number;
+    accuracy_audit_minutes?: number;
+    fundamentals_refresh_minutes?: number;
+    macro_refresh_minutes?: number;
   };
   active_models: {
     finbert: string;
@@ -79,6 +84,7 @@ export type Signal = {
   created_at: string;
   asset?: Asset;
   market_snapshot?: MarketSnapshot;
+  accuracy?: AccuracySnapshot | null;
 };
 
 export type DashboardOverview = {
@@ -91,6 +97,9 @@ export type DashboardOverview = {
     classification_mix: Record<string, number>;
   };
   data_coverage?: DataCoverage;
+  accuracy?: AccuracyOverview;
+  macro?: MacroOverview;
+  validation?: SignalValidationReport;
   readiness: {
     price_row_count: number;
     news_article_count: number;
@@ -112,6 +121,73 @@ export type DashboardOverview = {
     thematic_score: number;
     confirmation_score: number;
   }>;
+};
+
+export type AccuracyIssue = {
+  code: string;
+  message: string;
+  severity: string;
+};
+
+export type AccuracySnapshot = {
+  id?: number;
+  ticker?: string | null;
+  scope?: string;
+  blum_confidence_score: number;
+  confidence_label: string;
+  components?: Record<string, any>;
+  issues?: AccuracyIssue[] | Record<string, number>;
+  created_at?: string | null;
+};
+
+export type AccuracyProfile = {
+  ticker: string;
+  name: string;
+  asset_type: string;
+  sector: string;
+  blum_confidence_score: number;
+  confidence_label: string;
+  components: Record<string, any>;
+  issues: AccuracyIssue[];
+  generated_at: string;
+  accuracy_contract: string[];
+  latest_persisted_snapshot?: AccuracySnapshot | null;
+};
+
+export type AccuracyOverview = {
+  scope: string;
+  blum_confidence_score: number;
+  confidence_label: string;
+  asset_count: number;
+  top_quality_assets: AccuracyProfile[];
+  lowest_quality_assets: AccuracyProfile[];
+  issue_counts: Record<string, number>;
+  coverage: DataCoverage;
+  accuracy_contract: string[];
+};
+
+export type MacroOverview = {
+  provider: string;
+  series_count: number;
+  indicators: Array<{
+    indicator: string;
+    latest_date: string | null;
+    latest_value: number | null;
+    observations: number;
+    description?: string;
+  }>;
+};
+
+export type SignalValidationReport = {
+  status: string;
+  validated_signals: number;
+  validation_score?: number;
+  confirmed_or_strengthening?: number;
+  weakening_or_failed?: number;
+  by_classification: Record<string, { count: number; avg_score: number; avg_confidence: number }>;
+  by_lifecycle: Record<string, number>;
+  message?: string;
+  methodology?: string;
 };
 
 export type DataCoverage = {
@@ -167,7 +243,7 @@ export type LiveNewsArticle = {
   published_at: string | null;
   url: string;
   quality_score: number;
-  theme_tags: { themes?: string[]; desk?: string; tier?: number };
+  theme_tags: { themes?: string[]; events?: string[]; desk?: string; tier?: number; source_reliability?: string };
   sentiment: SentimentPayload | null;
   linked_assets: Array<{ ticker: string; name: string; sector: string; relevance_score: number }>;
 };
@@ -379,6 +455,6 @@ export type RelatedNews = {
   published_at: string | null;
   url: string;
   quality_score: number;
-  theme_tags: { themes?: string[] };
+  theme_tags: { themes?: string[]; events?: string[]; desk?: string; tier?: number; source_reliability?: string };
   relevance_score?: number;
 };

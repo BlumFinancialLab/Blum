@@ -12,13 +12,16 @@ from app.ai.financial_brain import FinancialBrainModel
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.ingestion.news_ingestor import NewsIngestor
-from app.models import AIInsight, Asset, EmbeddingVector, NewsArticle, NewsAssetLink, PriceHistory, SentimentAnalysis, SignalSnapshot
+from app.models import AIInsight, AccuracySnapshot, Asset, EmbeddingVector, FundamentalSnapshot, MacroSnapshot, NewsArticle, NewsAssetLink, PriceHistory, PriceProviderCheck, SentimentAnalysis, SignalSnapshot
 from app.schemas import AssetOut, MarketUpdateRequest, NewsOut, NewsUpdateRequest, SemanticSearchRequest, SignalRunRequest
+from app.services.accuracy import asset_accuracy_profile, latest_accuracy_snapshot, market_accuracy_overview, run_accuracy_audit, signal_validation_report
 from app.services.dashboard import dashboard_overview, signal_payload
 from app.services.data_continuity import data_coverage_report, repair_data_gaps
 from app.services.etf import list_etf_trends, update_etf_trends
+from app.services.fundamentals import fundamentals_for_asset, update_fundamentals
 from app.services.ipo import ipo_radar, sec_company_submissions, update_ipo_radar
 from app.services.live import live_news, market_sentiment
+from app.services.macro import macro_overview, update_macro_snapshots
 from app.services.market_brain import build_market_brain, latest_market_brain, market_brain_history
 from app.services.market_data import MarketDataService, market_snapshot_for_asset
 from app.services.pipeline import PipelineService
@@ -44,7 +47,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
     return {
         "service": "blum-ai-financial-intelligence",
         "app_version": settings.app_version,
-        "feature_set": "historical-memory-continuity-v0.5.4",
+        "feature_set": "accuracy-confidence-layer-v0.5.5",
         "environment": settings.environment,
         "generated_at": datetime.utcnow().isoformat(),
         "hugging_face": {
@@ -60,7 +63,11 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "yfinance_fallback_enabled": settings.enable_yfinance_fallback,
             "historical_price_seed_enabled": settings.seed_historical_prices_on_startup,
             "startup_signal_seed_enabled": settings.seed_signals_on_startup,
+            "startup_accuracy_seed_enabled": settings.seed_accuracy_on_startup,
             "data_gap_repair_minutes": settings.data_gap_repair_minutes,
+            "accuracy_audit_minutes": settings.accuracy_audit_minutes,
+            "fundamentals_refresh_minutes": settings.fundamentals_refresh_minutes,
+            "macro_refresh_minutes": settings.macro_refresh_minutes,
         },
         "active_models": {
             "finbert": settings.finbert_model,
@@ -77,19 +84,25 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "theme_detail": True,
             "signal_lifecycle": True,
             "sec_submissions": True,
+            "accuracy_confidence_layer": True,
+            "macro_fundamental_context": True,
         },
         "database_counts": {
             "assets": int(db.scalar(select(func.count(Asset.id))) or 0),
             "news_articles": int(db.scalar(select(func.count(NewsArticle.id))) or 0),
             "signals": int(db.scalar(select(func.count(SignalSnapshot.id))) or 0),
             "embeddings": int(db.scalar(select(func.count(EmbeddingVector.id))) or 0),
+            "accuracy_snapshots": int(db.scalar(select(func.count(AccuracySnapshot.id))) or 0),
+            "fundamental_snapshots": int(db.scalar(select(func.count(FundamentalSnapshot.id))) or 0),
+            "macro_snapshots": int(db.scalar(select(func.count(MacroSnapshot.id))) or 0),
+            "price_provider_checks": int(db.scalar(select(func.count(PriceProviderCheck.id))) or 0),
         },
         "latest_news_created_at": latest_brain,
         "why_gui_can_look_unchanged": [
             "Hugging Face serves the previous image until the Docker build finishes successfully.",
             "The finance-domain 7B model is disabled by default unless BLUM_ENABLE_FINANCIAL_BRAIN_MODEL=true.",
             "Existing snapshots must be regenerated with Run brain or full pipeline after a new deployment.",
-            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.5.4.",
+            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.5.5.",
         ],
     }
 
@@ -143,6 +156,51 @@ def data_coverage(db: Session = Depends(get_db)):
 @router.post("/data/repair")
 def data_repair(limit: int = Query(default=36, ge=1, le=120), db: Session = Depends(get_db)):
     return repair_data_gaps(db, limit=limit)
+
+
+@router.get("/accuracy/overview")
+def accuracy_overview(db: Session = Depends(get_db)):
+    return market_accuracy_overview(db, persist=False)
+
+
+@router.post("/accuracy/run")
+def accuracy_run(limit: int = Query(default=80, ge=1, le=160), db: Session = Depends(get_db)):
+    return run_accuracy_audit(db, limit=limit)
+
+
+@router.get("/accuracy/{ticker}")
+def accuracy_for_ticker(ticker: str, db: Session = Depends(get_db)):
+    asset = require_asset(db, ticker)
+    latest = latest_accuracy_snapshot(db, ticker=asset.ticker, scope="asset")
+    profile = asset_accuracy_profile(db, asset, persist=False)
+    profile["latest_persisted_snapshot"] = latest
+    return profile
+
+
+@router.get("/validation/signals")
+def validation_signals(limit: int = Query(default=240, ge=20, le=1000), db: Session = Depends(get_db)):
+    return signal_validation_report(db, limit=limit)
+
+
+@router.get("/macro/overview")
+def macro_context(db: Session = Depends(get_db)):
+    return macro_overview(db)
+
+
+@router.post("/macro/update")
+def macro_update(db: Session = Depends(get_db)):
+    return update_macro_snapshots(db)
+
+
+@router.get("/fundamentals/{ticker}")
+def fundamentals_for_ticker(ticker: str, db: Session = Depends(get_db)):
+    asset = require_asset(db, ticker)
+    return fundamentals_for_asset(db, asset)
+
+
+@router.post("/fundamentals/update")
+def fundamentals_update(limit: int = Query(default=24, ge=1, le=80), db: Session = Depends(get_db)):
+    return update_fundamentals(db, limit=limit)
 
 
 @router.post("/news/update")

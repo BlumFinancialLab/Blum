@@ -33,6 +33,18 @@ THEME_KEYWORDS = {
     "Energy": ["oil", "gas", "opec", "crude", "renewable", "clean energy"],
 }
 
+EVENT_KEYWORDS = {
+    "earnings": ["earnings", "eps", "revenue", "profit", "margin", "quarter"],
+    "guidance": ["guidance", "forecast", "outlook", "raised", "cut forecast", "warns"],
+    "m_and_a": ["merger", "acquisition", "takeover", "buyout", "deal"],
+    "regulation": ["regulator", "sec", "antitrust", "probe", "investigation", "ban"],
+    "analyst_revision": ["upgrade", "downgrade", "price target", "analyst"],
+    "product": ["launch", "product", "chip", "platform", "drug", "approval"],
+    "supply_chain": ["supply chain", "shortage", "inventory", "shipping"],
+    "capital_return": ["buyback", "repurchase", "dividend"],
+    "macro": ["fed", "inflation", "rates", "yield", "cpi", "jobs report"],
+}
+
 
 class NewsIngestor:
     def __init__(self, ai: AIOrchestrator | None = None):
@@ -155,7 +167,13 @@ class NewsIngestor:
                     "url": url,
                     "canonical_key": canonical_key(title, url),
                     "quality_score": quality_score(title, summary, source["tier"]),
-                    "theme_tags": {"themes": classify_themes(title, summary), "desk": source["desk"], "tier": source["tier"]},
+                    "theme_tags": {
+                        "themes": classify_themes(title, summary),
+                        "events": classify_events(title, summary),
+                        "desk": source["desk"],
+                        "tier": source["tier"],
+                        "source_reliability": source_reliability(source["tier"]),
+                    },
                 }
             )
         status = "ok" if rows else "empty"
@@ -169,7 +187,11 @@ class NewsIngestor:
             ticker = asset.ticker.lower()
             if re.search(rf"[^a-z0-9]{re.escape(ticker)}[^a-z0-9]", text):
                 score += 5
-            for token in asset.name.lower().replace(".", "").split():
+            aliases = asset_aliases(asset)
+            for alias in aliases:
+                if len(alias) > 4 and re.search(rf"[^a-z0-9]{re.escape(alias)}[^a-z0-9]", text):
+                    score += 3.5
+            for token in asset.name.lower().replace(".", "").replace(",", "").split():
                 if len(token) > 4 and token in text:
                     score += 1.5
             if asset.sector.lower() in text:
@@ -257,6 +279,41 @@ def classify_themes(title: str, summary: str) -> list[str]:
     text = f"{title} {summary}".lower()
     themes = [theme for theme, terms in THEME_KEYWORDS.items() if any(term in text for term in terms)]
     return themes or ["Market Structure"]
+
+
+def classify_events(title: str, summary: str) -> list[str]:
+    text = f"{title} {summary}".lower()
+    return [event for event, terms in EVENT_KEYWORDS.items() if any(term in text for term in terms)]
+
+
+def source_reliability(tier: int) -> str:
+    if tier <= 1:
+        return "primary_or_tier_1"
+    if tier == 2:
+        return "trusted_financial_press"
+    if tier == 3:
+        return "specialist_or_sector_source"
+    return "broad_web_source"
+
+
+def asset_aliases(asset: Asset) -> list[str]:
+    raw = [
+        asset.name,
+        asset.name.replace(" Inc.", ""),
+        asset.name.replace(" Corporation", ""),
+        asset.name.replace(" Corp.", ""),
+        asset.name.replace(" plc", ""),
+        asset.name.replace(" SE", ""),
+        asset.name.replace(" AG", ""),
+    ]
+    aliases = []
+    for item in raw:
+        cleaned = re.sub(r"[^a-z0-9 ]+", " ", item.lower()).strip()
+        cleaned = re.sub(r"\b(the|inc|corp|corporation|plc|se|ag|sa|nv|ltd|class|ordinary|shares|etf|trust)\b", " ", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        if len(cleaned) > 4:
+            aliases.append(cleaned)
+    return list(dict.fromkeys(aliases))
 
 
 def quality_score(title: str, summary: str, tier: int) -> float:

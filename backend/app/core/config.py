@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     app_name: str = "Blum AI Financial Intelligence"
-    app_version: str = "0.5.4"
+    app_version: str = "0.5.5"
     environment: str = Field(default="demo", alias="ENVIRONMENT")
     database_url: str = Field(
         default="postgresql+psycopg2://postgres:postgres@127.0.0.1:5432/blum",
@@ -26,10 +26,14 @@ class Settings(BaseSettings):
     enable_live_startup: bool = Field(default=True, alias="BLUM_ENABLE_LIVE_STARTUP")
     seed_historical_prices_on_startup: bool = Field(default=True, alias="BLUM_SEED_HISTORICAL_PRICES_ON_STARTUP")
     seed_signals_on_startup: bool = Field(default=True, alias="BLUM_SEED_SIGNALS_ON_STARTUP")
+    seed_accuracy_on_startup: bool = Field(default=True, alias="BLUM_SEED_ACCURACY_ON_STARTUP")
     startup_pipeline_limit: int = Field(default=36, alias="BLUM_STARTUP_PIPELINE_LIMIT")
     news_refresh_minutes: int = Field(default=10, alias="BLUM_NEWS_REFRESH_MINUTES")
     market_refresh_minutes: int = Field(default=45, alias="BLUM_MARKET_REFRESH_MINUTES")
     data_gap_repair_minutes: int = Field(default=180, alias="BLUM_DATA_GAP_REPAIR_MINUTES")
+    accuracy_audit_minutes: int = Field(default=240, alias="BLUM_ACCURACY_AUDIT_MINUTES")
+    fundamentals_refresh_minutes: int = Field(default=720, alias="BLUM_FUNDAMENTALS_REFRESH_MINUTES")
+    macro_refresh_minutes: int = Field(default=240, alias="BLUM_MACRO_REFRESH_MINUTES")
     stale_price_max_age_days: int = Field(default=7, alias="BLUM_STALE_PRICE_MAX_AGE_DAYS")
     minimum_history_rows: int = Field(default=220, alias="BLUM_MINIMUM_HISTORY_ROWS")
     ipo_refresh_minutes: int = Field(default=120, alias="BLUM_IPO_REFRESH_MINUTES")

@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
-import { DashboardOverview, LiveNewsArticle, MarketSentiment, PipelineStatus, SystemStatus } from "@/lib/types";
+import { assetPath } from "@/lib/routes";
+import { AccuracyOverview, DashboardOverview, LiveNewsArticle, MacroOverview, MarketSentiment, PipelineStatus, SignalValidationReport, SystemStatus } from "@/lib/types";
 import { LoadingState } from "@/components/LoadingState";
 import { ScoreCard } from "@/components/ScoreCard";
 import { SignalTable } from "@/components/SignalTable";
@@ -71,6 +72,36 @@ export default function DashboardPage() {
     setBusy(true);
     try {
       setPipelineResult(await api.repairData(36));
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runAccuracy = async () => {
+    setBusy(true);
+    try {
+      setPipelineResult(await api.runAccuracy(80));
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const refreshMacro = async () => {
+    setBusy(true);
+    try {
+      setPipelineResult(await api.updateMacro());
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const refreshFundamentals = async () => {
+    setBusy(true);
+    try {
+      setPipelineResult(await api.updateFundamentals(24));
       await load();
     } finally {
       setBusy(false);
@@ -161,6 +192,11 @@ export default function DashboardPage() {
           </div>
         </section>
       )}
+
+      <section className="live-grid" style={{ marginTop: 12 }}>
+        <AccuracyPanel accuracy={data.accuracy} busy={busy} onAudit={runAccuracy} />
+        <MacroValidationPanel macro={data.macro} validation={data.validation} busy={busy} onMacro={refreshMacro} onFundamentals={refreshFundamentals} />
+      </section>
 
       {data.todays_strongest_signals.length ? (
         <section className="grid-3" style={{ marginTop: 12 }}>
@@ -276,11 +312,108 @@ function LiveNewsTape({ articles }: { articles: LiveNewsArticle[] }) {
             </div>
             <div className="tape-meta">
               {article.sentiment && <b className={article.sentiment.label}>{article.sentiment.label} {article.sentiment.score.toFixed(2)}</b>}
+              {article.theme_tags.events?.slice(0, 1).map((event) => <em key={event}>{event.replaceAll("_", " ")}</em>)}
               {article.theme_tags.themes?.slice(0, 2).map((theme) => <em key={theme}>{theme}</em>)}
               {article.linked_assets.slice(0, 3).map((asset) => <em key={asset.ticker}>{asset.ticker}</em>)}
             </div>
           </a>
         ))}
+      </div>
+    </div>
+  );
+}
+
+function AccuracyPanel({ accuracy, busy, onAudit }: { accuracy?: AccuracyOverview; busy: boolean; onAudit: () => void }) {
+  if (!accuracy) {
+    return (
+      <div className="panel">
+        <div className="panel-head"><span>Blum Confidence Layer</span><strong>Loading</strong></div>
+        <div className="empty-state">Waiting for accuracy and evidence governance output.</div>
+      </div>
+    );
+  }
+  const issueRows = Object.entries(accuracy.issue_counts).sort((a, b) => b[1] - a[1]).slice(0, 6);
+  return (
+    <div className="panel accuracy-panel">
+      <div className="panel-head">
+        <span>Blum Confidence Layer</span>
+        <strong>{accuracy.blum_confidence_score.toFixed(1)} / {accuracy.confidence_label}</strong>
+      </div>
+      <div className="confidence-meter">
+        <i style={{ width: `${Math.max(2, Math.min(100, accuracy.blum_confidence_score))}%` }} />
+      </div>
+      <div className="label-grid">
+        <LabelMetric label="Assets audited" value={String(accuracy.asset_count)} />
+        <LabelMetric label="Contract checks" value={String(accuracy.accuracy_contract.length)} />
+        <LabelMetric label="Ready assets" value={String(accuracy.coverage.ready_assets)} />
+      </div>
+      <div className="quality-lists">
+        <div>
+          <span>Highest evidence quality</span>
+          {accuracy.top_quality_assets.slice(0, 4).map((item) => (
+            <Link href={assetPath(item.ticker)} key={item.ticker}>
+              <strong>{item.ticker}</strong>
+              <em>{item.blum_confidence_score.toFixed(1)}</em>
+            </Link>
+          ))}
+        </div>
+        <div>
+          <span>Needs evidence repair</span>
+          {accuracy.lowest_quality_assets.slice(0, 4).map((item) => (
+            <Link href={assetPath(item.ticker)} key={item.ticker}>
+              <strong>{item.ticker}</strong>
+              <em>{item.confidence_label}</em>
+            </Link>
+          ))}
+        </div>
+      </div>
+      {!!issueRows.length && (
+        <div className="issue-list">
+          {issueRows.map(([code, count]) => <span key={code}>{code.replaceAll("_", " ")} <b>{count}</b></span>)}
+        </div>
+      )}
+      <button className="button" onClick={onAudit} disabled={busy}>{busy ? "Auditing..." : "Run 15-point audit"}</button>
+    </div>
+  );
+}
+
+function MacroValidationPanel({
+  macro,
+  validation,
+  busy,
+  onMacro,
+  onFundamentals
+}: {
+  macro?: MacroOverview;
+  validation?: SignalValidationReport;
+  busy: boolean;
+  onMacro: () => void;
+  onFundamentals: () => void;
+}) {
+  return (
+    <div className="panel macro-panel">
+      <div className="panel-head">
+        <span>Macro, fundamentals and validation</span>
+        <strong>{validation?.status ?? "pending"}</strong>
+      </div>
+      <div className="grid-4">
+        <Metric label="Macro series" value={macro?.series_count ?? 0} />
+        <Metric label="Validated signals" value={validation?.validated_signals ?? 0} />
+        <Metric label="Validation score" value={validation?.validation_score?.toFixed(1) ?? "n/a"} />
+        <Metric label="Confirmed" value={validation?.confirmed_or_strengthening ?? 0} />
+      </div>
+      <div className="macro-list">
+        {(macro?.indicators ?? []).slice(0, 6).map((item) => (
+          <div key={item.indicator}>
+            <strong>{item.indicator}</strong>
+            <span>{item.latest_value ?? "n/a"} | {item.latest_date ?? "no date"}</span>
+          </div>
+        ))}
+      </div>
+      <p>{validation?.methodology ?? "The validation layer scores stored signals against lifecycle evidence without claiming future performance."}</p>
+      <div className="control-row" style={{ marginTop: 12, marginBottom: 0 }}>
+        <button className="button" onClick={onMacro} disabled={busy}>{busy ? "Refreshing..." : "Refresh macro"}</button>
+        <button className="button" onClick={onFundamentals} disabled={busy}>{busy ? "Refreshing..." : "Refresh fundamentals"}</button>
       </div>
     </div>
   );

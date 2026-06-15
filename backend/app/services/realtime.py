@@ -9,9 +9,12 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.ingestion.news_ingestor import NewsIngestor
+from app.services.accuracy import run_accuracy_audit
 from app.services.data_continuity import repair_data_gaps
 from app.services.etf import update_etf_trends
+from app.services.fundamentals import update_fundamentals
 from app.services.ipo import update_ipo_radar
+from app.services.macro import update_macro_snapshots
 from app.services.market_data import MarketDataService
 from app.services.pipeline import PipelineService
 from app.signals.engine import SignalEngine
@@ -42,6 +45,9 @@ def start_realtime_services() -> None:
     _scheduler.add_job(run_news_refresh, "interval", minutes=settings.news_refresh_minutes, id="news_refresh", replace_existing=True, max_instances=1)
     _scheduler.add_job(run_market_refresh, "interval", minutes=settings.market_refresh_minutes, id="market_refresh", replace_existing=True, max_instances=1)
     _scheduler.add_job(run_data_gap_repair, "interval", minutes=settings.data_gap_repair_minutes, id="data_gap_repair", replace_existing=True, max_instances=1)
+    _scheduler.add_job(run_accuracy_audit_job, "interval", minutes=settings.accuracy_audit_minutes, id="accuracy_audit", replace_existing=True, max_instances=1)
+    _scheduler.add_job(run_macro_refresh, "interval", minutes=settings.macro_refresh_minutes, id="macro_refresh", replace_existing=True, max_instances=1)
+    _scheduler.add_job(run_fundamentals_refresh, "interval", minutes=settings.fundamentals_refresh_minutes, id="fundamentals_refresh", replace_existing=True, max_instances=1)
     _scheduler.add_job(run_ipo_refresh, "interval", minutes=settings.ipo_refresh_minutes, id="ipo_refresh", replace_existing=True, max_instances=1)
     _scheduler.start()
     with _state_lock:
@@ -83,6 +89,18 @@ def run_market_refresh() -> None:
 
 def run_data_gap_repair() -> None:
     _run_job("data_gap_repair", lambda db: repair_data_gaps(db, limit=settings.max_update_assets))
+
+
+def run_accuracy_audit_job() -> None:
+    _run_job("accuracy_audit", lambda db: run_accuracy_audit(db, limit=settings.max_update_assets))
+
+
+def run_macro_refresh() -> None:
+    _run_job("macro_refresh", lambda db: update_macro_snapshots(db))
+
+
+def run_fundamentals_refresh() -> None:
+    _run_job("fundamentals_refresh", lambda db: update_fundamentals(db, limit=min(settings.max_update_assets, 24)))
 
 
 def run_ipo_refresh() -> None:

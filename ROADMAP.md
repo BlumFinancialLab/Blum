@@ -23,6 +23,9 @@ Shipped in the current architecture:
 - `/ai/models/status` exposes configured models, observed model records and fallback policy.
 - Blum Financial Brain now adds a finance-domain open model adapter. The configured default is `AdaptLLM/finance-chat`, opt-in for model loading, with deterministic evidence-bound fallback on constrained demo hardware.
 - `/market-brain`, `/market-brain/run`, `/ipo-radar` and `/ipo-radar/update` expose the new intelligence layer through documented JSON APIs.
+- The Accuracy And Confidence Layer now implements the 15-point audit: multi-provider checks, corporate-action review, point-in-time consistency, per-asset data quality, entity resolution, source credibility, semantic dedupe, event extraction, AI reasoning confidence, contradictions, fundamentals, macro context, ETF confirmation, historical validation and Blum Confidence Score.
+- `/accuracy/overview`, `/accuracy/{ticker}`, `/accuracy/run`, `/validation/signals`, `/macro/overview`, `/macro/update`, `/fundamentals/{ticker}` and `/fundamentals/update` expose confidence, macro and fundamental evidence through JSON APIs.
+- Startup and background workers now seed accuracy snapshots, repair historical OHLCV gaps, refresh public FRED macro data and refresh SEC companyfacts fundamentals where public CIK mapping is available.
 
 ## Phase 0 - Stabilize Docker Space Deployment
 

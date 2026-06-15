@@ -26,6 +26,7 @@ This is not a consumer trading app and not a simple dashboard. The project is a 
 | Market data | yfinance, Yahoo Chart API and Stooq provider chain |
 | News ingestion | RSS feeds, public web-search RSS, deduplication, ticker linking |
 | Filing intelligence | SEC EDGAR current filing feeds for S-1, F-1 and 424B prospectus forms |
+| Accuracy layer | multi-provider checks, data quality, source credibility, macro/fundamental context and Blum Confidence Score |
 | AI sentiment | FinBERT primary, VADER baseline |
 | Semantic layer | sentence-transformers embeddings, semantic search, theme discovery |
 | Reasoning | lightweight Qwen-compatible LLM evidence-only explanation layer |
@@ -61,7 +62,8 @@ Blum does not use one generic AI model for everything.
 12. Scan SEC EDGAR current filings for IPO and final prospectus evidence.
 13. Score IPO/pre-listing candidates through a separate readiness, probability, narrative and risk model.
 14. Build a Market Brain snapshot that combines stocks, ETFs, news, sentiment, IPO evidence, scenarios and risk alerts.
-15. Produce AI explanations using only retrieved evidence.
+15. Run the 15-point accuracy and confidence audit.
+16. Produce AI explanations using only retrieved evidence.
 
 ## Live Runtime
 
@@ -71,10 +73,22 @@ When the FastAPI application starts, APScheduler launches a background intellige
 - `news_refresh`: public news refresh every 10 minutes by default.
 - `market_refresh`: recent OHLCV refresh and signal regeneration every 45 minutes by default.
 - `ipo_refresh`: SEC current filing refresh every 120 minutes by default.
+- `data_gap_repair`: historical OHLCV continuity repair every 180 minutes by default.
+- `accuracy_audit`: 15-point confidence audit every 240 minutes by default.
+- `macro_refresh`: FRED public macro context refresh every 240 minutes by default.
+- `fundamentals_refresh`: SEC companyfacts refresh every 720 minutes by default.
 
 The dashboard polls live JSON endpoints every 30 seconds and shows worker state, latest public news, sentiment distribution, source/model diagnostics and signal readiness. No generated headlines, generated prices or fabricated sentiment are shown.
 
 Every equity and ETF surface includes an explicit market snapshot when real OHLCV data is available: last price, currency, date, provider, volume and 1D/5D/1M performance. If public providers have not returned usable prices yet, the UI shows a real-data pending state instead of a fabricated value.
+
+## Accuracy And Confidence Layer
+
+Blum separates opportunity scoring from evidence quality. The **Blum Intelligence Score** ranks research candidates. The **Blum Confidence Score** measures whether the evidence behind an asset is complete, current and internally consistent.
+
+The 15-point audit covers multi-provider price validation, corporate-action review, point-in-time consistency, per-asset data quality, entity resolution, source credibility, semantic news deduplication, structured event extraction, confidence-aware AI reasoning, contradiction checks, SEC fundamentals where available, FRED macro context, sector/ETF confirmation, historical signal validation and the final confidence label.
+
+Missing public data lowers confidence instead of creating placeholders. No synthetic prices, headlines, filings, fundamentals, macro values or scores are generated.
 
 ## Market Brain
 
@@ -149,6 +163,16 @@ FastAPI exposes clean JSON endpoints:
 - `POST /news/update`
 - `GET /news/live`
 - `GET /sentiment/market`
+- `GET /data/coverage`
+- `POST /data/repair`
+- `GET /accuracy/overview`
+- `POST /accuracy/run`
+- `GET /accuracy/{ticker}`
+- `GET /validation/signals`
+- `GET /macro/overview`
+- `POST /macro/update`
+- `GET /fundamentals/{ticker}`
+- `POST /fundamentals/update`
 - `POST /signals/run`
 - `POST /pipeline/run`
 - `GET /pipeline/status`

@@ -4,7 +4,9 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
 from app.models import Asset, ETFTrend, NewsArticle, PriceHistory, SentimentAnalysis, SignalSnapshot
+from app.services.accuracy import latest_accuracy_snapshot, market_accuracy_overview, signal_validation_report
 from app.services.data_continuity import data_coverage_report
+from app.services.macro import macro_overview
 from app.services.market_data import market_snapshot_for_asset
 from app.services.pipeline import pipeline_readiness
 from app.services.realtime import realtime_status
@@ -38,6 +40,9 @@ def dashboard_overview(db: Session) -> dict:
             "price_row_count": int(db.scalar(select(func.count(PriceHistory.id))) or 0),
         },
         "data_coverage": data_coverage_report(db),
+        "accuracy": market_accuracy_overview(db, persist=False),
+        "macro": macro_overview(db),
+        "validation": signal_validation_report(db),
         "readiness": pipeline_readiness(db),
         "realtime": realtime_status(),
         "todays_strongest_signals": [signal_payload(item, db) for item in top],
@@ -65,6 +70,7 @@ def signal_payload(signal: SignalSnapshot, db: Session | None = None) -> dict:
         "created_at": signal.created_at,
     }
     if db is not None and signal.asset is not None:
+        payload["accuracy"] = latest_accuracy_snapshot(db, ticker=signal.asset.ticker, scope="asset")
         payload["asset"] = {
             "ticker": signal.asset.ticker,
             "name": signal.asset.name,

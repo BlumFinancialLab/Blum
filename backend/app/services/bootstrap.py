@@ -13,6 +13,7 @@ from app.core.config import get_settings
 from app.core.database import Base, engine
 from app.data.seed_assets import SEED_ASSETS
 from app.models import Asset, PriceHistory, SignalSnapshot
+from app.services.accuracy import run_accuracy_audit
 from app.signals.engine import SignalEngine
 
 
@@ -45,7 +46,16 @@ def bootstrap_database(db: Session) -> dict:
     signals = {"enabled": settings.seed_signals_on_startup, "signals_created": 0, "status": "disabled"}
     if settings.seed_signals_on_startup:
         signals = seed_startup_signals(db)
-    return {"schema_ready": True, "seeded_assets": inserted, "historical_prices": historical, "startup_signals": signals}
+    accuracy = {"enabled": settings.seed_accuracy_on_startup, "status": "disabled"}
+    if settings.seed_accuracy_on_startup:
+        accuracy = seed_startup_accuracy(db)
+    return {
+        "schema_ready": True,
+        "seeded_assets": inserted,
+        "historical_prices": historical,
+        "startup_signals": signals,
+        "startup_accuracy": accuracy,
+    }
 
 
 def seed_historical_prices(db: Session) -> dict:
@@ -102,6 +112,13 @@ def seed_startup_signals(db: Session) -> dict:
         return {"enabled": True, "status": "no_price_history", "signals_created": 0}
     result = SignalEngine().run(db, limit=80)
     return {"enabled": True, "status": "created", **result}
+
+
+def seed_startup_accuracy(db: Session) -> dict:
+    price_count = int(db.scalar(select(func.count(PriceHistory.id))) or 0)
+    if price_count == 0:
+        return {"enabled": True, "status": "no_price_history", "message": "Accuracy audit waits for verified OHLCV rows."}
+    return {"enabled": True, **run_accuracy_audit(db, limit=80)}
 
 
 def price_row_from_cache(asset_id: int, item: dict) -> dict | None:

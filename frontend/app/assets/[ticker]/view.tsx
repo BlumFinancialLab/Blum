@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
-import { PricePoint, RelatedNews, Signal } from "@/lib/types";
+import { AccuracyProfile, PricePoint, RelatedNews, Signal } from "@/lib/types";
 import { LoadingState } from "@/components/LoadingState";
 import { BreakdownBars } from "@/components/BreakdownBars";
 import { formatPercent, formatPrice, formatVolume, MarketSnapshotStrip } from "@/components/MarketSnapshotStrip";
@@ -11,13 +11,27 @@ import { StatusBadge } from "@/components/StatusBadge";
 
 export function AssetDetailClient({ ticker }: { ticker: string }) {
   const [data, setData] = useState<{ asset: any; market_snapshot?: any; prices: PricePoint[]; latest_signal: Signal | null; related_news: RelatedNews[] } | null>(null);
+  const [accuracy, setAccuracy] = useState<AccuracyProfile | null>(null);
+  const [fundamentals, setFundamentals] = useState<any>(null);
   const [insight, setInsight] = useState<any>(null);
   const [insightError, setInsightError] = useState("");
   const [insightLoading, setInsightLoading] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    api.asset(ticker).then(setData).catch((err) => setError((err as Error).message));
+    setError("");
+    setData(null);
+    setAccuracy(null);
+    setFundamentals(null);
+    setInsight(null);
+    setInsightError("");
+    Promise.allSettled([api.asset(ticker), api.assetAccuracy(ticker), api.fundamentals(ticker)] as const)
+      .then(([assetResult, accuracyResult, fundamentalsResult]) => {
+        if (assetResult.status === "fulfilled") setData(assetResult.value);
+        else setError((assetResult.reason as Error).message);
+        if (accuracyResult.status === "fulfilled") setAccuracy(accuracyResult.value);
+        if (fundamentalsResult.status === "fulfilled") setFundamentals(fundamentalsResult.value);
+      });
   }, [ticker]);
 
   const explain = async () => {
@@ -78,6 +92,11 @@ export function AssetDetailClient({ ticker }: { ticker: string }) {
       </section>
 
       <section className="grid-2" style={{ marginTop: 12 }}>
+        <EvidenceConfidencePanel accuracy={accuracy} />
+        <FundamentalContextPanel fundamentals={fundamentals} assetType={data.asset.asset_type} />
+      </section>
+
+      <section className="grid-2" style={{ marginTop: 12 }}>
         <PlotPanel
           title="Historical Price"
           data={[{ x: prices.map((p) => p.date), y: prices.map((p) => p.close), type: "scatter", mode: "lines", name: ticker, line: { color: "#ffb000", width: 2 } }]}
@@ -113,12 +132,94 @@ export function AssetDetailClient({ ticker }: { ticker: string }) {
             <a className="news-item" href={item.url} target="_blank" rel="noreferrer" key={item.id}>
               <strong>{item.title}</strong>
               <span>{item.source} | quality {item.quality_score}</span>
+              <span>
+                {[...(item.theme_tags.events ?? []), ...(item.theme_tags.themes ?? [])]
+                  .slice(0, 4)
+                  .map((label) => label.replaceAll("_", " "))
+                  .join(" | ") || "event classification pending"}
+              </span>
             </a>
           ))}
         </div>
       </section>
     </>
   );
+}
+
+function EvidenceConfidencePanel({ accuracy }: { accuracy: AccuracyProfile | null }) {
+  if (!accuracy) {
+    return (
+      <div className="panel">
+        <div className="panel-head"><span>Evidence Confidence</span><strong>Pending</strong></div>
+        <div className="empty-state">The 15-point accuracy profile is being built for this asset.</div>
+      </div>
+    );
+  }
+  const componentRows = Object.entries(accuracy.components)
+    .map(([key, value]: [string, any]) => ({ key, score: Number(value?.score ?? 0), issues: value?.issues?.length ?? 0 }))
+    .sort((a, b) => a.score - b.score)
+    .slice(0, 7);
+  return (
+    <div className="panel">
+      <div className="panel-head">
+        <span>Evidence Confidence</span>
+        <strong>{accuracy.blum_confidence_score.toFixed(1)} / {accuracy.confidence_label}</strong>
+      </div>
+      <div className="confidence-meter"><i style={{ width: `${Math.max(2, Math.min(100, accuracy.blum_confidence_score))}%` }} /></div>
+      <div className="macro-list">
+        {componentRows.map((item) => (
+          <div key={item.key}>
+            <strong>{item.key.replaceAll("_", " ")}</strong>
+            <span>{item.score.toFixed(1)} score | {item.issues} issues</span>
+          </div>
+        ))}
+      </div>
+      {!!accuracy.issues.length && (
+        <div className="issue-list">
+          {accuracy.issues.slice(0, 6).map((item) => <span key={`${item.code}-${item.message}`}>{item.code.replaceAll("_", " ")}</span>)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FundamentalContextPanel({ fundamentals, assetType }: { fundamentals: any; assetType: string }) {
+  const snapshot = fundamentals?.latest_snapshot;
+  const metrics = snapshot?.metrics ?? {};
+  return (
+    <div className="panel">
+      <div className="panel-head">
+        <span>Fundamental Context</span>
+        <strong>{assetType === "ETF" ? "ETF not required" : snapshot ? "SEC evidence" : "Pending"}</strong>
+      </div>
+      {assetType === "ETF" ? (
+        <p>ETF confidence is driven by holdings proxy, sector rotation, trend confirmation and macro context. Issuer fundamentals are not required.</p>
+      ) : snapshot ? (
+        <>
+          <div className="grid-4">
+            <div className="metric-card"><span>Quality</span><strong>{Number(snapshot.quality_score ?? 0).toFixed(0)}</strong></div>
+            <div className="metric-card"><span>Period</span><strong>{snapshot.period_end ?? "n/a"}</strong></div>
+            <div className="metric-card"><span>Revenue</span><strong>{compactNumber(factValue(metrics.revenue))}</strong></div>
+            <div className="metric-card"><span>Net Income</span><strong>{compactNumber(factValue(metrics.net_income))}</strong></div>
+          </div>
+          <p>Provider: {snapshot.provider}. This context is sourced from public filings and is used as evidence quality, not as a recommendation.</p>
+        </>
+      ) : (
+        <div className="empty-state">No verified fundamental snapshot is stored yet for this asset.</div>
+      )}
+    </div>
+  );
+}
+
+function compactNumber(value: number | null | undefined) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "n/a";
+  return new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(Number(value));
+}
+
+function factValue(value: any): number | null {
+  if (typeof value === "number") return value;
+  if (value && typeof value.value === "number") return value.value;
+  return null;
 }
 
 function Diagnostics({ diagnostics }: { diagnostics: any }) {

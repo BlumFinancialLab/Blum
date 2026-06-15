@@ -40,6 +40,7 @@ export function SignalTable({ signals }: { signals: Signal[] }) {
               <td>
                 <span className="metric-pill">{Number(signal.confidence_score ?? 0).toFixed(0)}</span>
                 <span>{signal.lifecycle_state ?? "active"}</span>
+                {signal.accuracy && <span>evidence {signal.accuracy.blum_confidence_score.toFixed(0)} / {signal.accuracy.confidence_label}</span>}
               </td>
               <td><StatusBadge label={signal.classification} /></td>
               <td>{signal.risk_level}<span>{signal.score_version ?? "blum-score"}</span></td>

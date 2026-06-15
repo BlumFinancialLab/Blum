@@ -1,4 +1,4 @@
-import { Asset, DashboardOverview, DataCoverage, IPORadar, LiveNewsArticle, MarketBrain, MarketBrainHistoryRow, MarketSentiment, PipelineStatus, RelatedNews, Signal, StockRadar, SystemStatus } from "./types";
+import { AccuracyOverview, AccuracyProfile, Asset, DashboardOverview, DataCoverage, IPORadar, LiveNewsArticle, MacroOverview, MarketBrain, MarketBrainHistoryRow, MarketSentiment, PipelineStatus, RelatedNews, Signal, SignalValidationReport, StockRadar, SystemStatus } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
 
@@ -41,6 +41,14 @@ export const api = {
   marketSentiment: (hours = 48) => getJson<MarketSentiment>(`/sentiment/market?hours=${hours}`),
   dataCoverage: () => getJson<DataCoverage>("/data/coverage"),
   repairData: (limit = 36) => postJson<any>(`/data/repair?limit=${limit}`, {}),
+  accuracyOverview: () => getJson<AccuracyOverview>("/accuracy/overview"),
+  runAccuracy: (limit = 80) => postJson<any>(`/accuracy/run?limit=${limit}`, {}),
+  assetAccuracy: (ticker: string) => getJson<AccuracyProfile>(`/accuracy/${encodeURIComponent(ticker)}`),
+  signalValidation: (limit = 240) => getJson<SignalValidationReport>(`/validation/signals?limit=${limit}`),
+  macroOverview: () => getJson<MacroOverview>("/macro/overview"),
+  updateMacro: () => postJson<any>("/macro/update", {}),
+  updateFundamentals: (limit = 24) => postJson<any>(`/fundamentals/update?limit=${limit}`, {}),
+  fundamentals: (ticker: string) => getJson<any>(`/fundamentals/${encodeURIComponent(ticker)}`),
   pipelineStatus: () => getJson<PipelineStatus>("/pipeline/status"),
   topSignals: (query = "") => getJson<Signal[]>(`/signals/top${query}`),
   signal: (ticker: string) => getJson<Signal>(`/signals/${ticker}`),

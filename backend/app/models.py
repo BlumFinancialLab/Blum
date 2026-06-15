@@ -53,6 +53,27 @@ class PriceHistory(Base):
     asset = relationship("Asset", back_populates="prices")
 
 
+class PriceProviderCheck(Base):
+    __tablename__ = "price_provider_checks"
+    __table_args__ = (
+        UniqueConstraint("asset_id", "date", name="uq_price_provider_check_asset_date"),
+        Index("ix_price_provider_checks_ticker_date", "ticker", "date"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("assets.id", ondelete="CASCADE"), index=True)
+    ticker: Mapped[str] = mapped_column(String(32), index=True)
+    date: Mapped[datetime] = mapped_column(Date, index=True)
+    provider_count: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    reference_close: Mapped[float | None] = mapped_column(Float)
+    max_divergence_pct: Mapped[float | None] = mapped_column(Float, index=True)
+    status: Mapped[str] = mapped_column(String(80), default="not_checked", index=True)
+    observations: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    asset = relationship("Asset")
+
+
 class NewsArticle(Base):
     __tablename__ = "news_articles"
 
@@ -199,6 +220,79 @@ class BacktestResult(Base):
     parameters: Mapped[dict] = mapped_column(JsonType, default=dict)
     metrics: Mapped[dict] = mapped_column(JsonType, default=dict)
     results: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class AccuracySnapshot(Base):
+    __tablename__ = "accuracy_snapshots"
+    __table_args__ = (Index("ix_accuracy_snapshots_scope_created", "scope", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    asset_id: Mapped[int | None] = mapped_column(ForeignKey("assets.id", ondelete="CASCADE"), index=True)
+    ticker: Mapped[str | None] = mapped_column(String(32), index=True)
+    scope: Mapped[str] = mapped_column(String(80), default="asset", index=True)
+    score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    confidence_label: Mapped[str] = mapped_column(String(40), default="Low", index=True)
+    components: Mapped[dict] = mapped_column(JsonType, default=dict)
+    issues: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    asset = relationship("Asset")
+
+
+class CorporateActionEvent(Base):
+    __tablename__ = "corporate_action_events"
+    __table_args__ = (
+        UniqueConstraint("asset_id", "action_type", "effective_date", "source", name="uq_corporate_action_event"),
+        Index("ix_corporate_action_events_ticker_date", "ticker", "effective_date"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("assets.id", ondelete="CASCADE"), index=True)
+    ticker: Mapped[str] = mapped_column(String(32), index=True)
+    action_type: Mapped[str] = mapped_column(String(80), index=True)
+    effective_date: Mapped[datetime] = mapped_column(Date, index=True)
+    source: Mapped[str] = mapped_column(String(120), default="price_anomaly_detector", index=True)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    details: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    asset = relationship("Asset")
+
+
+class FundamentalSnapshot(Base):
+    __tablename__ = "fundamental_snapshots"
+    __table_args__ = (
+        UniqueConstraint("asset_id", "provider", "period_end", name="uq_fundamental_asset_provider_period"),
+        Index("ix_fundamental_snapshots_ticker_created", "ticker", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("assets.id", ondelete="CASCADE"), index=True)
+    ticker: Mapped[str] = mapped_column(String(32), index=True)
+    provider: Mapped[str] = mapped_column(String(120), default="sec_companyfacts", index=True)
+    period_end: Mapped[datetime | None] = mapped_column(Date, index=True)
+    fiscal_period: Mapped[str] = mapped_column(String(40), default="")
+    metrics: Mapped[dict] = mapped_column(JsonType, default=dict)
+    quality_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    asset = relationship("Asset")
+
+
+class MacroSnapshot(Base):
+    __tablename__ = "macro_snapshots"
+    __table_args__ = (
+        UniqueConstraint("indicator", "date", "provider", name="uq_macro_indicator_date_provider"),
+        Index("ix_macro_snapshots_indicator_created", "indicator", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    indicator: Mapped[str] = mapped_column(String(80), index=True)
+    date: Mapped[datetime] = mapped_column(Date, index=True)
+    value: Mapped[float | None] = mapped_column(Float)
+    provider: Mapped[str] = mapped_column(String(120), default="fred", index=True)
+    details: Mapped[dict] = mapped_column(JsonType, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
 

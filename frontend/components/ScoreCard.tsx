@@ -1,6 +1,6 @@
 import type { CSSProperties } from "react";
 import { Signal } from "@/lib/types";
-import { formatVolume, MarketSnapshotStrip } from "./MarketSnapshotStrip";
+import { MarketSnapshotStrip } from "./MarketSnapshotStrip";
 import { StatusBadge } from "./StatusBadge";
 
 export function ScoreCard({ signal }: { signal: Signal }) {
@@ -22,9 +22,9 @@ export function ScoreCard({ signal }: { signal: Signal }) {
       <p>{signal.explanation}</p>
       <div className="mini-metrics">
         <div><span>Risk</span><strong>{signal.risk_level}</strong></div>
-        <div><span>Confidence</span><strong>{Number(signal.confidence_score ?? 0).toFixed(0)}</strong></div>
+        <div><span>Signal Conf.</span><strong>{Number(signal.confidence_score ?? 0).toFixed(0)}</strong></div>
+        <div><span>Evidence</span><strong>{signal.accuracy?.blum_confidence_score?.toFixed(0) ?? "n/a"}</strong></div>
         <div><span>Lifecycle</span><strong>{signal.lifecycle_state ?? "active"}</strong></div>
-        <div><span>Volume</span><strong>{formatVolume(signal.market_snapshot?.volume)}</strong></div>
       </div>
     </article>
   );
