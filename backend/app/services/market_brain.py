@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
+import math
 from statistics import mean
 import uuid
 
@@ -72,7 +73,9 @@ def build_market_brain(db: Session, persist: bool = True) -> dict:
         "disclaimer": "Educational research case study only. Not financial advice, not a recommendation and not an operational trading signal.",
     }
     payload["change_log"] = compare_with_previous(previous.structured_output if previous else None, payload)
+    payload = json_safe(payload)
     payload["financial_brain"] = AIOrchestrator().generate_market_brain_insight(payload)
+    payload = json_safe(payload)
 
     if persist:
         db.add(
@@ -116,11 +119,11 @@ def latest_market_brain(db: Session) -> dict:
     payload = dict(snapshot.structured_output or {})
     payload["last_snapshot"] = {
         "run_id": snapshot.run_id,
-        "created_at": snapshot.created_at,
+        "created_at": snapshot.created_at.isoformat() if snapshot.created_at else None,
         "brain_score": snapshot.brain_score,
         "regime": snapshot.regime,
     }
-    return payload
+    return json_safe(payload)
 
 
 def latest_distinct_signals(db: Session, limit: int = 80) -> list[SignalSnapshot]:
@@ -567,3 +570,17 @@ def numeric(value) -> float:
         return float(value)
     except Exception:
         return 0.0
+
+
+def json_safe(value):
+    if isinstance(value, dict):
+        return {str(key): json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [json_safe(item) for item in value]
+    if isinstance(value, tuple):
+        return [json_safe(item) for item in value]
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    return value

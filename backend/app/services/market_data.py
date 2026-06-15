@@ -5,13 +5,15 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.models import Asset, PriceHistory
-from app.providers.yfinance_provider import StooqProvider, YahooChartProvider, YFinanceProvider, to_price_rows
+from app.providers.yfinance_provider import NasdaqHistoricalProvider, StooqProvider, YahooChartProvider, YFinanceProvider, to_price_rows
 
 
 class MarketDataService:
     def __init__(self):
         self.settings = get_settings()
-        self.providers = [YFinanceProvider(), YahooChartProvider(), StooqProvider()]
+        self.providers = [StooqProvider(), NasdaqHistoricalProvider(), YahooChartProvider()]
+        if self.settings.enable_yfinance_fallback:
+            self.providers.append(YFinanceProvider())
 
     def update_prices(self, db: Session, tickers: list[str] | None = None, period: str = "max", limit: int | None = None) -> dict:
         limit = limit or self.settings.max_update_assets

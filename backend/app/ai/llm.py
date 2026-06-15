@@ -46,7 +46,7 @@ class ReasoningModel:
 
 
 def build_prompt(evidence: dict) -> str:
-    payload = json.dumps(evidence, ensure_ascii=False)[:5000]
+    payload = json.dumps(evidence, ensure_ascii=False, default=str)[:5000]
     return (
         "You are an open-source financial intelligence reasoning layer. "
         "Use only the JSON evidence. Do not invent facts, forecasts, prices, or recommendations. "
@@ -93,4 +93,3 @@ def deterministic_explanation(evidence: dict) -> dict:
         "time_horizon": signal.get("time_horizon", "Short/Medium term"),
         "monitor_next": ["news intensity", "SMA20 hold", "volume confirmation", "ETF confirmation"],
     }
-

@@ -35,7 +35,7 @@ async function responseError(response: Response) {
 export const api = {
   systemStatus: () => getJson<SystemStatus>("/system/status"),
   assets: () => getJson<Asset[]>("/assets"),
-  asset: (ticker: string) => getJson<{ asset: Asset; market_snapshot: Asset["market_snapshot"]; prices: any[]; latest_signal: Signal | null; related_news: RelatedNews[] }>(`/assets/${ticker}`),
+  asset: (ticker: string) => getJson<{ asset: Asset; market_snapshot: Asset["market_snapshot"]; prices: any[]; latest_signal: Signal | null; related_news: RelatedNews[] }>(`/assets/${encodeURIComponent(ticker)}`),
   overview: () => getJson<DashboardOverview>("/dashboard/overview"),
   liveNews: (limit = 60) => getJson<LiveNewsArticle[]>(`/news/live?limit=${limit}`),
   marketSentiment: (hours = 48) => getJson<MarketSentiment>(`/sentiment/market?hours=${hours}`),

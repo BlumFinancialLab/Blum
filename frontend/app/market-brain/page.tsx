@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { assetPath } from "@/lib/routes";
 import { MarketBrain, MarketBrainHistoryRow } from "@/lib/types";
 import { LoadingState } from "@/components/LoadingState";
 import { PlotPanel } from "@/components/PlotPanel";
@@ -289,7 +290,7 @@ function OpportunityPanel({ title, rows, kind }: { title: string; rows: any[]; k
         {rows.slice(0, 8).map((row, index) => (
           <div key={`${title}-${row.ticker ?? row.name}-${index}`}>
             <div className="opportunity-line">
-              {kind === "stock" && row.ticker ? <Link href={`/assets/${row.ticker}`}>{row.ticker}</Link> : <strong>{row.ticker ?? row.name}</strong>}
+              {kind === "stock" && row.ticker ? <Link href={assetPath(row.ticker)}>{row.ticker}</Link> : <strong>{row.ticker ?? row.name}</strong>}
               <span>{displayScore(row.score ?? row.confirmation_score ?? row.opportunity_score)}</span>
             </div>
             <p>{row.name ?? row.category ?? row.classification}</p>

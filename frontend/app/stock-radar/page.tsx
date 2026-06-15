@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 import { StockRadar, StockRadarRow } from "@/lib/types";
+import { assetPath } from "@/lib/routes";
 import { LoadingState } from "@/components/LoadingState";
 import { formatPercent, formatPrice, formatVolume, MarketSnapshotStrip } from "@/components/MarketSnapshotStrip";
 import { PlotPanel } from "@/components/PlotPanel";
@@ -249,7 +250,7 @@ function StockRadarTable({ rows, emptyMessage }: { rows: StockRadarRow[]; emptyM
           {rows.map((row) => (
             <tr key={`row-${row.ticker}`}>
               <td>
-                <Link className="asset-link" href={`/assets/${row.ticker}`}>{row.ticker}</Link>
+                <Link className="asset-link" href={assetPath(row.ticker)}>{row.ticker}</Link>
                 <span>{row.asset.name}</span>
                 <span>{row.asset.sector} | {row.asset.industry} | {row.asset.exchange}</span>
               </td>

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Signal } from "@/lib/types";
+import { assetPath } from "@/lib/routes";
 import { formatPercent, formatPrice, formatVolume } from "./MarketSnapshotStrip";
 import { StatusBadge } from "./StatusBadge";
 
@@ -26,7 +27,7 @@ export function SignalTable({ signals }: { signals: Signal[] }) {
           {signals.map((signal) => (
             <tr key={`${signal.ticker}-${signal.created_at}`}>
               <td>
-                <Link href={`/assets/${signal.ticker}`} className="asset-link">{signal.ticker}</Link>
+                <Link href={assetPath(signal.ticker)} className="asset-link">{signal.ticker}</Link>
                 <span>{signal.asset?.name ?? "Name pending"}</span>
                 <span>{signal.asset?.asset_type ?? "Asset"} | {signal.asset?.sector ?? "Sector pending"} | {signal.asset?.exchange ?? "Exchange n/a"}</span>
               </td>

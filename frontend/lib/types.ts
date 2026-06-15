@@ -41,6 +41,7 @@ export type SystemStatus = {
     model_loading_enabled: boolean;
     financial_brain_model_enabled: boolean;
     live_startup_enabled: boolean;
+    yfinance_fallback_enabled?: boolean;
   };
   active_models: {
     finbert: string;

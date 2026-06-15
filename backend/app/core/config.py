@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     app_name: str = "Blum AI Financial Intelligence"
-    app_version: str = "0.5.2"
+    app_version: str = "0.5.3"
     environment: str = Field(default="demo", alias="ENVIRONMENT")
     database_url: str = Field(
         default="postgresql+psycopg2://postgres:postgres@127.0.0.1:5432/blum",
@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     financial_brain_model: str = Field(default="AdaptLLM/finance-chat", alias="BLUM_FINANCIAL_BRAIN_MODEL")
     financial_brain_max_new_tokens: int = Field(default=420, alias="BLUM_FINANCIAL_BRAIN_MAX_NEW_TOKENS")
     default_benchmark: str = Field(default="SPY", alias="BLUM_DEFAULT_BENCHMARK")
+    enable_yfinance_fallback: bool = Field(default=False, alias="BLUM_ENABLE_YFINANCE_FALLBACK")
     max_update_assets: int = Field(default=36, alias="BLUM_MAX_UPDATE_ASSETS")
     enable_live_startup: bool = Field(default=True, alias="BLUM_ENABLE_LIVE_STARTUP")
     startup_pipeline_limit: int = Field(default=36, alias="BLUM_STARTUP_PIPELINE_LIMIT")

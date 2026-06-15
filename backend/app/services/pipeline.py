@@ -15,8 +15,8 @@ class PipelineService:
     """Runs the real-data intelligence pipeline and returns audit diagnostics."""
 
     def run(self, db: Session, tickers: list[str] | None = None, limit: int = 36, period: str = "max") -> dict:
-        news = NewsIngestor().update_news(db, lookback_hours=72, limit_per_feed=35)
         market = MarketDataService().update_prices(db, tickers=tickers, period=period, limit=limit)
+        news = NewsIngestor().update_news(db, lookback_hours=72, limit_per_feed=35)
         signals = SignalEngine().run(db, tickers=tickers, limit=limit)
         etf = update_etf_trends(db)
         ipo = update_ipo_radar(db, limit_per_form=35)

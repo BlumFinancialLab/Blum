@@ -79,7 +79,7 @@ class FinancialBrainModel:
 
 
 def build_financial_brain_prompt(packet: dict) -> str:
-    evidence = json.dumps(packet, ensure_ascii=False)[:9000]
+    evidence = json.dumps(packet, ensure_ascii=False, default=json_default)[:9000]
     return (
         "You are Blum Financial Brain, an open-source financial intelligence reasoning model. "
         "Use only the JSON evidence below. Do not invent facts, prices, targets, listing dates, valuations, future returns, "
@@ -298,3 +298,7 @@ def numeric(value) -> float:
         return float(value)
     except Exception:
         return 0.0
+
+
+def json_default(value) -> str:
+    return str(value)

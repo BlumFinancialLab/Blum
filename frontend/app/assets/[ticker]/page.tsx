@@ -1,4 +1,5 @@
 import { AssetDetailClient } from "./view";
+import { tickerFromAssetSlug, tickerToAssetSlug } from "@/lib/routes";
 
 const tickers = [
   "SPY", "QQQ", "IWM", "DIA", "SMH", "XLK", "XLF", "XLE", "XLV", "XAR", "BOTZ", "HACK", "ICLN", "TLT", "GLD",
@@ -7,9 +8,9 @@ const tickers = [
 ];
 
 export function generateStaticParams() {
-  return tickers.map((ticker) => ({ ticker }));
+  return tickers.map((ticker) => ({ ticker: tickerToAssetSlug(ticker) }));
 }
 
 export default function AssetDetailPage({ params }: { params: { ticker: string } }) {
-  return <AssetDetailClient ticker={params.ticker.toUpperCase()} />;
+  return <AssetDetailClient ticker={tickerFromAssetSlug(params.ticker)} />;
 }
