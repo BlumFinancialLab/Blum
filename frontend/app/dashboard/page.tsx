@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { DashboardOverview, LiveNewsArticle, MarketSentiment, PipelineStatus, SystemStatus } from "@/lib/types";
@@ -129,9 +130,30 @@ export default function DashboardPage() {
         <LiveNewsTape articles={liveNews} />
       </section>
 
-      <section className="grid-3" style={{ marginTop: 12 }}>
-        {data.todays_strongest_signals.slice(0, 6).map((signal) => <ScoreCard signal={signal} key={signal.ticker} />)}
-      </section>
+      {data.todays_strongest_signals.length ? (
+        <section className="grid-3" style={{ marginTop: 12 }}>
+          {data.todays_strongest_signals.slice(0, 6).map((signal) => <ScoreCard signal={signal} key={signal.ticker} />)}
+        </section>
+      ) : (
+        <section className="panel readiness-panel" style={{ marginTop: 12 }}>
+          <div className="panel-head"><span>Signal readiness</span><strong>No scored signals yet</strong></div>
+          <p>
+            The app is online, but the database does not yet contain enough real OHLCV, news, sentiment and indicator evidence to publish
+            a Blum Intelligence Score. This screen shows live worker state and stored public evidence without generated placeholders.
+          </p>
+          <div className="mini-metrics">
+            <div><span>OHLCV rows</span><strong>{data.readiness.price_row_count}</strong></div>
+            <div><span>News articles</span><strong>{data.readiness.news_article_count}</strong></div>
+            <div><span>Signals</span><strong>{data.readiness.signal_count}</strong></div>
+            <div><span>Live status</span><strong>{realtime.last_status}</strong></div>
+          </div>
+          <div className="control-row" style={{ marginTop: 12, marginBottom: 0 }}>
+            <button className="button primary" onClick={runPipeline} disabled={busy}>{busy ? "Running pipeline..." : "Hydrate real data"}</button>
+            <Link className="button" href="/stock-radar">Open Radar</Link>
+            <Link className="button" href="/market-brain">Open Market Brain</Link>
+          </div>
+        </section>
+      )}
 
       <section className="panel" style={{ marginTop: 12 }}>
         <div className="panel-head"><span>Data and model readiness</span><strong>{pipelineResult?.status ?? "live database state"}</strong></div>

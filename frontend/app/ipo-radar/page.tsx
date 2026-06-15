@@ -98,6 +98,16 @@ export default function IPORadarPage() {
         <Metric label="Top Score" value={radar.summary.top_opportunity_score.toFixed(1)} />
       </section>
 
+      {!radar.rows.length && (
+        <section className="panel readiness-panel" style={{ marginTop: 12 }}>
+          <div className="panel-head"><span>SEC readiness</span><strong>No IPO rows yet</strong></div>
+          <p>
+            IPO Radar only displays observed SEC filings and public pre-listing narratives. Refresh SEC filings to hydrate the table;
+            no listing dates, valuations or tickers are generated.
+          </p>
+        </section>
+      )}
+
       {updateResult && (
         <section className="panel" style={{ marginTop: 12 }}>
           <div className="panel-head"><span>SEC update diagnostics</span><strong>{updateResult.status}</strong></div>
@@ -135,6 +145,7 @@ export default function IPORadarPage() {
             marker: { color: "#ffb000" },
           }]}
           layout={{ xaxis: { range: [0, 100] } }}
+          emptyMessage="IPO opportunity scores appear after SEC filing rows are stored."
         />
         <PlotPanel
           title="Readiness vs Listing Probability"
@@ -147,6 +158,7 @@ export default function IPORadarPage() {
             marker: { size: plotted.map((row) => Math.max(9, row.score.opportunity_score / 5)), color: "#4dd8ff" },
           }]}
           layout={{ xaxis: { range: [0, 100], title: "Readiness" }, yaxis: { range: [0, 100], title: "Listing probability proxy" } }}
+          emptyMessage="Readiness/listing probability requires scored SEC filing evidence."
         />
       </section>
 

@@ -56,7 +56,8 @@ export default function StockRadarPage() {
     }
   };
 
-  const sectionRows = radar?.sections?.[selectedSection] ?? radar?.rows ?? [];
+  const selectedRows = radar?.sections?.[selectedSection] ?? [];
+  const sectionRows = selectedRows.length ? selectedRows : (radar?.summary.signal_count ? [] : radar?.data_gaps ?? radar?.rows ?? []);
   const rows = useMemo(() => {
     const query = search.trim().toLowerCase();
     return sectionRows.filter((row) =>
@@ -66,11 +67,14 @@ export default function StockRadarPage() {
     );
   }, [sectionRows, sector, priority, search]);
 
-  if (error) return <div className="empty-state">API error: {error}</div>;
-  if (!radar) return <LoadingState label="Loading Stock Radar" />;
+  if (!radar) {
+    if (error) return <div className="empty-state">API error: {error}</div>;
+    return <LoadingState label="Loading Stock Radar" />;
+  }
 
-  const sectors = Array.from(new Set(radar.rows.map((row) => row.asset.sector))).sort();
-  const priorities = Array.from(new Set(radar.rows.map((row) => row.research_priority))).sort();
+  const coverageRows = radar.rows.length ? radar.rows : radar.data_gaps;
+  const sectors = Array.from(new Set(coverageRows.map((row) => row.asset.sector))).sort();
+  const priorities = Array.from(new Set(coverageRows.map((row) => row.research_priority))).sort();
   const plotted = radar.rows.filter((row) => row.signal);
 
   return (
@@ -78,10 +82,17 @@ export default function StockRadarPage() {
       <div className="page-header">
         <div>
           <div className="kicker">Stock Radar</div>
-          <h1>Equity opportunity radar and signal triage.</h1>
+          <h1>Stock intelligence radar.</h1>
+          <p>Equity coverage, live evidence readiness and signal triage from verified public data.</p>
         </div>
-        <button className="button primary" onClick={runUpdate} disabled={busy}>{busy ? "Updating stock radar..." : "Run Stock Radar"}</button>
+        <div className="header-actions">
+          <Link className="button" href="/etf-radar">ETF Radar</Link>
+          <Link className="button" href="/ipo-radar">IPO Radar</Link>
+          <button className="button primary" onClick={runUpdate} disabled={busy}>{busy ? "Updating stock radar..." : "Run Stock Radar"}</button>
+        </div>
       </div>
+
+      {error && <div className="empty-state" style={{ marginBottom: 12 }}>API error: {error}</div>}
 
       <section className="grid-4">
         <Metric label="Stocks" value={radar.summary.stock_count} />
@@ -116,6 +127,22 @@ export default function StockRadarPage() {
         ))}
       </section>
 
+      {radar.status !== "ready" && (
+        <section className="panel readiness-panel" style={{ marginTop: 12 }}>
+          <div className="panel-head"><span>Evidence readiness</span><strong>{radar.status.replaceAll("_", " ")}</strong></div>
+          <p>
+            No scored stock signals are available yet. The cards below show the real asset universe and latest stored market status while
+            the backend hydrates prices, news, sentiment, embeddings and signal snapshots. No synthetic prices, headlines or scores are displayed.
+          </p>
+          <div className="mini-metrics">
+            <div><span>Missing signals</span><strong>{radar.summary.missing_signal_count}</strong></div>
+            <div><span>Priced names</span><strong>{radar.summary.priced_count}</strong></div>
+            <div><span>Positive 1D</span><strong>{radar.summary.positive_1d_count}</strong></div>
+            <div><span>Top score</span><strong>{radar.summary.top_score.toFixed(1)}</strong></div>
+          </div>
+        </section>
+      )}
+
       <section className="grid-3" style={{ marginTop: 12 }}>
         {rows.slice(0, 6).map((row) => <StockRadarCard row={row} key={`card-${row.ticker}`} />)}
       </section>
@@ -131,6 +158,7 @@ export default function StockRadarPage() {
             marker: { color: "#ffb000" },
           }]}
           layout={{ xaxis: { range: [0, 100] } }}
+          emptyMessage="Sector leadership appears after real signal snapshots are created."
         />
         <PlotPanel
           title="Momentum vs Sentiment"
@@ -143,6 +171,7 @@ export default function StockRadarPage() {
             marker: { size: plotted.map((row) => Math.max(9, (row.signal?.blum_score ?? 0) / 5)), color: "#4dd8ff" },
           }]}
           layout={{ xaxis: { range: [0, 100], title: "Momentum" }, yaxis: { range: [0, 100], title: "Sentiment" } }}
+          emptyMessage="Momentum and sentiment scatter requires priced assets, linked news and signal snapshots."
         />
       </section>
 
@@ -159,7 +188,10 @@ export default function StockRadarPage() {
             {priorities.map((item) => <option key={item}>{item}</option>)}
           </select>
         </div>
-        <StockRadarTable rows={rows} />
+        <StockRadarTable
+          rows={rows}
+          emptyMessage={radar.summary.signal_count ? "No stocks match the current radar filters or selected signal category." : "No scored stocks yet. Showing real coverage requires the pipeline to finish price, news and signal hydration."}
+        />
       </section>
     </>
   );
@@ -196,8 +228,8 @@ function StockRadarCard({ row }: { row: StockRadarRow }) {
   );
 }
 
-function StockRadarTable({ rows }: { rows: StockRadarRow[] }) {
-  if (!rows.length) return <div className="empty-state">No stocks match the current radar filters.</div>;
+function StockRadarTable({ rows, emptyMessage }: { rows: StockRadarRow[]; emptyMessage: string }) {
+  if (!rows.length) return <div className="empty-state">{emptyMessage}</div>;
   return (
     <div className="table-shell">
       <table className="intel-table">

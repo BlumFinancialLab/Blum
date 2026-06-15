@@ -3,22 +3,24 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Activity, BarChart3, Brain, Cpu, Database, FlaskConical, Gauge, Home, Network, Radar, Rocket, Search, ShieldAlert, TrendingUp } from "lucide-react";
+import { BarChart3, Brain, Cpu, Database, Gauge, Network, Radar, Search, ShieldAlert, type LucideIcon } from "lucide-react";
 import clsx from "clsx";
 import { api } from "@/lib/api";
 import { SystemStatus } from "@/lib/types";
 
-const nav = [
-  { href: "/", label: "Case Study", icon: Home },
-  { href: "/dashboard", label: "Intelligence Dashboard", icon: Gauge },
+type NavItem = {
+  href: string;
+  label: string;
+  icon: LucideIcon;
+  aliases?: string[];
+};
+
+const nav: NavItem[] = [
+  { href: "/", label: "Dashboard", icon: Gauge, aliases: ["/dashboard"] },
   { href: "/market-brain", label: "Market Brain", icon: Cpu },
-  { href: "/assets/NVDA", label: "Asset Detail", icon: Activity },
-  { href: "/stock-radar", label: "Stock Radar", icon: TrendingUp },
-  { href: "/etf-radar", label: "ETF Radar", icon: Radar },
-  { href: "/ipo-radar", label: "IPO Radar", icon: Rocket },
-  { href: "/themes", label: "Theme Explorer", icon: Network },
+  { href: "/stock-radar", label: "Radar", icon: Radar, aliases: ["/etf-radar", "/ipo-radar", "/assets"] },
+  { href: "/themes", label: "Themes", icon: Network },
   { href: "/signal-lab", label: "Signal Lab", icon: Search },
-  { href: "/backtest", label: "Backtest", icon: FlaskConical },
   { href: "/methodology", label: "Methodology", icon: Brain }
 ];
 
@@ -43,7 +45,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <nav>
           {nav.map((item) => {
             const Icon = item.icon;
-            const active = pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href));
+            const active = pathname === item.href || item.aliases?.some((alias) => pathname.startsWith(alias)) || (item.href !== "/" && pathname.startsWith(item.href));
             return (
               <Link href={item.href} key={item.href} className={clsx("nav-item", active && "active")}>
                 <Icon size={17} />
@@ -53,9 +55,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           })}
         </nav>
         <div className="system-card">
-          <div><Database size={15} /> v{systemStatus?.app_version ?? "loading"}</div>
-          <div><BarChart3 size={15} /> {systemStatus?.feature_set ?? "checking deployment"}</div>
-          <div><Cpu size={15} /> {systemStatus?.runtime_flags.financial_brain_model_enabled ? "Financial LLM active" : "Financial Brain fallback"}</div>
+          <div><Database size={15} /> Build v{systemStatus?.app_version ?? "loading"}</div>
+          <div><BarChart3 size={15} /> {systemStatus?.database_counts?.news_articles ?? 0} news | {systemStatus?.database_counts?.signals ?? 0} signals</div>
+          <div><Cpu size={15} /> {systemStatus?.runtime_flags.financial_brain_model_enabled ? "Finance LLM active" : "Evidence brain fallback"}</div>
           <div><ShieldAlert size={15} /> Research only</div>
         </div>
       </aside>

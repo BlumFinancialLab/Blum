@@ -5,7 +5,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
 async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
   if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText}`);
+    throw new Error(await responseError(response));
   }
   return response.json() as Promise<T>;
 }
@@ -17,9 +17,19 @@ async function postJson<T>(path: string, payload: unknown): Promise<T> {
     body: JSON.stringify(payload)
   });
   if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText}`);
+    throw new Error(await responseError(response));
   }
   return response.json() as Promise<T>;
+}
+
+async function responseError(response: Response) {
+  try {
+    const payload = await response.json();
+    const detail = typeof payload?.detail === "string" ? payload.detail : JSON.stringify(payload?.detail ?? payload);
+    return `${response.status} ${response.statusText}: ${detail}`;
+  } catch {
+    return `${response.status} ${response.statusText}`;
+  }
 }
 
 export const api = {

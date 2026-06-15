@@ -18,6 +18,15 @@ export default function EtfRadarPage() {
       <div className="page-header">
         <div><div className="kicker">ETF Radar</div><h1>ETF rotation and sector confirmation.</h1></div>
       </div>
+      {!rows.length && (
+        <section className="panel readiness-panel" style={{ marginBottom: 12 }}>
+          <div className="panel-head"><span>ETF readiness</span><strong>No ETF trends yet</strong></div>
+          <p>
+            ETF rotation appears after the real-data pipeline stores prices and signal context for ETF instruments.
+            No synthetic ETF confirmation scores are displayed.
+          </p>
+        </section>
+      )}
       <section className="grid-3" style={{ marginBottom: 12 }}>
         {rows.slice(0, 6).map((row) => (
           <article className="score-card" key={`etf-card-${row.ticker}-${row.created_at}`}>
@@ -46,15 +55,17 @@ export default function EtfRadarPage() {
           title="ETF Confirmation Ranking"
           data={[{ x: rows.map((r) => r.confirmation_score), y: rows.map((r) => r.ticker), type: "bar", orientation: "h", marker: { color: "#20e070" } }]}
           layout={{ xaxis: { range: [0, 100] } }}
+          emptyMessage="ETF confirmation ranking appears after ETF trend snapshots are available."
         />
         <PlotPanel
           title="Momentum vs Theme"
           data={[{ x: rows.map((r) => r.momentum_score), y: rows.map((r) => r.thematic_score), text: rows.map((r) => r.ticker), type: "scatter", mode: "markers+text", marker: { size: 13, color: "#ffb000" } }]}
+          emptyMessage="Momentum/theme scatter requires real ETF trend rows."
         />
       </section>
       <section className="panel" style={{ marginTop: 12 }}>
         <div className="panel-head"><span>ETF rotation leaders</span></div>
-        <div className="table-shell">
+        {rows.length ? <div className="table-shell">
           <table className="intel-table">
             <thead><tr><th>ETF</th><th>Price</th><th>Category</th><th>Momentum</th><th>Theme</th><th>Confirmation</th><th>Read-through</th></tr></thead>
             <tbody>
@@ -78,7 +89,7 @@ export default function EtfRadarPage() {
               ))}
             </tbody>
           </table>
-        </div>
+        </div> : <div className="empty-state">No ETF trend rows are available yet. Run the full pipeline from the dashboard.</div>}
       </section>
     </>
   );

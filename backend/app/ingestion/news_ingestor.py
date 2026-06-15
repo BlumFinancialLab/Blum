@@ -8,6 +8,7 @@ import re
 import feedparser
 import requests
 from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.ai.orchestrator import AIOrchestrator
@@ -56,41 +57,48 @@ class NewsIngestor:
         analyzed = 0
         duplicate = 0
         diagnostics: list[dict] = []
+        seen_urls: set[str] = set()
+        seen_keys: set[str] = set()
         cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
         fetched_items = self._fetch_sources_parallel(sources, cutoff, limit_per_feed)
         for diagnostic, items in fetched_items:
             diagnostics.append(diagnostic)
             for item in items:
                 canonical_key = item["canonical_key"]
+                url = item["url"]
+                if canonical_key in seen_keys or url in seen_urls:
+                    duplicate += 1
+                    continue
+                seen_keys.add(canonical_key)
+                seen_urls.add(url)
                 existing = db.scalar(
-                    select(NewsArticle).where(or_(NewsArticle.canonical_key == canonical_key, NewsArticle.url == item["url"]))
+                    select(NewsArticle).where(or_(NewsArticle.canonical_key == canonical_key, NewsArticle.url == url))
                 )
                 if existing:
                     duplicate += 1
+                    article_stats = self._ensure_article_intelligence(db, existing, assets)
+                    linked += article_stats["linked"]
+                    analyzed += article_stats["analyzed"]
                     continue
                 article = NewsArticle(**item)
-                db.add(article)
-                db.flush()
-                sentiment = self.ai.sentiment.analyze(f"{article.title}. {article.summary}")
-                db.add(
-                    SentimentAnalysis(
-                        article_id=article.id,
-                        model_name=sentiment["model_name"],
-                        label=sentiment["label"],
-                        score=sentiment["score"],
-                        confidence=sentiment["confidence"],
-                        baseline_vader=sentiment["baseline_vader"],
-                        raw_payload=sentiment,
+                created = True
+                try:
+                    with db.begin_nested():
+                        db.add(article)
+                        db.flush()
+                except IntegrityError:
+                    duplicate += 1
+                    created = False
+                    article = db.scalar(
+                        select(NewsArticle).where(or_(NewsArticle.canonical_key == canonical_key, NewsArticle.url == url))
                     )
-                )
-                analyzed += 1
-                vector = self.ai.embeddings.embed_text(f"{article.title}. {article.summary}")
-                if vector:
-                    db.add(EmbeddingVector(article_id=article.id, model_name=self.ai.embeddings.model_name, vector={"values": vector}))
-                for asset, relevance in self._match_assets(article, assets):
-                    db.add(NewsAssetLink(article_id=article.id, asset_id=asset.id, relevance_score=relevance))
-                    linked += 1
-                inserted += 1
+                    if not article:
+                        continue
+                article_stats = self._ensure_article_intelligence(db, article, assets)
+                linked += article_stats["linked"]
+                analyzed += article_stats["analyzed"]
+                if created:
+                    inserted += 1
         db.commit()
         source_errors = [item for item in diagnostics if item["status"] != "ok"]
         return {
@@ -171,6 +179,54 @@ class NewsIngestor:
             if score > 0:
                 matches.append((asset, score))
         return sorted(matches, key=lambda item: item[1], reverse=True)[:8]
+
+    def _ensure_article_intelligence(self, db: Session, article: NewsArticle, assets: list[Asset]) -> dict:
+        analyzed = 0
+        linked = 0
+        sentiment_exists = db.scalar(
+            select(SentimentAnalysis.id)
+            .where(SentimentAnalysis.article_id == article.id)
+            .limit(1)
+        )
+        if not sentiment_exists:
+            sentiment = self.ai.sentiment.analyze(f"{article.title}. {article.summary}")
+            db.add(
+                SentimentAnalysis(
+                    article_id=article.id,
+                    model_name=sentiment["model_name"],
+                    label=sentiment["label"],
+                    score=sentiment["score"],
+                    confidence=sentiment["confidence"],
+                    baseline_vader=sentiment["baseline_vader"],
+                    raw_payload=sentiment,
+                )
+            )
+            analyzed += 1
+        embedding_exists = db.scalar(
+            select(EmbeddingVector.id)
+            .where(EmbeddingVector.article_id == article.id, EmbeddingVector.model_name == self.ai.embeddings.model_name)
+            .limit(1)
+        )
+        if not embedding_exists:
+            vector = self.ai.embeddings.embed_text(f"{article.title}. {article.summary}")
+            if vector:
+                db.add(EmbeddingVector(article_id=article.id, model_name=self.ai.embeddings.model_name, vector={"values": vector}))
+        for asset, relevance in self._match_assets(article, assets):
+            link_exists = db.scalar(
+                select(NewsAssetLink.id)
+                .where(NewsAssetLink.article_id == article.id, NewsAssetLink.asset_id == asset.id)
+                .limit(1)
+            )
+            if link_exists:
+                continue
+            try:
+                with db.begin_nested():
+                    db.add(NewsAssetLink(article_id=article.id, asset_id=asset.id, relevance_score=relevance))
+                    db.flush()
+                linked += 1
+            except IntegrityError:
+                continue
+        return {"analyzed": analyzed, "linked": linked}
 
 
 def clean_text(value: str, limit: int) -> str:
