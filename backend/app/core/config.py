@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     app_name: str = "Blum AI Financial Intelligence"
-    app_version: str = "0.3.0"
+    app_version: str = "0.4.0"
     environment: str = Field(default="demo", alias="ENVIRONMENT")
     database_url: str = Field(
         default="postgresql+psycopg2://postgres:postgres@127.0.0.1:5432/blum",
@@ -23,10 +23,12 @@ class Settings(BaseSettings):
     startup_pipeline_limit: int = Field(default=36, alias="BLUM_STARTUP_PIPELINE_LIMIT")
     news_refresh_minutes: int = Field(default=10, alias="BLUM_NEWS_REFRESH_MINUTES")
     market_refresh_minutes: int = Field(default=45, alias="BLUM_MARKET_REFRESH_MINUTES")
+    ipo_refresh_minutes: int = Field(default=120, alias="BLUM_IPO_REFRESH_MINUTES")
     news_fetch_workers: int = Field(default=10, alias="BLUM_NEWS_FETCH_WORKERS")
     max_dynamic_asset_news_feeds: int = Field(default=36, alias="BLUM_MAX_DYNAMIC_ASSET_NEWS_FEEDS")
     historical_price_period: str = Field(default="max", alias="BLUM_HISTORICAL_PRICE_PERIOD")
     refresh_price_period: str = Field(default="6mo", alias="BLUM_REFRESH_PRICE_PERIOD")
+    sec_user_agent: str = Field(default="Blum-AI-Financial-Intelligence research demo", alias="BLUM_SEC_USER_AGENT")
 
     class Config:
         env_file = ".env"

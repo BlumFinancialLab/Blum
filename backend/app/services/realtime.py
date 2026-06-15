@@ -10,6 +10,7 @@ from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.ingestion.news_ingestor import NewsIngestor
 from app.services.etf import update_etf_trends
+from app.services.ipo import update_ipo_radar
 from app.services.market_data import MarketDataService
 from app.services.pipeline import PipelineService
 from app.signals.engine import SignalEngine
@@ -39,6 +40,7 @@ def start_realtime_services() -> None:
         threading.Thread(target=run_startup_pipeline, daemon=True).start()
     _scheduler.add_job(run_news_refresh, "interval", minutes=settings.news_refresh_minutes, id="news_refresh", replace_existing=True, max_instances=1)
     _scheduler.add_job(run_market_refresh, "interval", minutes=settings.market_refresh_minutes, id="market_refresh", replace_existing=True, max_instances=1)
+    _scheduler.add_job(run_ipo_refresh, "interval", minutes=settings.ipo_refresh_minutes, id="ipo_refresh", replace_existing=True, max_instances=1)
     _scheduler.start()
     with _state_lock:
         _state["started"] = True
@@ -75,6 +77,13 @@ def run_market_refresh() -> None:
         return {"market_update": market, "signal_run": signals, "etf_update": etf}
 
     _run_job("market_refresh", work)
+
+
+def run_ipo_refresh() -> None:
+    def work(db):
+        return update_ipo_radar(db, limit_per_form=45)
+
+    _run_job("ipo_refresh", work)
 
 
 def _run_job(job_name: str, work):

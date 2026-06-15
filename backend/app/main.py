@@ -21,7 +21,8 @@ app = FastAPI(
     version=settings.app_version,
     description=(
         "Open-source AI financial intelligence backend for equities, ETFs, "
-        "semantic news analysis, signal scoring, explainability and validation."
+        "semantic news analysis, filing intelligence, Market Brain orchestration, "
+        "signal scoring, explainability and validation."
     ),
 )
 

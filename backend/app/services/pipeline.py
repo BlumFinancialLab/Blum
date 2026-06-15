@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.ingestion.news_ingestor import NewsIngestor
 from app.models import NewsArticle, PriceHistory, SignalSnapshot
 from app.services.etf import update_etf_trends
+from app.services.ipo import update_ipo_radar
 from app.services.market_data import MarketDataService
 from app.signals.engine import SignalEngine
 
@@ -18,12 +19,14 @@ class PipelineService:
         market = MarketDataService().update_prices(db, tickers=tickers, period=period, limit=limit)
         signals = SignalEngine().run(db, tickers=tickers, limit=limit)
         etf = update_etf_trends(db)
+        ipo = update_ipo_radar(db, limit_per_form=35)
         readiness = pipeline_readiness(db)
         return {
             "market_update": market,
             "news_update": news,
             "signal_run": signals,
             "etf_update": etf,
+            "ipo_update": ipo,
             "readiness": readiness,
             "status": "ready" if readiness["signal_count"] > 0 else "incomplete",
             "message": pipeline_message(readiness, market),

@@ -12,7 +12,9 @@ from app.models import AIInsight, Asset, NewsArticle, NewsAssetLink, PriceHistor
 from app.schemas import AssetOut, MarketUpdateRequest, NewsOut, NewsUpdateRequest, SemanticSearchRequest, SignalRunRequest
 from app.services.dashboard import dashboard_overview, signal_payload
 from app.services.etf import list_etf_trends, update_etf_trends
+from app.services.ipo import ipo_radar, update_ipo_radar
 from app.services.live import live_news, market_sentiment
+from app.services.market_brain import build_market_brain, latest_market_brain
 from app.services.market_data import MarketDataService, market_snapshot_for_asset
 from app.services.pipeline import PipelineService
 from app.services.realtime import realtime_status
@@ -203,6 +205,42 @@ def stock_radar_endpoint(limit: int = Query(default=80, ge=1, le=120), db: Sessi
 @router.post("/stock-radar/update")
 def stock_radar_update(limit: int = Query(default=36, ge=1, le=80), db: Session = Depends(get_db)):
     return update_stock_radar(db, limit=limit)
+
+
+@router.get("/ipo-radar")
+def ipo_radar_endpoint(limit: int = Query(default=80, ge=1, le=160), db: Session = Depends(get_db)):
+    return ipo_radar(db, limit=limit)
+
+
+@router.post("/ipo-radar/update")
+def ipo_radar_update(limit_per_form: int = Query(default=50, ge=10, le=120), db: Session = Depends(get_db)):
+    return update_ipo_radar(db, limit_per_form=limit_per_form)
+
+
+@router.get("/market-brain")
+def market_brain_endpoint(db: Session = Depends(get_db)):
+    return build_market_brain(db, persist=False)
+
+
+@router.get("/market-brain/latest")
+def market_brain_latest_endpoint(db: Session = Depends(get_db)):
+    return latest_market_brain(db)
+
+
+@router.post("/market-brain/run")
+def market_brain_run(
+    refresh_pipeline: bool = Query(default=False),
+    refresh_sec: bool = Query(default=True),
+    db: Session = Depends(get_db),
+):
+    updates = {}
+    if refresh_pipeline:
+        updates["pipeline"] = PipelineService().run(db, limit=settings.startup_pipeline_limit, period=settings.historical_price_period)
+    elif refresh_sec:
+        updates["ipo_update"] = update_ipo_radar(db, limit_per_form=50)
+    brain = build_market_brain(db, persist=True)
+    brain["update_diagnostics"] = updates
+    return brain
 
 
 @router.get("/dashboard/overview")

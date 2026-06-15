@@ -198,3 +198,86 @@ class BacktestResult(Base):
     results: Mapped[dict] = mapped_column(JsonType, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
+
+class IPOCompany(Base):
+    __tablename__ = "ipo_companies"
+    __table_args__ = (
+        UniqueConstraint("cik", "name", name="uq_ipo_company_cik_name"),
+        Index("ix_ipo_companies_last_seen", "last_seen_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    cik: Mapped[str | None] = mapped_column(String(20), index=True)
+    name: Mapped[str] = mapped_column(String(260), index=True)
+    ticker: Mapped[str | None] = mapped_column(String(32), index=True)
+    exchange: Mapped[str | None] = mapped_column(String(80), index=True)
+    country: Mapped[str] = mapped_column(String(80), default="Unknown", index=True)
+    sector: Mapped[str] = mapped_column(String(120), default="Unknown", index=True)
+    industry: Mapped[str] = mapped_column(String(160), default="Unknown")
+    status: Mapped[str] = mapped_column(String(80), default="filing_observed", index=True)
+    company_metadata: Mapped[dict] = mapped_column(JsonType, default=dict)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    filings = relationship("IPOFiling", back_populates="company", cascade="all, delete-orphan")
+    scores = relationship("IPOScore", back_populates="company", cascade="all, delete-orphan")
+
+
+class IPOFiling(Base):
+    __tablename__ = "ipo_filings"
+    __table_args__ = (
+        UniqueConstraint("accession_number", name="uq_ipo_filing_accession"),
+        Index("ix_ipo_filings_company_form_date", "company_id", "form_type", "filing_date"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("ipo_companies.id", ondelete="CASCADE"), index=True)
+    cik: Mapped[str | None] = mapped_column(String(20), index=True)
+    company_name: Mapped[str] = mapped_column(String(260), index=True)
+    form_type: Mapped[str] = mapped_column(String(40), index=True)
+    filing_date: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    title: Mapped[str] = mapped_column(Text)
+    url: Mapped[str] = mapped_column(Text)
+    accession_number: Mapped[str] = mapped_column(String(80), index=True)
+    source: Mapped[str] = mapped_column(String(120), default="SEC EDGAR", index=True)
+    raw_payload: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    company = relationship("IPOCompany", back_populates="filings")
+    scores = relationship("IPOScore", back_populates="filing")
+
+
+class IPOScore(Base):
+    __tablename__ = "ipo_scores"
+    __table_args__ = (Index("ix_ipo_scores_company_created", "company_id", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("ipo_companies.id", ondelete="CASCADE"), index=True)
+    filing_id: Mapped[int | None] = mapped_column(ForeignKey("ipo_filings.id", ondelete="SET NULL"), index=True)
+    readiness_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    listing_probability_score: Mapped[float] = mapped_column(Float, default=0.0)
+    narrative_heat_score: Mapped[float] = mapped_column(Float, default=0.0)
+    valuation_risk_score: Mapped[float] = mapped_column(Float, default=0.0)
+    quality_score: Mapped[float] = mapped_column(Float, default=0.0)
+    opportunity_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    classification: Mapped[str] = mapped_column(String(80), index=True)
+    time_horizon: Mapped[str] = mapped_column(String(80), default="IPO watch")
+    evidence: Mapped[dict] = mapped_column(JsonType, default=dict)
+    explanation: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    company = relationship("IPOCompany", back_populates="scores")
+    filing = relationship("IPOFiling", back_populates="scores")
+
+
+class MarketBrainSnapshot(Base):
+    __tablename__ = "market_brain_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    brain_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    regime: Mapped[str] = mapped_column(String(120), index=True)
+    horizon: Mapped[str] = mapped_column(String(80), default="Multi-horizon")
+    summary: Mapped[str] = mapped_column(Text, default="")
+    structured_output: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)

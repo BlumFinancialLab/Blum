@@ -25,6 +25,7 @@ This is not a consumer trading app and not a simple dashboard. The project is a 
 | Database | PostgreSQL, SQLAlchemy, Alembic |
 | Market data | yfinance, Yahoo Chart API and Stooq provider chain |
 | News ingestion | RSS feeds, public web-search RSS, deduplication, ticker linking |
+| Filing intelligence | SEC EDGAR current filing feeds for S-1, F-1 and 424B prospectus forms |
 | AI sentiment | FinBERT primary, VADER baseline |
 | Semantic layer | sentence-transformers embeddings, semantic search, theme discovery |
 | Reasoning | lightweight Qwen-compatible LLM evidence-only explanation layer |
@@ -55,7 +56,10 @@ Blum does not use one generic AI model for everything.
 9. Generate embeddings for semantic retrieval.
 10. Compute technical indicators and time-series anomalies.
 11. Generate signal snapshots with a Blum Intelligence Score.
-12. Produce AI explanations using only retrieved evidence.
+12. Scan SEC EDGAR current filings for IPO and final prospectus evidence.
+13. Score IPO/pre-listing candidates through a separate readiness, probability, narrative and risk model.
+14. Build a Market Brain snapshot that combines stocks, ETFs, news, sentiment, IPO evidence, scenarios and risk alerts.
+15. Produce AI explanations using only retrieved evidence.
 
 ## Live Runtime
 
@@ -64,10 +68,40 @@ When the FastAPI application starts, APScheduler launches a background intellige
 - `startup_pipeline`: news ingestion, historical price collection, signal generation and ETF trend update.
 - `news_refresh`: public news refresh every 10 minutes by default.
 - `market_refresh`: recent OHLCV refresh and signal regeneration every 45 minutes by default.
+- `ipo_refresh`: SEC current filing refresh every 120 minutes by default.
 
 The dashboard polls live JSON endpoints every 30 seconds and shows worker state, latest public news, sentiment distribution, source/model diagnostics and signal readiness. No generated headlines, generated prices or fabricated sentiment are shown.
 
 Every equity and ETF surface includes an explicit market snapshot when real OHLCV data is available: last price, currency, date, provider, volume and 1D/5D/1M performance. If public providers have not returned usable prices yet, the UI shows a real-data pending state instead of a fabricated value.
+
+## Market Brain
+
+The Market Brain is Blum's high-level reasoning orchestrator. It is not a single model that invents an answer. It combines:
+
+- latest stock signal snapshots;
+- ETF rotation and thematic confirmation;
+- market-wide FinBERT/VADER sentiment records;
+- live public news intensity;
+- stored OHLCV-derived trend and risk metrics;
+- SEC IPO/pre-listing filing evidence;
+- explicit evidence gaps and source diagnostics.
+
+The output includes current regime, forward scenarios, opportunity stack, risk alerts, model stack and an evidence ledger. It is a research-priority engine, not a recommendation system.
+
+## IPO And Pre-Listing Intelligence
+
+IPO Radar scans SEC EDGAR current filing feeds for `S-1`, `S-1/A`, `F-1`, `F-1/A`, `424B1` and `424B4` forms. It also surfaces stored public news narratives that mention IPOs, listings, prospectuses, market debuts and SPACs.
+
+The IPO score separates:
+
+- readiness score;
+- listing probability proxy;
+- narrative heat;
+- filing quality;
+- valuation or risk-term pressure;
+- final opportunity score.
+
+No listing date, valuation, ticker or private-company claim is fabricated. Empty radar sections mean no public evidence has been stored yet.
 
 ## Signal Methodology
 
@@ -115,6 +149,11 @@ FastAPI exposes clean JSON endpoints:
 - `GET /etf-trends`
 - `GET /stock-radar`
 - `POST /stock-radar/update`
+- `GET /ipo-radar`
+- `POST /ipo-radar/update`
+- `GET /market-brain`
+- `GET /market-brain/latest`
+- `POST /market-brain/run`
 - `GET /dashboard/overview`
 - `GET /ai/explain/{ticker}`
 - `POST /backtest/{ticker}`
@@ -127,9 +166,11 @@ Interactive API docs are available at `/docs`.
 
 - Case Study Home
 - Intelligence Dashboard
+- Market Brain
 - Asset Detail
 - Stock Radar
 - ETF Radar
+- IPO Radar
 - Theme Explorer
 - Signal Lab
 - Backtest
@@ -187,6 +228,7 @@ Backtesting is included for research validation only. It reports historical hit 
 ## Limitations
 
 - Public RSS, Google News RSS search, Yahoo and Stooq are demo-grade public data sources, not licensed institutional feeds.
+- SEC EDGAR current feeds are public filing evidence. They do not cover private-company rumor, expected listings without filings or licensed IPO calendars.
 - The system does not generate synthetic prices. If public providers fail or rate-limit, the affected assets are reported as missing instead of being filled with fake data.
 - FinBERT, embeddings and LLM model loading depend on runtime memory and Hugging Face model availability.
 - The reasoning layer must not invent data; it is constrained to retrieved evidence.

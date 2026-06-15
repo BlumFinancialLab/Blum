@@ -161,6 +161,104 @@ export type StockRadar = {
   data_gaps: StockRadarRow[];
 };
 
+export type IPORadarRow = {
+  company: {
+    id: number;
+    name: string;
+    cik?: string | null;
+    ticker?: string | null;
+    exchange?: string | null;
+    country: string;
+    sector: string;
+    industry: string;
+    status: string;
+    metadata: Record<string, any>;
+    first_seen_at: string;
+    last_seen_at: string;
+  };
+  latest_filing: {
+    form_type: string;
+    filing_date: string | null;
+    title: string;
+    url: string;
+    accession_number: string;
+    source: string;
+  } | null;
+  score: {
+    readiness_score: number;
+    listing_probability_score: number;
+    narrative_heat_score: number;
+    valuation_risk_score: number;
+    quality_score: number;
+    opportunity_score: number;
+    classification: string;
+    time_horizon: string;
+    evidence: Record<string, any>;
+    explanation: string;
+    created_at: string;
+  };
+};
+
+export type IPORadar = {
+  status: string;
+  data_mode: string;
+  summary: {
+    companies_observed: number;
+    filings_observed: number;
+    scored_companies: number;
+    avg_opportunity_score: number;
+    top_opportunity_score: number;
+    final_prospectus_count: number;
+    advanced_filing_count: number;
+    narrative_watch_count: number;
+    latest_filing_at: string | null;
+  };
+  sections: Record<string, IPORadarRow[]>;
+  rows: IPORadarRow[];
+  prelisting_narratives: RelatedNews[];
+  source_diagnostics: Record<string, any>;
+};
+
+export type MarketBrain = {
+  run_id: string;
+  created_at: string;
+  data_mode: string;
+  brain_score: number;
+  regime: string;
+  horizon: string;
+  summary: string;
+  market_now: {
+    average_sentiment: number;
+    news_count_48h: number;
+    signal_count: number;
+    asset_count: number;
+    classification_mix: Record<string, number>;
+    top_themes: Array<{ theme: string; headline_count: number; avg_sentiment: number }>;
+    top_live_news: LiveNewsArticle[];
+  };
+  opportunity_stack: {
+    stock_research_priorities: any[];
+    etf_rotation_leaders: any[];
+    ipo_watch: any[];
+    narrative_breakouts: any[];
+    technical_breakouts: any[];
+    sentiment_divergence: any[];
+  };
+  forward_scenarios: Array<{
+    name: string;
+    probability_proxy: number;
+    time_horizon: string;
+    drivers: string[];
+    watch_points: string[];
+    evidence: Record<string, any>;
+  }>;
+  risk_alerts: Array<{ severity: string; title: string; detail: string; tickers: string[] }>;
+  evidence_ledger: Record<string, number | string>;
+  model_stack: Record<string, string>;
+  disclaimer: string;
+  update_diagnostics?: Record<string, any>;
+};
+
 export type PricePoint = {
   date: string;
   open?: number;

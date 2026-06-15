@@ -1,4 +1,4 @@
-import { Asset, DashboardOverview, LiveNewsArticle, MarketSentiment, PipelineStatus, RelatedNews, Signal, StockRadar } from "./types";
+import { Asset, DashboardOverview, IPORadar, LiveNewsArticle, MarketBrain, MarketSentiment, PipelineStatus, RelatedNews, Signal, StockRadar } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
 
@@ -38,6 +38,10 @@ export const api = {
   etfTrends: () => getJson<any[]>("/etf-trends"),
   stockRadar: (limit = 80) => getJson<StockRadar>(`/stock-radar?limit=${limit}`),
   updateStockRadar: (limit = 36) => postJson<any>(`/stock-radar/update?limit=${limit}`, {}),
+  ipoRadar: (limit = 80) => getJson<IPORadar>(`/ipo-radar?limit=${limit}`),
+  updateIpoRadar: (limitPerForm = 50) => postJson<any>(`/ipo-radar/update?limit_per_form=${limitPerForm}`, {}),
+  marketBrain: () => getJson<MarketBrain>("/market-brain"),
+  runMarketBrain: (refreshPipeline = false) => postJson<MarketBrain>(`/market-brain/run?refresh_pipeline=${refreshPipeline ? "true" : "false"}&refresh_sec=true`, {}),
   semanticSearch: (query: string) => postJson<any[]>("/semantic-search", { query, limit: 12 }),
   marketUpdate: () => postJson("/market/update", { period: "max", limit: 36 }),
   newsUpdate: () => postJson("/news/update", { lookback_hours: 72, limit_per_feed: 35 }),

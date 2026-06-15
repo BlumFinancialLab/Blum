@@ -2,17 +2,21 @@
 
 This roadmap is the execution plan for turning Blum into a credible open-source AI financial intelligence platform. Each phase should ship with working code, API coverage, UI coverage, documentation and explicit limitations.
 
-## Current Increment - Live Intelligence Runtime
+## Current Increment - Market Brain And IPO Intelligence
 
 Shipped in the current architecture:
 
 - FastAPI startup launches a background APScheduler worker.
 - Startup pipeline ingests public news first, then historical OHLCV, signals and ETF trends.
+- Startup pipeline also scans SEC current filing feeds for IPO and prospectus evidence.
 - Public news ingestion combines publisher RSS feeds, thematic Google News RSS queries and asset-specific public web-search RSS queries.
 - `/news/live`, `/sentiment/market` and `/pipeline/status` expose live news, market sentiment and worker state.
 - Dashboard polls live endpoints every 30 seconds and surfaces news tape, sentiment mix, source/model state and signal readiness.
 - Price pipeline remains real-data-only through yfinance, Yahoo Chart API and Stooq; no synthetic OHLCV fallback is allowed.
 - Stock Radar is now a first-class research surface with dedicated API, on-demand stock hydration, sector leadership, factor views, research priorities and real market snapshots.
+- IPO Radar is now a first-class primary-market research surface using SEC EDGAR current filing feeds for S-1, F-1 and 424B prospectus forms.
+- Market Brain is now the top-level orchestration layer combining stock signals, ETF rotation, market sentiment, public news, IPO evidence, forward scenarios, risk alerts and an evidence ledger.
+- `/market-brain`, `/market-brain/run`, `/ipo-radar` and `/ipo-radar/update` expose the new intelligence layer through documented JSON APIs.
 
 ## Phase 0 - Stabilize Docker Space Deployment
 
@@ -193,6 +197,27 @@ Exit criteria:
 
 - New providers can be added without changing signal code.
 - Provider status appears in API and UI.
+
+## Phase 8A - Market Brain Deepening
+
+Goal: evolve the Market Brain from orchestration layer into a persistent analytical operating system.
+
+Deliverables:
+
+- Persist scenario history and compare regime transitions over time.
+- Add per-scenario evidence weights and confidence bands.
+- Add an event graph linking filings, news, ETFs, sectors and assets.
+- Add SEC company-submissions enrichment from `data.sec.gov` for deeper issuer filing history.
+- Add exchange calendars, IPO calendars where public and legally accessible, and explicit source status.
+- Add private-company watch narratives from public news only, clearly separated from SEC filing evidence.
+- Add automatic contradiction detection between price, sentiment, filings and ETF confirmation.
+- Add a Market Brain changelog that explains why the regime changed.
+
+Exit criteria:
+
+- The user can open Market Brain and understand what changed since the previous run.
+- Every forward scenario has traceable source evidence and confidence drivers.
+- IPO/pre-listing watch separates observed filings, public news narratives and unavailable evidence.
 
 ## Phase 9 - Testing, Observability And Quality
 

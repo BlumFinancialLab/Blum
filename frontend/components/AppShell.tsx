@@ -2,15 +2,17 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Activity, BarChart3, Brain, Database, FlaskConical, Gauge, Home, Network, Radar, Search, ShieldAlert, TrendingUp } from "lucide-react";
+import { Activity, BarChart3, Brain, Cpu, Database, FlaskConical, Gauge, Home, Network, Radar, Rocket, Search, ShieldAlert, TrendingUp } from "lucide-react";
 import clsx from "clsx";
 
 const nav = [
   { href: "/", label: "Case Study", icon: Home },
   { href: "/dashboard", label: "Intelligence Dashboard", icon: Gauge },
+  { href: "/market-brain", label: "Market Brain", icon: Cpu },
   { href: "/assets/NVDA", label: "Asset Detail", icon: Activity },
   { href: "/stock-radar", label: "Stock Radar", icon: TrendingUp },
   { href: "/etf-radar", label: "ETF Radar", icon: Radar },
+  { href: "/ipo-radar", label: "IPO Radar", icon: Rocket },
   { href: "/themes", label: "Theme Explorer", icon: Network },
   { href: "/signal-lab", label: "Signal Lab", icon: Search },
   { href: "/backtest", label: "Backtest", icon: FlaskConical },
