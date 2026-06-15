@@ -16,6 +16,11 @@ Shipped in the current architecture:
 - Stock Radar is now a first-class research surface with dedicated API, on-demand stock hydration, sector leadership, factor views, research priorities and real market snapshots.
 - IPO Radar is now a first-class primary-market research surface using SEC EDGAR current filing feeds for S-1, F-1 and 424B prospectus forms.
 - Market Brain is now the top-level orchestration layer combining stock signals, ETF rotation, market sentiment, public news, IPO evidence, forward scenarios, risk alerts and an evidence ledger.
+- Market Brain now persists snapshot history, produces a changelog against the prior run, detects price/news/risk contradictions and emits an event graph linking themes, assets, ETFs, IPO candidates and live news.
+- IPO Radar now supports official `data.sec.gov` company submissions enrichment by CIK, with optional persistence of additional IPO-related filings.
+- Theme Explorer now supports theme detail with article list, source mix, linked assets and sentiment.
+- The signal engine now records score version, confidence score and lifecycle state for every signal snapshot.
+- `/ai/models/status` exposes configured models, observed model records and fallback policy.
 - `/market-brain`, `/market-brain/run`, `/ipo-radar` and `/ipo-radar/update` expose the new intelligence layer through documented JSON APIs.
 
 ## Phase 0 - Stabilize Docker Space Deployment

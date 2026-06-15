@@ -190,7 +190,7 @@ function StockRadarCard({ row }: { row: StockRadarRow }) {
         <div><span>Trend</span><strong>{factor(row, "trend")}</strong></div>
         <div><span>Momentum</span><strong>{factor(row, "momentum")}</strong></div>
         <div><span>Sentiment</span><strong>{factor(row, "sentiment")}</strong></div>
-        <div><span>Volume</span><strong>{formatVolume(row.market_snapshot.volume)}</strong></div>
+        <div><span>Confidence</span><strong>{row.signal?.confidence_score?.toFixed(0) ?? "n/a"}</strong></div>
       </div>
     </article>
   );
@@ -229,7 +229,8 @@ function StockRadarTable({ rows }: { rows: StockRadarRow[] }) {
               <td><span className="metric-pill">{row.research_priority}</span></td>
               <td>
                 {row.signal ? <StatusBadge label={row.signal.classification} /> : <StatusBadge label="Insufficient Evidence" />}
-                <span>Score {row.signal?.blum_score?.toFixed(1) ?? "n/a"} | {row.signal?.risk_level ?? "Not rated"}</span>
+                <span>Score {row.signal?.blum_score?.toFixed(1) ?? "n/a"} | conf {row.signal?.confidence_score?.toFixed(0) ?? "n/a"} | {row.signal?.risk_level ?? "Not rated"}</span>
+                <span>{row.signal?.lifecycle_state ?? "no lifecycle"} | {row.signal?.score_version ?? "no score version"}</span>
               </td>
               <td>
                 <span>Mom {factor(row, "momentum")} | Trend {factor(row, "trend")}</span>

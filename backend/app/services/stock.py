@@ -103,6 +103,9 @@ def stock_row(db: Session, asset: Asset, signal: SignalSnapshot | None) -> dict:
             "blum_score": signal.blum_score,
             "risk_level": signal.risk_level,
             "time_horizon": signal.time_horizon,
+            "score_version": signal.score_version,
+            "confidence_score": signal.confidence_score,
+            "lifecycle_state": signal.lifecycle_state,
             "score_breakdown": breakdown,
             "created_at": signal.created_at,
         },
@@ -217,6 +220,12 @@ def research_priority(signal: SignalSnapshot, snapshot: dict) -> str:
         return "Data Watch"
     if signal.risk_level == "High" and score >= 70:
         return "Risk Review"
+    if signal.lifecycle_state == "confirmed" and score >= 70:
+        return "Confirmed Priority"
+    if signal.lifecycle_state == "faded":
+        return "Fade Watch"
+    if signal.lifecycle_state == "invalidated":
+        return "Invalidated"
     if score >= 78:
         return "Priority A"
     if score >= 65:
@@ -227,7 +236,11 @@ def research_priority(signal: SignalSnapshot, snapshot: dict) -> str:
 
 
 def radar_tags(signal: SignalSnapshot, technical: dict, narrative: dict) -> list[str]:
-    tags = [signal.classification, signal.risk_level]
+    tags = [signal.classification, signal.risk_level, signal.lifecycle_state]
+    if signal.confidence_score >= 70:
+        tags.append("High Confidence")
+    if signal.confidence_score < 45:
+        tags.append("Low Confidence")
     if technical.get("above_sma20") and technical.get("above_sma50"):
         tags.append("Trend Confirmed")
     if technical.get("above_sma200"):

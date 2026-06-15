@@ -13,6 +13,7 @@ export function SignalTable({ signals }: { signals: Signal[] }) {
             <th>Asset</th>
             <th>Market</th>
             <th>Score</th>
+            <th>Confidence</th>
             <th>Classification</th>
             <th>Risk</th>
             <th>Momentum</th>
@@ -35,8 +36,12 @@ export function SignalTable({ signals }: { signals: Signal[] }) {
                 <span>{signal.market_snapshot?.provider ?? "provider n/a"} | vol {formatVolume(signal.market_snapshot?.volume)}</span>
               </td>
               <td><strong className="score-number">{signal.blum_score.toFixed(1)}</strong></td>
+              <td>
+                <span className="metric-pill">{Number(signal.confidence_score ?? 0).toFixed(0)}</span>
+                <span>{signal.lifecycle_state ?? "active"}</span>
+              </td>
               <td><StatusBadge label={signal.classification} /></td>
-              <td>{signal.risk_level}</td>
+              <td>{signal.risk_level}<span>{signal.score_version ?? "blum-score"}</span></td>
               <td>{metric(signal, "momentum_score")}</td>
               <td>{metric(signal, "trend_score")}</td>
               <td>{metric(signal, "sentiment_score")}</td>

@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from sklearn.cluster import KMeans
 
 from app.ai.orchestrator import AIOrchestrator
-from app.models import EmbeddingVector, NewsArticle, ThemeCluster
+from app.models import Asset, EmbeddingVector, NewsArticle, NewsAssetLink, SentimentAnalysis, ThemeCluster
 
 
 class SemanticService:
@@ -78,6 +78,67 @@ class SemanticService:
             for label, value in sorted(clusters.items(), key=lambda item: item[1]["articles"], reverse=True)
         ]
 
+    def theme_detail(self, db: Session, label: str, limit: int = 60) -> dict:
+        normalized = label.strip().lower()
+        articles = db.scalars(select(NewsArticle).order_by(desc(NewsArticle.published_at), desc(NewsArticle.created_at)).limit(700)).all()
+        matched = [
+            article for article in articles
+            if normalized in [str(theme).lower() for theme in article.theme_tags.get("themes", [])]
+            or normalized in article.title.lower()
+            or normalized in article.summary.lower()
+        ][:limit]
+        article_ids = [article.id for article in matched]
+        sentiments = []
+        links_by_article: dict[int, list[dict]] = {}
+        if article_ids:
+            sentiments = db.scalars(
+                select(SentimentAnalysis)
+                .where(SentimentAnalysis.article_id.in_(article_ids))
+                .order_by(desc(SentimentAnalysis.created_at))
+            ).all()
+            link_rows = db.execute(
+                select(NewsAssetLink.article_id, Asset.ticker, Asset.name, Asset.sector, NewsAssetLink.relevance_score)
+                .join(Asset, Asset.id == NewsAssetLink.asset_id)
+                .where(NewsAssetLink.article_id.in_(article_ids))
+            ).all()
+            for article_id, ticker, name, sector, relevance in link_rows:
+                links_by_article.setdefault(article_id, []).append(
+                    {"ticker": ticker, "name": name, "sector": sector, "relevance_score": relevance}
+                )
+        sentiment_by_article = {}
+        for sentiment in sentiments:
+            sentiment_by_article.setdefault(sentiment.article_id, sentiment)
+        scores = [float(sentiment.score) for sentiment in sentiments]
+        source_counts: dict[str, int] = {}
+        asset_counts: dict[str, dict] = {}
+        for article in matched:
+            source_counts[article.source] = source_counts.get(article.source, 0) + 1
+            for asset in links_by_article.get(article.id, []):
+                item = asset_counts.setdefault(asset["ticker"], {"ticker": asset["ticker"], "name": asset["name"], "sector": asset["sector"], "mentions": 0})
+                item["mentions"] += 1
+        return {
+            "label": label,
+            "article_count": len(matched),
+            "average_sentiment": round(sum(scores) / len(scores), 4) if scores else 0,
+            "source_mix": sorted([{"source": source, "count": count} for source, count in source_counts.items()], key=lambda item: item["count"], reverse=True),
+            "linked_assets": sorted(asset_counts.values(), key=lambda item: item["mentions"], reverse=True)[:20],
+            "articles": [
+                {
+                    "id": article.id,
+                    "title": article.title,
+                    "summary": article.summary,
+                    "source": article.source,
+                    "url": article.url,
+                    "published_at": article.published_at,
+                    "quality_score": article.quality_score,
+                    "theme_tags": article.theme_tags,
+                    "sentiment": sentiment_payload(sentiment_by_article.get(article.id)),
+                    "linked_assets": links_by_article.get(article.id, [])[:8],
+                }
+                for article in matched
+            ],
+        }
+
 
 def semantic_clusters(rows, vectors: list[list[float]]) -> list[dict]:
     import numpy as np
@@ -116,3 +177,15 @@ def semantic_clusters(rows, vectors: list[list[float]]) -> list[dict]:
             }
         )
     return sorted(output, key=lambda item: item["article_count"], reverse=True)
+
+
+def sentiment_payload(row: SentimentAnalysis | None) -> dict | None:
+    if row is None:
+        return None
+    return {
+        "model_name": row.model_name,
+        "label": row.label,
+        "score": row.score,
+        "confidence": row.confidence,
+        "baseline_vader": row.baseline_vader,
+    }

@@ -19,7 +19,9 @@ settings = get_settings()
 
 SEC_CURRENT_FORMS = ["S-1", "S-1/A", "F-1", "F-1/A", "424B1", "424B4"]
 SEC_CURRENT_URL = "https://www.sec.gov/cgi-bin/browse-edgar"
+SEC_SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
 SEC_SOURCE = "SEC EDGAR current filings"
+SEC_SUBMISSIONS_SOURCE = "SEC EDGAR company submissions API"
 IPO_NEWS_KEYWORDS = [
     "ipo",
     "initial public offering",
@@ -170,6 +172,150 @@ def ipo_radar(db: Session, limit: int = 80) -> dict:
             "data_policy": "No synthetic IPO candidates are generated. Empty sections mean no current public evidence was stored.",
         },
     }
+
+
+def sec_company_submissions(db: Session, cik: str, persist: bool = False) -> dict:
+    normalized_cik = normalize_cik(cik)
+    payload = fetch_sec_company_submissions(normalized_cik)
+    recent = payload.get("filings", {}).get("recent", {})
+    filings = normalize_company_submission_filings(payload, recent)
+    ipo_related = [filing for filing in filings if filing["form_type"] in set(SEC_CURRENT_FORMS + ["424B2", "424B3", "424B5"])]
+
+    company = db.scalar(select(IPOCompany).where(IPOCompany.cik == normalized_cik))
+    if company is not None:
+        metadata = dict(company.company_metadata or {})
+        metadata["sec_submissions"] = {
+            "entity_type": payload.get("entityType"),
+            "sic": payload.get("sic"),
+            "sic_description": payload.get("sicDescription"),
+            "exchanges": payload.get("exchanges", []),
+            "tickers": payload.get("tickers", []),
+            "filing_count": len(filings),
+            "ipo_related_filing_count": len(ipo_related),
+            "last_enriched_at": datetime.utcnow().isoformat(),
+            "source": SEC_SUBMISSIONS_SOURCE,
+        }
+        company.company_metadata = metadata
+        if payload.get("tickers") and not company.ticker:
+            company.ticker = payload["tickers"][0]
+        if payload.get("exchanges") and not company.exchange:
+            company.exchange = payload["exchanges"][0]
+        if payload.get("sicDescription") and company.industry == "Unknown":
+            company.industry = payload["sicDescription"]
+        company.last_seen_at = datetime.utcnow()
+
+    inserted = 0
+    if persist and company is not None:
+        for filing in ipo_related:
+            accession = filing["accession_number"]
+            if db.scalar(select(IPOFiling).where(IPOFiling.accession_number == accession)):
+                continue
+            db.add(
+                IPOFiling(
+                    company_id=company.id,
+                    cik=normalized_cik,
+                    company_name=company.name,
+                    form_type=filing["form_type"],
+                    filing_date=filing["filing_date"],
+                    title=f"{filing['form_type']} - {company.name}",
+                    url=filing["url"],
+                    accession_number=accession,
+                    source=SEC_SUBMISSIONS_SOURCE,
+                    raw_payload={**filing, "filing_date": filing["filing_date"].isoformat() if filing["filing_date"] else None},
+                )
+            )
+            inserted += 1
+        if inserted:
+            db.flush()
+            score = score_ipo_company(db, company)
+            if score:
+                db.add(score)
+        db.commit()
+    elif company is not None:
+        db.commit()
+
+    return {
+        "cik": normalized_cik,
+        "name": payload.get("name"),
+        "entity_type": payload.get("entityType"),
+        "sic": payload.get("sic"),
+        "sic_description": payload.get("sicDescription"),
+        "tickers": payload.get("tickers", []),
+        "exchanges": payload.get("exchanges", []),
+        "fiscal_year_end": payload.get("fiscalYearEnd"),
+        "filing_count": len(filings),
+        "ipo_related_filing_count": len(ipo_related),
+        "recent_filings": filings[:80],
+        "ipo_related_filings": ipo_related[:80],
+        "persisted_new_ipo_filings": inserted,
+        "source": SEC_SUBMISSIONS_SOURCE,
+        "data_policy": "Official SEC company submissions data. No unavailable listing dates, valuations or tickers are inferred.",
+    }
+
+
+def fetch_sec_company_submissions(cik: str) -> dict:
+    response = requests.get(
+        SEC_SUBMISSIONS_URL.format(cik=normalize_cik(cik)),
+        headers={"User-Agent": settings.sec_user_agent, "Accept-Encoding": "gzip, deflate", "Host": "data.sec.gov"},
+        timeout=24,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def normalize_company_submission_filings(payload: dict, recent: dict) -> list[dict]:
+    forms = recent.get("form", []) or []
+    accession_numbers = recent.get("accessionNumber", []) or []
+    filing_dates = recent.get("filingDate", []) or []
+    report_dates = recent.get("reportDate", []) or []
+    documents = recent.get("primaryDocument", []) or []
+    descriptions = recent.get("primaryDocDescription", []) or []
+    cik = normalize_cik(str(payload.get("cik", "")))
+    filings = []
+    for index, form_type in enumerate(forms):
+        accession = safe_list_value(accession_numbers, index)
+        document = safe_list_value(documents, index)
+        filing_date = parse_sec_date(safe_list_value(filing_dates, index))
+        filings.append(
+            {
+                "form_type": form_type,
+                "accession_number": accession,
+                "filing_date": filing_date,
+                "report_date": safe_list_value(report_dates, index),
+                "primary_document": document,
+                "description": safe_list_value(descriptions, index),
+                "url": sec_document_url(cik, accession, document),
+                "source": SEC_SUBMISSIONS_SOURCE,
+            }
+        )
+    return filings
+
+
+def normalize_cik(cik: str) -> str:
+    digits = re.sub(r"\D", "", cik or "")
+    return digits.zfill(10)
+
+
+def parse_sec_date(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d")
+    except Exception:
+        return None
+
+
+def safe_list_value(values: list, index: int):
+    if index >= len(values):
+        return None
+    return values[index]
+
+
+def sec_document_url(cik: str, accession: str | None, document: str | None) -> str:
+    if not cik or not accession or not document:
+        return ""
+    compact_accession = accession.replace("-", "")
+    return f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{compact_accession}/{document}"
 
 
 def fetch_sec_current_filings(form_type: str, count: int) -> list[dict]:

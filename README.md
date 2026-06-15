@@ -88,9 +88,13 @@ The Market Brain is Blum's high-level reasoning orchestrator. It is not a single
 
 The output includes current regime, forward scenarios, opportunity stack, risk alerts, model stack and an evidence ledger. It is a research-priority engine, not a recommendation system.
 
+The Brain also persists snapshot history and compares each run with the previous one. The change log highlights regime changes, score movement, top stock/ETF/IPO leader changes and risk-count shifts. A contradiction engine flags price/sentiment conflicts, overbought high-risk setups and market-wide narrative conflicts. An event graph links themes, stocks, ETFs, IPO candidates and live news into a compact intelligence map.
+
 ## IPO And Pre-Listing Intelligence
 
 IPO Radar scans SEC EDGAR current filing feeds for `S-1`, `S-1/A`, `F-1`, `F-1/A`, `424B1` and `424B4` forms. It also surfaces stored public news narratives that mention IPOs, listings, prospectuses, market debuts and SPACs.
+
+For deeper issuer history, the backend can query the official SEC company submissions API at `data.sec.gov`. The IPO Radar UI exposes SEC filing history and can persist additional IPO-related filings into PostgreSQL.
 
 The IPO score separates:
 
@@ -146,14 +150,18 @@ FastAPI exposes clean JSON endpoints:
 - `POST /semantic-search`
 - `GET /related-news?ticker=NVDA`
 - `GET /themes`
+- `GET /themes/{label}`
 - `GET /etf-trends`
 - `GET /stock-radar`
 - `POST /stock-radar/update`
 - `GET /ipo-radar`
 - `POST /ipo-radar/update`
+- `GET /ipo-radar/sec-submissions/{cik}`
 - `GET /market-brain`
 - `GET /market-brain/latest`
+- `GET /market-brain/history`
 - `POST /market-brain/run`
+- `GET /ai/models/status`
 - `GET /dashboard/overview`
 - `GET /ai/explain/{ticker}`
 - `POST /backtest/{ticker}`
@@ -177,6 +185,8 @@ Interactive API docs are available at `/docs`.
 - Methodology
 
 The UI is intentionally dense, dark and technical: Bloomberg-style information density, Linear/Vercel-style cleanliness, TradingView-style chart clarity and OpenBB-style open-source posture.
+
+Signal surfaces include score version, confidence score and lifecycle state (`new`, `confirmed`, `strengthening`, `active`, `faded`, `invalidated`) so the platform can show whether a signal is emerging, durable or deteriorating.
 
 ## Local Setup
 

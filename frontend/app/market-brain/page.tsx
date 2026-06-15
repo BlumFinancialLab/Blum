@@ -3,20 +3,24 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
-import { MarketBrain } from "@/lib/types";
+import { MarketBrain, MarketBrainHistoryRow } from "@/lib/types";
 import { LoadingState } from "@/components/LoadingState";
 import { PlotPanel } from "@/components/PlotPanel";
 import { StatusBadge } from "@/components/StatusBadge";
 
 export default function MarketBrainPage() {
   const [brain, setBrain] = useState<MarketBrain | null>(null);
+  const [history, setHistory] = useState<MarketBrainHistoryRow[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
   const load = async () => {
     setError("");
     try {
-      setBrain(await api.marketBrain());
+      const [brainResult, historyResult] = await Promise.allSettled([api.marketBrain(), api.marketBrainHistory(12)] as const);
+      if (brainResult.status === "fulfilled") setBrain(brainResult.value);
+      if (historyResult.status === "fulfilled") setHistory(historyResult.value);
+      if (brainResult.status === "rejected") throw brainResult.reason;
     } catch (err) {
       setError((err as Error).message);
     }
@@ -28,7 +32,9 @@ export default function MarketBrainPage() {
     setBusy(true);
     setError("");
     try {
-      setBrain(await api.runMarketBrain(refreshPipeline));
+      const result = await api.runMarketBrain(refreshPipeline);
+      setBrain(result);
+      setHistory(await api.marketBrainHistory(12));
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -125,10 +131,69 @@ export default function MarketBrainPage() {
         ))}
       </section>
 
+      <section className="grid-2" style={{ marginTop: 12 }}>
+        <div className="panel">
+          <div className="panel-head"><span>Brain changelog</span><strong>{brain.change_log.length}</strong></div>
+          <div className="brain-list">
+            {brain.change_log.map((item) => (
+              <div key={`${item.type}-${item.message}`}>
+                <StatusBadge label={item.severity} />
+                <strong>{item.type.replaceAll("_", " ")}</strong>
+                <p>{item.message}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="panel">
+          <div className="panel-head"><span>Contradiction engine</span><strong>{brain.contradictions.length}</strong></div>
+          <div className="brain-list">
+            {brain.contradictions.length === 0 && <div className="empty-state">No material price, sentiment or risk contradictions detected.</div>}
+            {brain.contradictions.slice(0, 8).map((item) => (
+              <div key={`${item.type}-${item.ticker}-${item.title}`}>
+                <StatusBadge label={item.severity} />
+                <strong>{item.title}</strong>
+                <span>{Object.entries(item.evidence).map(([key, value]) => `${key} ${value}`).join(" | ")}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
       <section className="grid-3" style={{ marginTop: 12 }}>
         <OpportunityPanel title="Stock research priorities" rows={stack.stock_research_priorities} kind="stock" />
         <OpportunityPanel title="ETF rotation leaders" rows={stack.etf_rotation_leaders} kind="etf" />
         <OpportunityPanel title="IPO / pre-listing watch" rows={stack.ipo_watch} kind="ipo" />
+      </section>
+
+      <section className="grid-2" style={{ marginTop: 12 }}>
+        <div className="panel">
+          <div className="panel-head"><span>Event graph</span><strong>{brain.event_graph.nodes.length} nodes</strong></div>
+          <div className="event-graph">
+            {brain.event_graph.nodes.slice(0, 28).map((node) => (
+              <div className={`event-node ${node.type}`} key={node.id}>
+                <span>{node.type}</span>
+                <strong>{node.label}</strong>
+                {node.score !== undefined && node.score !== null && <em>{Number(node.score).toFixed(1)}</em>}
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="panel">
+          <div className="panel-head"><span>Snapshot history</span><strong>{history.length}</strong></div>
+          <div className="brain-list dense">
+            {history.length === 0 && <div className="empty-state">No persisted Market Brain snapshots yet. Run brain to create the first snapshot.</div>}
+            {history.map((item) => (
+              <div key={item.run_id}>
+                <div className="opportunity-line">
+                  <strong>{item.regime}</strong>
+                  <span>{Number(item.brain_score).toFixed(1)}</span>
+                </div>
+                <p>{formatTime(item.created_at)} | risk {item.risk_alert_count} | contradictions {item.contradiction_count}</p>
+                <span>Top: {item.top_stock ?? "n/a"} | ETF {item.top_etf ?? "n/a"} | IPO {item.top_ipo ?? "n/a"}</span>
+              </div>
+            ))}
+          </div>
+        </div>
       </section>
 
       <section className="grid-2" style={{ marginTop: 12 }}>

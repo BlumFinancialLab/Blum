@@ -287,9 +287,50 @@ p { color: var(--muted); line-height: 1.55; }
 }
 .evidence-grid strong, .method-grid strong { display: block; margin-top: 6px; line-height: 1.35; }
 .method-grid strong { color: #d8e5f2; font-size: 12px; font-weight: 700; }
+.observed-model-panel {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 12px;
+  background: #070a0f;
+}
+.theme-card { cursor: pointer; transition: border-color .15s ease, transform .15s ease; }
+.theme-card:hover { border-color: rgba(255,176,0,.45); transform: translateY(-1px); }
 .opportunity-panel { min-height: 520px; }
 .ipo-card { min-height: 410px; }
 .ipo-card .button { display: inline-flex; width: fit-content; margin-top: 12px; }
+.event-graph {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+.event-node {
+  min-height: 78px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 9px;
+  background: #070a0f;
+}
+.event-node span, .event-node em {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  font-style: normal;
+  font-weight: 900;
+}
+.event-node strong {
+  display: block;
+  margin: 6px 0;
+  color: #eef3fa;
+  font-size: 12px;
+  line-height: 1.25;
+}
+.event-node.stock { border-left: 3px solid var(--green); }
+.event-node.etf { border-left: 3px solid var(--cyan); }
+.event-node.ipo { border-left: 3px solid var(--amber); }
+.event-node.news { border-left: 3px solid var(--blue); }
+.event-node.theme { border-left: 3px solid #b58cff; }
 
 .realtime-strip {
   display: grid;
@@ -485,7 +526,7 @@ p { color: var(--muted); line-height: 1.55; }
   .app-shell { grid-template-columns: 1fr; }
   .sidebar { position: static; height: auto; }
   .system-card { position: static; margin-top: 14px; }
-  .hero, .grid-2, .grid-3, .grid-4, .live-grid, .realtime-strip, .diagnostic-grid, .instrument-card, .market-strip, .market-strip.compact, .brain-hero, .scenario-grid, .evidence-grid, .method-grid { grid-template-columns: 1fr; }
+  .hero, .grid-2, .grid-3, .grid-4, .live-grid, .realtime-strip, .diagnostic-grid, .instrument-card, .market-strip, .market-strip.compact, .brain-hero, .scenario-grid, .evidence-grid, .method-grid, .event-graph { grid-template-columns: 1fr; }
   .tape-row { grid-template-columns: 1fr; }
   .tape-meta { justify-content: flex-start; max-width: none; }
 }

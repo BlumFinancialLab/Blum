@@ -8,13 +8,13 @@ from app.ai.orchestrator import AIOrchestrator
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.ingestion.news_ingestor import NewsIngestor
-from app.models import AIInsight, Asset, NewsArticle, NewsAssetLink, PriceHistory, SentimentAnalysis, SignalSnapshot
+from app.models import AIInsight, Asset, EmbeddingVector, NewsArticle, NewsAssetLink, PriceHistory, SentimentAnalysis, SignalSnapshot
 from app.schemas import AssetOut, MarketUpdateRequest, NewsOut, NewsUpdateRequest, SemanticSearchRequest, SignalRunRequest
 from app.services.dashboard import dashboard_overview, signal_payload
 from app.services.etf import list_etf_trends, update_etf_trends
-from app.services.ipo import ipo_radar, update_ipo_radar
+from app.services.ipo import ipo_radar, sec_company_submissions, update_ipo_radar
 from app.services.live import live_news, market_sentiment
-from app.services.market_brain import build_market_brain, latest_market_brain
+from app.services.market_brain import build_market_brain, latest_market_brain, market_brain_history
 from app.services.market_data import MarketDataService, market_snapshot_for_asset
 from app.services.pipeline import PipelineService
 from app.services.realtime import realtime_status
@@ -192,6 +192,11 @@ def themes(db: Session = Depends(get_db)):
     return SemanticService().themes(db)
 
 
+@router.get("/themes/{label}")
+def theme_detail(label: str, limit: int = Query(default=60, ge=1, le=160), db: Session = Depends(get_db)):
+    return SemanticService().theme_detail(db, label=label, limit=limit)
+
+
 @router.get("/etf-trends")
 def etf_trends(db: Session = Depends(get_db)):
     return list_etf_trends(db)
@@ -217,6 +222,11 @@ def ipo_radar_update(limit_per_form: int = Query(default=50, ge=10, le=120), db:
     return update_ipo_radar(db, limit_per_form=limit_per_form)
 
 
+@router.get("/ipo-radar/sec-submissions/{cik}")
+def ipo_sec_submissions(cik: str, persist: bool = Query(default=False), db: Session = Depends(get_db)):
+    return sec_company_submissions(db, cik=cik, persist=persist)
+
+
 @router.get("/market-brain")
 def market_brain_endpoint(db: Session = Depends(get_db)):
     return build_market_brain(db, persist=False)
@@ -225,6 +235,11 @@ def market_brain_endpoint(db: Session = Depends(get_db)):
 @router.get("/market-brain/latest")
 def market_brain_latest_endpoint(db: Session = Depends(get_db)):
     return latest_market_brain(db)
+
+
+@router.get("/market-brain/history")
+def market_brain_history_endpoint(limit: int = Query(default=20, ge=1, le=100), db: Session = Depends(get_db)):
+    return market_brain_history(db, limit=limit)
 
 
 @router.post("/market-brain/run")
@@ -241,6 +256,45 @@ def market_brain_run(
     brain = build_market_brain(db, persist=True)
     brain["update_diagnostics"] = updates
     return brain
+
+
+@router.get("/ai/models/status")
+def ai_model_status(db: Session = Depends(get_db)):
+    sentiment_models = db.execute(
+        select(SentimentAnalysis.model_name, func.count(SentimentAnalysis.id))
+        .group_by(SentimentAnalysis.model_name)
+        .order_by(func.count(SentimentAnalysis.id).desc())
+    ).all()
+    insight_models = db.execute(
+        select(AIInsight.model_name, func.count(AIInsight.id))
+        .group_by(AIInsight.model_name)
+        .order_by(func.count(AIInsight.id).desc())
+    ).all()
+    embedding_models = db.execute(
+        select(EmbeddingVector.model_name, func.count(EmbeddingVector.id))
+        .group_by(EmbeddingVector.model_name)
+        .order_by(func.count(EmbeddingVector.id).desc())
+    ).all()
+    return {
+        "model_loading_enabled": settings.enable_model_loading,
+        "configured_models": {
+            "financial_sentiment": settings.finbert_model,
+            "embeddings": settings.embedding_model,
+            "reasoning_llm": settings.llm_model,
+            "time_series": "statistical-fallback with adapter-ready interface",
+        },
+        "observed_models": {
+            "sentiment": [{"model_name": model, "records": int(count)} for model, count in sentiment_models],
+            "embeddings": [{"model_name": model, "records": int(count)} for model, count in embedding_models],
+            "insights": [{"model_name": model, "records": int(count)} for model, count in insight_models],
+        },
+        "fallback_policy": {
+            "sentiment": "FinBERT primary when loadable; VADER baseline/fallback is labeled in stored records.",
+            "embeddings": "sentence-transformers primary when loadable; deterministic embedding fallback is explicit in code path.",
+            "reasoning": "Configured LLM when loadable; deterministic evidence reasoner fallback never invents data.",
+            "time_series": "Transparent statistical fallback until Chronos, TimesFM or PatchTST adapter is enabled.",
+        },
+    }
 
 
 @router.get("/dashboard/overview")

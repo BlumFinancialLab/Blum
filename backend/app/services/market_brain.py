@@ -16,6 +16,7 @@ from app.services.stock import stock_radar
 
 
 def build_market_brain(db: Session, persist: bool = True) -> dict:
+    previous = db.scalar(select(MarketBrainSnapshot).order_by(desc(MarketBrainSnapshot.created_at)).limit(1))
     overview = dashboard_overview(db)
     sentiment = market_sentiment(db, hours=48)
     stocks = stock_radar(db, limit=100)
@@ -31,6 +32,8 @@ def build_market_brain(db: Session, persist: bool = True) -> dict:
     risks = build_risk_alerts(stocks, latest_signals, sentiment, ipo, overview)
     evidence = evidence_ledger(overview, sentiment, stocks, etfs, ipo, news, latest_signals)
     summary = brain_summary(regime, brain_score, opportunity_stack, risks)
+    contradictions = detect_contradictions(stocks, latest_signals, sentiment)
+    event_graph = build_event_graph(opportunity_stack, sentiment, news)
 
     payload = {
         "run_id": f"brain-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}",
@@ -52,7 +55,10 @@ def build_market_brain(db: Session, persist: bool = True) -> dict:
         "opportunity_stack": opportunity_stack,
         "forward_scenarios": scenarios,
         "risk_alerts": risks,
+        "contradictions": contradictions,
+        "event_graph": event_graph,
         "evidence_ledger": evidence,
+        "change_log": [],
         "model_stack": {
             "sentiment": "FinBERT-led sentiment records when model loading is available; VADER remains a baseline comparator.",
             "semantic": "Sentence-transformer embeddings and theme clusters where stored news embeddings exist.",
@@ -62,6 +68,7 @@ def build_market_brain(db: Session, persist: bool = True) -> dict:
         },
         "disclaimer": "Educational research case study only. Not financial advice, not a recommendation and not an operational trading signal.",
     }
+    payload["change_log"] = compare_with_previous(previous.structured_output if previous else None, payload)
 
     if persist:
         db.add(
@@ -77,6 +84,25 @@ def build_market_brain(db: Session, persist: bool = True) -> dict:
         db.commit()
 
     return payload
+
+
+def market_brain_history(db: Session, limit: int = 20) -> list[dict]:
+    snapshots = db.scalars(select(MarketBrainSnapshot).order_by(desc(MarketBrainSnapshot.created_at)).limit(limit)).all()
+    return [
+        {
+            "run_id": snapshot.run_id,
+            "created_at": snapshot.created_at,
+            "brain_score": snapshot.brain_score,
+            "regime": snapshot.regime,
+            "summary": snapshot.summary,
+            "risk_alert_count": len((snapshot.structured_output or {}).get("risk_alerts", [])),
+            "contradiction_count": len((snapshot.structured_output or {}).get("contradictions", [])),
+            "top_stock": first_stack_name(snapshot.structured_output, "stock_research_priorities"),
+            "top_etf": first_stack_name(snapshot.structured_output, "etf_rotation_leaders"),
+            "top_ipo": first_stack_name(snapshot.structured_output, "ipo_watch"),
+        }
+        for snapshot in snapshots
+    ]
 
 
 def latest_market_brain(db: Session) -> dict:
@@ -245,6 +271,159 @@ def build_risk_alerts(stocks: dict, signals: list[SignalSnapshot], sentiment: di
     return alerts
 
 
+def detect_contradictions(stocks: dict, signals: list[SignalSnapshot], sentiment: dict) -> list[dict]:
+    contradictions: list[dict] = []
+    for row in stocks.get("rows", []):
+        snapshot = row.get("market_snapshot") or {}
+        narrative = row.get("narrative_flags") or {}
+        technical = row.get("technical_flags") or {}
+        signal = row.get("signal") or {}
+        perf_5d = numeric(snapshot.get("perf_5d"))
+        sentiment_7d = numeric(narrative.get("sentiment_7d"))
+        rsi = numeric(technical.get("rsi"))
+        if perf_5d >= 4 and sentiment_7d <= -0.15:
+            contradictions.append(
+                {
+                    "type": "price_up_sentiment_down",
+                    "severity": "High" if perf_5d >= 8 else "Medium",
+                    "ticker": row.get("ticker"),
+                    "title": f"{row.get('ticker')} price strength conflicts with negative 7D sentiment.",
+                    "evidence": {"perf_5d": perf_5d, "sentiment_7d": sentiment_7d, "classification": signal.get("classification")},
+                }
+            )
+        if perf_5d <= -4 and sentiment_7d >= 0.18:
+            contradictions.append(
+                {
+                    "type": "price_down_sentiment_up",
+                    "severity": "Medium",
+                    "ticker": row.get("ticker"),
+                    "title": f"{row.get('ticker')} price weakness conflicts with positive 7D sentiment.",
+                    "evidence": {"perf_5d": perf_5d, "sentiment_7d": sentiment_7d, "classification": signal.get("classification")},
+                }
+            )
+        if rsi >= 72 and signal.get("risk_level") == "High":
+            contradictions.append(
+                {
+                    "type": "overbought_high_risk",
+                    "severity": "Medium",
+                    "ticker": row.get("ticker"),
+                    "title": f"{row.get('ticker')} combines elevated RSI with high risk classification.",
+                    "evidence": {"rsi": rsi, "risk_level": signal.get("risk_level"), "score": signal.get("blum_score")},
+                }
+            )
+    market_sentiment = numeric(sentiment.get("average_sentiment"))
+    if market_sentiment < -0.12:
+        bullish = [signal for signal in signals if signal.blum_score >= 72]
+        if bullish:
+            contradictions.append(
+                {
+                    "type": "bullish_signals_negative_tape",
+                    "severity": "Medium",
+                    "ticker": "MARKET",
+                    "title": "High-scoring signals exist while market-wide sentiment is negative.",
+                    "evidence": {"average_sentiment": market_sentiment, "bullish_signal_count": len(bullish)},
+                }
+            )
+    return contradictions[:24]
+
+
+def build_event_graph(opportunity_stack: dict, sentiment: dict, news: list[dict]) -> dict:
+    nodes: list[dict] = []
+    edges: list[dict] = []
+
+    def add_node(node_id: str, label: str, node_type: str, score: float | None = None) -> None:
+        if any(node["id"] == node_id for node in nodes):
+            return
+        nodes.append({"id": node_id, "label": label, "type": node_type, "score": score})
+
+    add_node("market", "Market Brain", "system", None)
+    for theme in sentiment.get("themes", [])[:8]:
+        node_id = f"theme:{theme['theme']}"
+        add_node(node_id, theme["theme"], "theme", theme.get("avg_sentiment"))
+        edges.append({"source": "market", "target": node_id, "relationship": "theme_detected", "weight": theme.get("headline_count", 0)})
+
+    for item in opportunity_stack.get("stock_research_priorities", [])[:8]:
+        node_id = f"stock:{item.get('ticker')}"
+        add_node(node_id, item.get("ticker") or "Stock", "stock", item.get("score"))
+        edges.append({"source": "market", "target": node_id, "relationship": "research_priority", "weight": item.get("score") or 0})
+        for tag in (item.get("tags") or [])[:3]:
+            theme_id = f"theme:{tag}"
+            add_node(theme_id, tag, "theme", None)
+            edges.append({"source": theme_id, "target": node_id, "relationship": "tag_link", "weight": 1})
+
+    for item in opportunity_stack.get("etf_rotation_leaders", [])[:6]:
+        node_id = f"etf:{item.get('ticker')}"
+        add_node(node_id, item.get("ticker") or "ETF", "etf", item.get("confirmation_score"))
+        edges.append({"source": "market", "target": node_id, "relationship": "rotation_confirmation", "weight": item.get("confirmation_score") or 0})
+
+    for item in opportunity_stack.get("ipo_watch", [])[:6]:
+        node_id = f"ipo:{item.get('name')}"
+        add_node(node_id, item.get("name") or "IPO candidate", "ipo", item.get("opportunity_score"))
+        edges.append({"source": "market", "target": node_id, "relationship": "primary_market_watch", "weight": item.get("opportunity_score") or 0})
+
+    for article in news[:8]:
+        node_id = f"news:{article.get('id')}"
+        add_node(node_id, article.get("title", "News")[:80], "news", article.get("quality_score"))
+        edges.append({"source": "market", "target": node_id, "relationship": "live_news", "weight": article.get("quality_score") or 0})
+
+    return {"nodes": nodes[:48], "edges": edges[:80]}
+
+
+def compare_with_previous(previous: dict | None, current: dict) -> list[dict]:
+    if not previous:
+        return [{"type": "initial_snapshot", "severity": "Info", "message": "No previous Market Brain snapshot exists yet."}]
+    changes: list[dict] = []
+    if previous.get("regime") != current.get("regime"):
+        changes.append(
+            {
+                "type": "regime_change",
+                "severity": "High",
+                "message": f"Regime changed from {previous.get('regime')} to {current.get('regime')}.",
+            }
+        )
+    previous_score = numeric(previous.get("brain_score"))
+    current_score = numeric(current.get("brain_score"))
+    delta = round(current_score - previous_score, 2)
+    if abs(delta) >= 5:
+        changes.append(
+            {
+                "type": "brain_score_change",
+                "severity": "Medium",
+                "message": f"Brain score moved {delta:+.2f} points.",
+                "previous": previous_score,
+                "current": current_score,
+            }
+        )
+    for key, label in [
+        ("stock_research_priorities", "top stock"),
+        ("etf_rotation_leaders", "top ETF"),
+        ("ipo_watch", "top IPO watch"),
+    ]:
+        old = first_stack_name(previous, key)
+        new = first_stack_name(current, key)
+        if old and new and old != new:
+            changes.append(
+                {
+                    "type": f"{key}_leader_change",
+                    "severity": "Info",
+                    "message": f"{label.title()} changed from {old} to {new}.",
+                    "previous": old,
+                    "current": new,
+                }
+            )
+    previous_risk_count = len(previous.get("risk_alerts", []))
+    current_risk_count = len(current.get("risk_alerts", []))
+    if previous_risk_count != current_risk_count:
+        changes.append(
+            {
+                "type": "risk_alert_count_change",
+                "severity": "Info",
+                "message": f"Risk alerts changed from {previous_risk_count} to {current_risk_count}.",
+            }
+        )
+    return changes or [{"type": "stable_snapshot", "severity": "Info", "message": "No material Market Brain change versus the previous snapshot."}]
+
+
 def evidence_ledger(overview: dict, sentiment: dict, stocks: dict, etfs: list[dict], ipo: dict, news: list[dict], signals: list[SignalSnapshot]) -> dict:
     return {
         "stored_assets": overview["market_pulse"]["asset_count"],
@@ -260,6 +439,16 @@ def evidence_ledger(overview: dict, sentiment: dict, stocks: dict, etfs: list[di
         "live_news_rows": len(news),
         "data_policy": "All outputs are derived from stored public data. Missing evidence remains visible as a gap.",
     }
+
+
+def first_stack_name(payload: dict | None, key: str) -> str | None:
+    if not payload:
+        return None
+    rows = (payload.get("opportunity_stack") or {}).get(key, [])
+    if not rows:
+        return None
+    first = rows[0]
+    return first.get("ticker") or first.get("name")
 
 
 def brain_summary(regime: str, brain_score: float, opportunity_stack: dict, risks: list[dict]) -> str:
@@ -365,3 +554,12 @@ def probability_from_regime(regime: str, scenario: str) -> int:
 
 def clamp(value: float, low: float = 0, high: float = 100) -> float:
     return max(low, min(high, float(value)))
+
+
+def numeric(value) -> float:
+    try:
+        if value is None:
+            return 0.0
+        return float(value)
+    except Exception:
+        return 0.0

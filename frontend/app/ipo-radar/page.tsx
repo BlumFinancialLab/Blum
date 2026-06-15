@@ -21,8 +21,10 @@ export default function IPORadarPage() {
   const [search, setSearch] = useState("");
   const [classification, setClassification] = useState("");
   const [busy, setBusy] = useState(false);
+  const [secBusy, setSecBusy] = useState("");
   const [error, setError] = useState("");
   const [updateResult, setUpdateResult] = useState<any>(null);
+  const [secResult, setSecResult] = useState<any>(null);
 
   const load = async () => {
     setError("");
@@ -46,6 +48,21 @@ export default function IPORadarPage() {
       setError((err as Error).message);
     } finally {
       setBusy(false);
+    }
+  };
+
+  const loadSecSubmissions = async (row: IPORadarRow, persist: boolean) => {
+    if (!row.company.cik) return;
+    setSecBusy(row.company.cik);
+    setError("");
+    try {
+      const result = await api.secSubmissions(row.company.cik, persist);
+      setSecResult(result);
+      if (persist) await load();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSecBusy("");
     }
   };
 
@@ -134,8 +151,48 @@ export default function IPORadarPage() {
       </section>
 
       <section className="grid-3" style={{ marginTop: 12 }}>
-        {rows.slice(0, 6).map((row) => <IPORadarCard row={row} key={`${row.company.id}-${row.latest_filing?.accession_number ?? row.company.name}`} />)}
+        {rows.slice(0, 6).map((row) => (
+          <IPORadarCard
+            row={row}
+            key={`${row.company.id}-${row.latest_filing?.accession_number ?? row.company.name}`}
+            onLoadSec={(persist) => loadSecSubmissions(row, persist)}
+            secBusy={secBusy === row.company.cik}
+          />
+        ))}
       </section>
+
+      {secResult && (
+        <section className="panel" style={{ marginTop: 12 }}>
+          <div className="panel-head"><span>SEC company submissions</span><strong>{secResult.name ?? secResult.cik}</strong></div>
+          <div className="diagnostic-grid">
+            <div>
+              <span>Official filing history</span>
+              <strong>{secResult.filing_count} filings | {secResult.ipo_related_filing_count} IPO-related</strong>
+              <p>{(secResult.tickers ?? []).join(" | ") || "No public ticker in SEC payload"} | {(secResult.exchanges ?? []).join(" | ") || "No exchange in SEC payload"}</p>
+            </div>
+            <div>
+              <span>Persistence</span>
+              <strong>{secResult.persisted_new_ipo_filings ?? 0} new filings stored</strong>
+              <p>{secResult.data_policy}</p>
+            </div>
+          </div>
+          <div className="table-shell" style={{ marginTop: 12 }}>
+            <table className="intel-table">
+              <thead><tr><th>Form</th><th>Date</th><th>Description</th><th>Document</th></tr></thead>
+              <tbody>
+                {(secResult.ipo_related_filings ?? []).slice(0, 20).map((filing: any) => (
+                  <tr key={filing.accession_number}>
+                    <td><strong>{filing.form_type}</strong></td>
+                    <td><span>{formatTime(filing.filing_date)}</span></td>
+                    <td><span>{filing.description ?? "n/a"}</span></td>
+                    <td>{filing.url ? <a className="asset-link" href={filing.url} target="_blank" rel="noreferrer">Open</a> : <span>n/a</span>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       <section className="panel" style={{ marginTop: 12 }}>
         <div className="panel-head"><span>IPO radar table</span><strong>{rows.length} companies</strong></div>
@@ -171,7 +228,7 @@ export default function IPORadarPage() {
   );
 }
 
-function IPORadarCard({ row }: { row: IPORadarRow }) {
+function IPORadarCard({ row, onLoadSec, secBusy }: { row: IPORadarRow; onLoadSec: (persist: boolean) => void; secBusy: boolean }) {
   return (
     <article className="score-card ipo-card">
       <div className="score-card-top">
@@ -192,7 +249,11 @@ function IPORadarCard({ row }: { row: IPORadarRow }) {
         <div><span>Narrative</span><strong>{row.score.narrative_heat_score.toFixed(0)}</strong></div>
         <div><span>Risk terms</span><strong>{row.score.valuation_risk_score.toFixed(0)}</strong></div>
       </div>
-      {row.latest_filing?.url && <a className="button" href={row.latest_filing.url} target="_blank" rel="noreferrer">Open SEC filing</a>}
+      <div className="control-row" style={{ marginTop: 12, marginBottom: 0 }}>
+        {row.latest_filing?.url && <a className="button" href={row.latest_filing.url} target="_blank" rel="noreferrer">Open SEC filing</a>}
+        {row.company.cik && <button className="button" onClick={() => onLoadSec(false)} disabled={secBusy}>{secBusy ? "Loading SEC..." : "SEC history"}</button>}
+        {row.company.cik && <button className="button" onClick={() => onLoadSec(true)} disabled={secBusy}>{secBusy ? "Syncing..." : "Sync filings"}</button>}
+      </div>
     </article>
   );
 }

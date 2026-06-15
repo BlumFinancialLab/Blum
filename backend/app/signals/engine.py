@@ -10,6 +10,9 @@ from app.models import Asset, NewsAssetLink, PriceHistory, SentimentAnalysis, Si
 from app.signals.indicators import compute_indicators
 
 
+SCORE_VERSION = "blum-score-v0.4"
+
+
 class SignalEngine:
     def __init__(self, ai: AIOrchestrator | None = None):
         self.ai = ai or AIOrchestrator()
@@ -30,6 +33,9 @@ class SignalEngine:
             ts = self.ai.time_series.analyze(frame)
             narrative = self.narrative_features(db, asset)
             score = build_score(indicators, narrative, ts, asset)
+            previous = latest_signal_for_asset(db, asset.id)
+            confidence = confidence_score(frame, indicators, narrative, ts)
+            lifecycle = lifecycle_state(previous, score, confidence)
             explanation_stub = build_rule_explanation(asset, score, indicators, narrative, ts)
             snapshot = SignalSnapshot(
                 asset_id=asset.id,
@@ -38,6 +44,9 @@ class SignalEngine:
                 blum_score=score["blum_score"],
                 risk_level=score["risk_level"],
                 time_horizon=score["time_horizon"],
+                score_version=SCORE_VERSION,
+                confidence_score=confidence,
+                lifecycle_state=lifecycle,
                 score_breakdown=score["score_breakdown"],
                 technical_summary={**indicators, "time_series": ts},
                 narrative_summary=narrative,
@@ -222,6 +231,40 @@ def build_rule_explanation(asset: Asset, score: dict, indicators: dict, narrativ
         f"7D sentiment is {narrative.get('sentiment_7d', 0):.2f}, and the time-series regime is "
         f"{ts.get('regime', 'unknown')}."
     )
+
+
+def latest_signal_for_asset(db: Session, asset_id: int) -> SignalSnapshot | None:
+    return db.scalar(
+        select(SignalSnapshot)
+        .where(SignalSnapshot.asset_id == asset_id)
+        .order_by(desc(SignalSnapshot.created_at))
+        .limit(1)
+    )
+
+
+def confidence_score(frame: pd.DataFrame, indicators: dict, narrative: dict, ts: dict) -> float:
+    history_depth = scale(len(frame), 60, 900)
+    indicator_completeness = sum(1 for key in ["sma20", "sma50", "sma200", "rsi", "macd_hist", "atr_percent", "support", "resistance"] if indicators.get(key) is not None) / 8 * 100
+    news_support = scale(narrative.get("news_count_30d", 0), 0, 12)
+    sentiment_quality = scale(abs(narrative.get("sentiment_30d", 0)), 0, 0.55)
+    time_series_depth = 80 if ts.get("regime") not in {"unknown", "insufficient_history"} else 35
+    return round(avg(history_depth, indicator_completeness, news_support, sentiment_quality, time_series_depth), 1)
+
+
+def lifecycle_state(previous: SignalSnapshot | None, score: dict, confidence: float) -> str:
+    current_score = float(score.get("blum_score", 0))
+    if previous is None:
+        return "new"
+    previous_score = float(previous.blum_score)
+    if previous_score >= 65 and current_score < 42:
+        return "invalidated"
+    if previous_score - current_score >= 12:
+        return "faded"
+    if previous.classification == score.get("classification") and current_score >= previous_score - 5 and confidence >= 50:
+        return "confirmed"
+    if current_score - previous_score >= 10:
+        return "strengthening"
+    return "active"
 
 
 def etf_confirmation_proxy(asset: Asset, indicators: dict) -> float:

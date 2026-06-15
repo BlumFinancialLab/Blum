@@ -22,8 +22,8 @@ export function ScoreCard({ signal }: { signal: Signal }) {
       <p>{signal.explanation}</p>
       <div className="mini-metrics">
         <div><span>Risk</span><strong>{signal.risk_level}</strong></div>
-        <div><span>Horizon</span><strong>{signal.time_horizon}</strong></div>
-        <div><span>Exchange</span><strong>{signal.asset?.exchange ?? "n/a"}</strong></div>
+        <div><span>Confidence</span><strong>{Number(signal.confidence_score ?? 0).toFixed(0)}</strong></div>
+        <div><span>Lifecycle</span><strong>{signal.lifecycle_state ?? "active"}</strong></div>
         <div><span>Volume</span><strong>{formatVolume(signal.market_snapshot?.volume)}</strong></div>
       </div>
     </article>

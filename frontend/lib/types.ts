@@ -31,6 +31,9 @@ export type Signal = {
   blum_score: number;
   risk_level: string;
   time_horizon: string;
+  score_version?: string;
+  confidence_score?: number;
+  lifecycle_state?: string;
   score_breakdown: Record<string, number>;
   technical_summary?: Record<string, number | string | boolean | null>;
   narrative_summary?: Record<string, number | string | boolean | null>;
@@ -119,6 +122,9 @@ export type StockRadarSignal = {
   blum_score: number;
   risk_level: string;
   time_horizon: string;
+  score_version?: string;
+  confidence_score?: number;
+  lifecycle_state?: string;
   score_breakdown: Record<string, number>;
   created_at: string;
 };
@@ -253,10 +259,29 @@ export type MarketBrain = {
     evidence: Record<string, any>;
   }>;
   risk_alerts: Array<{ severity: string; title: string; detail: string; tickers: string[] }>;
+  contradictions: Array<{ type: string; severity: string; ticker: string; title: string; evidence: Record<string, any> }>;
+  event_graph: {
+    nodes: Array<{ id: string; label: string; type: string; score?: number | null }>;
+    edges: Array<{ source: string; target: string; relationship: string; weight: number }>;
+  };
   evidence_ledger: Record<string, number | string>;
+  change_log: Array<{ type: string; severity: string; message: string; previous?: any; current?: any }>;
   model_stack: Record<string, string>;
   disclaimer: string;
   update_diagnostics?: Record<string, any>;
+};
+
+export type MarketBrainHistoryRow = {
+  run_id: string;
+  created_at: string;
+  brain_score: number;
+  regime: string;
+  summary: string;
+  risk_alert_count: number;
+  contradiction_count: number;
+  top_stock?: string | null;
+  top_etf?: string | null;
+  top_ipo?: string | null;
 };
 
 export type PricePoint = {
