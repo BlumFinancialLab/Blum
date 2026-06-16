@@ -5,7 +5,7 @@ from app.scoring.normalization import avg, clamp, safe_float, scale
 from app.scoring.weights import OPPORTUNITY_WEIGHTS, normalized_weights
 
 
-def compute_opportunity_score(asset: dict, signal: dict | None, market_snapshot: dict, sector_score: float = 50, macro_score: float = 50) -> dict:
+def compute_opportunity_score(asset: dict, signal: dict | None, market_snapshot: dict, sector_score: float = 50, macro_score: float = 50, weights_override: dict | None = None) -> dict:
     breakdown = (signal or {}).get("score_breakdown") or {}
     narrative = (signal or {}).get("narrative_flags") or {}
     technical = (signal or {}).get("technical_flags") or {}
@@ -20,7 +20,7 @@ def compute_opportunity_score(asset: dict, signal: dict | None, market_snapshot:
     sentiment = avg(safe_float(breakdown.get("sentiment_score")), scale(narrative.get("sentiment_7d"), -0.6, 0.6))
     news = avg(scale(narrative.get("news_count_7d"), 0, 6), scale(narrative.get("narrative_intensity"), 0, 100))
     risk = compute_risk_score(signal, technical)
-    weights = normalized_weights(OPPORTUNITY_WEIGHTS)
+    weights = normalized_weights(weights_override or OPPORTUNITY_WEIGHTS)
     opportunity = (
         momentum * weights["momentum"]
         + trend * weights["trend"]
@@ -65,4 +65,3 @@ def compute_risk_score(signal: dict | None, technical: dict) -> float:
     drawdown = scale(abs(safe_float(technical.get("recent_drawdown"))), 0, 30)
     overextension = scale(technical.get("rsi"), 58, 78)
     return avg(base, volatility, drawdown, overextension)
-

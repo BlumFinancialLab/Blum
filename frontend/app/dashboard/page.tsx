@@ -4,9 +4,10 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { assetPath } from "@/lib/routes";
-import { AccuracyOverview, DashboardOverview, LiveNewsArticle, MacroOverview, MarketSentiment, PipelineStatus, SignalValidationReport, SystemStatus } from "@/lib/types";
+import { AccuracyOverview, BrainStatus, DashboardOverview, LiveNewsArticle, MacroOverview, MarketSentiment, PipelineStatus, SignalValidationReport, SystemStatus } from "@/lib/types";
 import { ExecutiveDashboardPayload } from "@/lib/types";
 import { ExecutiveDashboard } from "@/components/ExecutiveDashboard";
+import { FinancialBrainStatus } from "@/components/FinancialBrainStatus";
 import { LoadingState } from "@/components/LoadingState";
 import { ScoreCard } from "@/components/ScoreCard";
 import { SignalTable } from "@/components/SignalTable";
@@ -19,6 +20,7 @@ export default function DashboardPage() {
   const [marketSentiment, setMarketSentiment] = useState<MarketSentiment | null>(null);
   const [pipelineStatus, setPipelineStatus] = useState<PipelineStatus | null>(null);
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
+  const [brainStatus, setBrainStatus] = useState<BrainStatus | null>(null);
   const [executive, setExecutive] = useState<ExecutiveDashboardPayload | null>(null);
   const [error, setError] = useState("");
   const [liveError, setLiveError] = useState("");
@@ -31,25 +33,28 @@ export default function DashboardPage() {
       setError("");
       const overview = await api.overview();
       setData(overview);
-      const [newsResult, sentimentResult, statusResult, systemResult, executiveResult] = await Promise.allSettled([
+      const [newsResult, sentimentResult, statusResult, systemResult, executiveResult, brainResult] = await Promise.allSettled([
         api.liveNews(48),
         api.marketSentiment(48),
         api.pipelineStatus(),
         api.systemStatus(),
-        api.executiveDashboard()
+        api.executiveDashboard(),
+        api.brainStatus()
       ] as const);
       if (newsResult.status === "fulfilled") setLiveNews(newsResult.value);
       if (sentimentResult.status === "fulfilled") setMarketSentiment(sentimentResult.value);
       if (statusResult.status === "fulfilled") setPipelineStatus(statusResult.value);
       if (systemResult.status === "fulfilled") setSystemStatus(systemResult.value);
       if (executiveResult.status === "fulfilled") setExecutive(executiveResult.value);
+      if (brainResult.status === "fulfilled") setBrainStatus(brainResult.value);
       setLiveError(
         [
           newsResult.status === "rejected" ? `news ${errorMessage(newsResult.reason)}` : "",
           sentimentResult.status === "rejected" ? `sentiment ${errorMessage(sentimentResult.reason)}` : "",
           statusResult.status === "rejected" ? `status ${errorMessage(statusResult.reason)}` : "",
           systemResult.status === "rejected" ? `system ${errorMessage(systemResult.reason)}` : "",
-          executiveResult.status === "rejected" ? `executive ${errorMessage(executiveResult.reason)}` : ""
+          executiveResult.status === "rejected" ? `executive ${errorMessage(executiveResult.reason)}` : "",
+          brainResult.status === "rejected" ? `brain ${errorMessage(brainResult.reason)}` : ""
         ].filter(Boolean).join(" | ")
       );
       setLastRefresh(new Date().toISOString());
@@ -108,6 +113,16 @@ export default function DashboardPage() {
     setBusy(true);
     try {
       setPipelineResult(await api.updateFundamentals(24));
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runLearningCycle = async () => {
+    setBusy(true);
+    try {
+      setPipelineResult(await api.runLearningCycle(240));
       await load();
     } finally {
       setBusy(false);
@@ -175,6 +190,8 @@ export default function DashboardPage() {
       )}
 
       {executive && <ExecutiveDashboard data={executive} onAddWatch={addWatch} />}
+
+      <FinancialBrainStatus status={brainStatus} busy={busy} onRunCycle={runLearningCycle} />
 
       <section className="grid-4 market-metrics">
         <Metric label="Assets" value={data.market_pulse.asset_count} />

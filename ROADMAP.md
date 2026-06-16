@@ -2,7 +2,7 @@
 
 This roadmap is the execution plan for turning Blum into a credible open-source AI financial intelligence platform. Each phase should ship with working code, API coverage, UI coverage, documentation and explicit limitations.
 
-## Current Increment - Strategic Market Intelligence Officer
+## Current Increment - Self-Learning Financial Brain
 
 Shipped in the current architecture:
 
@@ -30,6 +30,13 @@ Shipped in the current architecture:
 - New APIs include `/intelligence/executive`, `/intelligence/opportunities`, `/intelligence/narrative`, `/intelligence/community`, `/intelligence/watchlist`, `/intelligence/portfolio-scenario`, `/intelligence/reports/{ticker}` and `/intelligence/backtest/{ticker}`.
 - The executive dashboard now opens with strategic market triage: Top Opportunities Today, Market Mood, Dominant Narrative, Risk Level, Sector Rotation, Watchlist Alerts, Best AI Reports and Last Backtests.
 - Demo fallback policy is explicit: no synthetic prices are generated; if similar-case backtest sample depth is insufficient, statistics are returned as `demonstration_mode` and marked as non-production evidence.
+- Blum Financial Brain now has a measurable self-learning layer: signal evaluations, outcomes, model weight versions, learning events, historical similarity cases, confidence adjustments, source reliability and ticker/sector accuracy profiles.
+- New brain APIs include `/brain/status`, `/brain/accuracy`, `/brain/learning-events`, `/brain/signal-evaluations`, `/brain/asset-memory/{ticker}`, `/brain/confidence-history/{ticker}`, `/brain/evaluate-signals`, `/brain/recalculate-weights` and `/brain/run-learning-cycle`.
+- The realtime worker schedules `financial_brain_learning`, which evaluates matured signal horizons, refreshes accuracy memory, updates adaptive confidence and audits weight recalibration.
+- The dashboard now exposes Financial Brain status, learning state, evaluated signals, historical accuracy, 7D/30D success rates, calibration, data quality and model drift warnings.
+- Asset Detail now exposes Blum Memory: similar historical setups, confidence evolution, outcome history, confidence-change reasons and what Blum learned.
+- Signal Lab now exposes pre-signal confidence, post-evaluation result, learning impact and invalidating conditions for stored horizon evaluations.
+- Governance is explicit: no autonomous code modification, no trading, no certainty claims, no direct financial advice and every database-only weight change is reversible.
 
 ## Phase 0 - Stabilize Docker Space Deployment
 

@@ -12,13 +12,49 @@ from app.ai.financial_brain import FinancialBrainModel
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.ingestion.news_ingestor import NewsIngestor
-from app.models import AIInsight, AccuracySnapshot, Asset, EmbeddingVector, FundamentalSnapshot, IntelligenceReport, MacroSnapshot, NewsArticle, NewsAssetLink, PortfolioScenario, PriceHistory, PriceProviderCheck, SentimentAnalysis, SignalSnapshot, WatchlistItem
+from app.models import (
+    AIInsight,
+    AccuracySnapshot,
+    Asset,
+    ConfidenceAdjustment,
+    EmbeddingVector,
+    FundamentalSnapshot,
+    HistoricalSimilarityCase,
+    IntelligenceReport,
+    LearningEvent,
+    MacroSnapshot,
+    ModelWeightVersion,
+    NewsArticle,
+    NewsAssetLink,
+    PortfolioScenario,
+    PriceHistory,
+    PriceProviderCheck,
+    SectorAccuracyProfile,
+    SentimentAnalysis,
+    SignalEvaluation,
+    SignalOutcome,
+    SignalSnapshot,
+    SourceReliabilityScore,
+    TickerAccuracyProfile,
+    WatchlistItem,
+)
 from app.schemas import AssetOut, MarketUpdateRequest, NewsOut, NewsUpdateRequest, SemanticSearchRequest, SignalRunRequest
 from app.services.accuracy import asset_accuracy_profile, latest_accuracy_snapshot, market_accuracy_overview, run_accuracy_audit, signal_validation_report
 from app.services.dashboard import dashboard_overview, signal_payload
 from app.services.data_continuity import data_coverage_report, repair_data_gaps
 from app.services.etf import list_etf_trends, update_etf_trends
 from app.services.fundamentals import fundamentals_for_asset, update_fundamentals
+from app.services.financial_brain_learning import (
+    brain_accuracy,
+    brain_asset_memory,
+    brain_confidence_history,
+    brain_learning_events,
+    brain_signal_evaluations,
+    brain_status,
+    evaluate_signals_for_learning,
+    recalculate_model_weights,
+    run_learning_cycle,
+)
 from app.services.ipo import ipo_radar, sec_company_submissions, update_ipo_radar
 from app.services.live import live_news, market_sentiment
 from app.services.macro import macro_overview, update_macro_snapshots
@@ -58,7 +94,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
     return {
         "service": "blum-ai-financial-intelligence",
         "app_version": settings.app_version,
-        "feature_set": "strategic-market-intelligence-v0.5.6",
+        "feature_set": "self-learning-financial-brain-v0.5.7",
         "environment": settings.environment,
         "generated_at": datetime.utcnow().isoformat(),
         "hugging_face": {
@@ -77,6 +113,8 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "startup_accuracy_seed_enabled": settings.seed_accuracy_on_startup,
             "data_gap_repair_minutes": settings.data_gap_repair_minutes,
             "accuracy_audit_minutes": settings.accuracy_audit_minutes,
+            "learning_loop_enabled": settings.enable_learning_loop,
+            "learning_loop_minutes": settings.learning_loop_minutes,
             "fundamentals_refresh_minutes": settings.fundamentals_refresh_minutes,
             "macro_refresh_minutes": settings.macro_refresh_minutes,
         },
@@ -98,6 +136,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "accuracy_confidence_layer": True,
             "macro_fundamental_context": True,
             "strategic_intelligence_layer": True,
+            "self_learning_financial_brain": True,
             "portfolio_scenario": True,
             "watchlist": True,
         },
@@ -113,15 +152,75 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "watchlist_items": int(db.scalar(select(func.count(WatchlistItem.id))) or 0),
             "intelligence_reports": int(db.scalar(select(func.count(IntelligenceReport.id))) or 0),
             "portfolio_scenarios": int(db.scalar(select(func.count(PortfolioScenario.id))) or 0),
+            "signal_evaluations": int(db.scalar(select(func.count(SignalEvaluation.id))) or 0),
+            "signal_outcomes": int(db.scalar(select(func.count(SignalOutcome.id))) or 0),
+            "learning_events": int(db.scalar(select(func.count(LearningEvent.id))) or 0),
+            "model_weight_versions": int(db.scalar(select(func.count(ModelWeightVersion.id))) or 0),
+            "historical_similarity_cases": int(db.scalar(select(func.count(HistoricalSimilarityCase.id))) or 0),
+            "confidence_adjustments": int(db.scalar(select(func.count(ConfidenceAdjustment.id))) or 0),
+            "source_reliability_scores": int(db.scalar(select(func.count(SourceReliabilityScore.id))) or 0),
+            "ticker_accuracy_profiles": int(db.scalar(select(func.count(TickerAccuracyProfile.id))) or 0),
+            "sector_accuracy_profiles": int(db.scalar(select(func.count(SectorAccuracyProfile.id))) or 0),
         },
         "latest_news_created_at": latest_brain,
         "why_gui_can_look_unchanged": [
             "Hugging Face serves the previous image until the Docker build finishes successfully.",
             "The finance-domain 7B model is disabled by default unless BLUM_ENABLE_FINANCIAL_BRAIN_MODEL=true.",
             "Existing snapshots must be regenerated with Run brain or full pipeline after a new deployment.",
-            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.5.6.",
+            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.5.7.",
         ],
     }
+
+
+@router.get("/brain/status")
+def financial_brain_status(db: Session = Depends(get_db)) -> dict:
+    return brain_status(db)
+
+
+@router.get("/brain/accuracy")
+def financial_brain_accuracy(db: Session = Depends(get_db)) -> dict:
+    return brain_accuracy(db)
+
+
+@router.get("/brain/learning-events")
+def financial_brain_learning_events(limit: int = Query(default=50, ge=1, le=200), db: Session = Depends(get_db)) -> list[dict]:
+    return brain_learning_events(db, limit=limit)
+
+
+@router.get("/brain/signal-evaluations")
+def financial_brain_signal_evaluations(
+    ticker: str | None = Query(default=None),
+    limit: int = Query(default=120, ge=1, le=500),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    return brain_signal_evaluations(db, ticker=ticker, limit=limit)
+
+
+@router.get("/brain/asset-memory/{ticker}")
+def financial_brain_asset_memory(ticker: str, db: Session = Depends(get_db)) -> dict:
+    asset = require_asset(db, ticker)
+    return brain_asset_memory(db, asset)
+
+
+@router.get("/brain/confidence-history/{ticker}")
+def financial_brain_confidence_history(ticker: str, db: Session = Depends(get_db)) -> dict:
+    asset = require_asset(db, ticker)
+    return brain_confidence_history(db, asset)
+
+
+@router.post("/brain/evaluate-signals")
+def financial_brain_evaluate_signals(limit: int = Query(default=240, ge=1, le=1000), db: Session = Depends(get_db)) -> dict:
+    return evaluate_signals_for_learning(db, limit=limit)
+
+
+@router.post("/brain/recalculate-weights")
+def financial_brain_recalculate_weights(db: Session = Depends(get_db)) -> dict:
+    return recalculate_model_weights(db)
+
+
+@router.post("/brain/run-learning-cycle")
+def financial_brain_run_learning_cycle(limit: int = Query(default=240, ge=1, le=1000), db: Session = Depends(get_db)) -> dict:
+    return run_learning_cycle(db, limit=limit)
 
 
 @router.get("/assets")
@@ -289,12 +388,17 @@ def signals_run(payload: SignalRunRequest, db: Session = Depends(get_db)):
         MarketDataService().update_prices(db, tickers=payload.tickers, period=settings.historical_price_period, limit=payload.limit)
     result = SignalEngine().run(db, tickers=payload.tickers, limit=payload.limit)
     result.update(update_etf_trends(db))
+    if settings.enable_learning_loop:
+        result["financial_brain_learning"] = run_learning_cycle(db, limit=max(payload.limit, settings.max_update_assets) * 3)
     return result
 
 
 @router.post("/pipeline/run")
 def pipeline_run(payload: SignalRunRequest, db: Session = Depends(get_db)):
-    return PipelineService().run(db, tickers=payload.tickers, limit=payload.limit, period=settings.historical_price_period)
+    result = PipelineService().run(db, tickers=payload.tickers, limit=payload.limit, period=settings.historical_price_period)
+    if settings.enable_learning_loop:
+        result["financial_brain_learning"] = run_learning_cycle(db, limit=max(payload.limit, settings.max_update_assets) * 3)
+    return result
 
 
 @router.get("/pipeline/status")

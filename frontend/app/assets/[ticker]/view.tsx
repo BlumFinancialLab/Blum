@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { AccuracyProfile, PricePoint, RelatedNews, Signal } from "@/lib/types";
 import { LoadingState } from "@/components/LoadingState";
+import { BlumMemoryPanel } from "@/components/BlumMemoryPanel";
 import { BreakdownBars } from "@/components/BreakdownBars";
 import { formatPercent, formatPrice, formatVolume, MarketSnapshotStrip } from "@/components/MarketSnapshotStrip";
 import { PlotPanel } from "@/components/PlotPanel";
@@ -14,6 +15,7 @@ export function AssetDetailClient({ ticker }: { ticker: string }) {
   const [accuracy, setAccuracy] = useState<AccuracyProfile | null>(null);
   const [fundamentals, setFundamentals] = useState<any>(null);
   const [report, setReport] = useState<any>(null);
+  const [brainMemory, setBrainMemory] = useState<any>(null);
   const [insight, setInsight] = useState<any>(null);
   const [insightError, setInsightError] = useState("");
   const [insightLoading, setInsightLoading] = useState(false);
@@ -25,15 +27,17 @@ export function AssetDetailClient({ ticker }: { ticker: string }) {
     setAccuracy(null);
     setFundamentals(null);
     setReport(null);
+    setBrainMemory(null);
     setInsight(null);
     setInsightError("");
-    Promise.allSettled([api.asset(ticker), api.assetAccuracy(ticker), api.fundamentals(ticker), api.intelligenceReport(ticker)] as const)
-      .then(([assetResult, accuracyResult, fundamentalsResult, reportResult]) => {
+    Promise.allSettled([api.asset(ticker), api.assetAccuracy(ticker), api.fundamentals(ticker), api.intelligenceReport(ticker), api.brainAssetMemory(ticker)] as const)
+      .then(([assetResult, accuracyResult, fundamentalsResult, reportResult, brainResult]) => {
         if (assetResult.status === "fulfilled") setData(assetResult.value);
         else setError((assetResult.reason as Error).message);
         if (accuracyResult.status === "fulfilled") setAccuracy(accuracyResult.value);
         if (fundamentalsResult.status === "fulfilled") setFundamentals(fundamentalsResult.value);
         if (reportResult.status === "fulfilled") setReport(reportResult.value);
+        if (brainResult.status === "fulfilled") setBrainMemory(brainResult.value);
       });
   }, [ticker]);
 
@@ -100,6 +104,8 @@ export function AssetDetailClient({ ticker }: { ticker: string }) {
       </section>
 
       {report && <AssetIntelligenceReportPanel report={report} />}
+
+      <BlumMemoryPanel memory={brainMemory} />
 
       <section className="grid-2" style={{ marginTop: 12 }}>
         <PlotPanel

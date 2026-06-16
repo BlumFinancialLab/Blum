@@ -1,4 +1,4 @@
-import { AccuracyOverview, AccuracyProfile, Asset, CommunitySentimentPayload, DashboardOverview, DataCoverage, ExecutiveDashboardPayload, IPORadar, LiveNewsArticle, MacroOverview, MarketBrain, MarketBrainHistoryRow, MarketNarrativePayload, MarketSentiment, OpportunityRadarPayload, PipelineStatus, PortfolioScenarioPayload, RelatedNews, Signal, SignalValidationReport, StockRadar, SystemStatus, WatchlistPayload } from "./types";
+import { AccuracyOverview, AccuracyProfile, Asset, BrainAccuracy, BrainAssetMemory, BrainEvaluation, BrainStatus, CommunitySentimentPayload, DashboardOverview, DataCoverage, ExecutiveDashboardPayload, IPORadar, LiveNewsArticle, MacroOverview, MarketBrain, MarketBrainHistoryRow, MarketNarrativePayload, MarketSentiment, OpportunityRadarPayload, PipelineStatus, PortfolioScenarioPayload, RelatedNews, Signal, SignalValidationReport, StockRadar, SystemStatus, WatchlistPayload } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
 
@@ -34,6 +34,15 @@ async function responseError(response: Response) {
 
 export const api = {
   systemStatus: () => getJson<SystemStatus>("/system/status"),
+  brainStatus: () => getJson<BrainStatus>("/brain/status"),
+  brainAccuracy: () => getJson<BrainAccuracy>("/brain/accuracy"),
+  brainLearningEvents: (limit = 50) => getJson<any[]>(`/brain/learning-events?limit=${limit}`),
+  brainSignalEvaluations: (limit = 120, ticker?: string) => getJson<BrainEvaluation[]>(`/brain/signal-evaluations?limit=${limit}${ticker ? `&ticker=${encodeURIComponent(ticker)}` : ""}`),
+  brainAssetMemory: (ticker: string) => getJson<BrainAssetMemory>(`/brain/asset-memory/${encodeURIComponent(ticker)}`),
+  brainConfidenceHistory: (ticker: string) => getJson<any>(`/brain/confidence-history/${encodeURIComponent(ticker)}`),
+  evaluateBrainSignals: (limit = 240) => postJson<any>(`/brain/evaluate-signals?limit=${limit}`, {}),
+  recalculateBrainWeights: () => postJson<any>("/brain/recalculate-weights", {}),
+  runLearningCycle: (limit = 240) => postJson<any>(`/brain/run-learning-cycle?limit=${limit}`, {}),
   assets: () => getJson<Asset[]>("/assets"),
   asset: (ticker: string) => getJson<{ asset: Asset; market_snapshot: Asset["market_snapshot"]; prices: any[]; latest_signal: Signal | null; related_news: RelatedNews[] }>(`/assets/${encodeURIComponent(ticker)}`),
   overview: () => getJson<DashboardOverview>("/dashboard/overview"),

@@ -13,6 +13,7 @@ from app.services.accuracy import run_accuracy_audit
 from app.services.data_continuity import repair_data_gaps
 from app.services.etf import update_etf_trends
 from app.services.fundamentals import update_fundamentals
+from app.services.financial_brain_learning import run_learning_cycle
 from app.services.ipo import update_ipo_radar
 from app.services.macro import update_macro_snapshots
 from app.services.market_data import MarketDataService
@@ -49,6 +50,8 @@ def start_realtime_services() -> None:
     _scheduler.add_job(run_macro_refresh, "interval", minutes=settings.macro_refresh_minutes, id="macro_refresh", replace_existing=True, max_instances=1)
     _scheduler.add_job(run_fundamentals_refresh, "interval", minutes=settings.fundamentals_refresh_minutes, id="fundamentals_refresh", replace_existing=True, max_instances=1)
     _scheduler.add_job(run_ipo_refresh, "interval", minutes=settings.ipo_refresh_minutes, id="ipo_refresh", replace_existing=True, max_instances=1)
+    if settings.enable_learning_loop:
+        _scheduler.add_job(run_learning_cycle_job, "interval", minutes=settings.learning_loop_minutes, id="financial_brain_learning", replace_existing=True, max_instances=1)
     _scheduler.start()
     with _state_lock:
         _state["started"] = True
@@ -67,10 +70,12 @@ def realtime_status() -> dict:
 
 
 def run_startup_pipeline() -> None:
-    _run_job(
-        "startup_pipeline",
-        lambda db: PipelineService().run(db, limit=settings.startup_pipeline_limit, period=settings.historical_price_period),
-    )
+    def work(db):
+        pipeline = PipelineService().run(db, limit=settings.startup_pipeline_limit, period=settings.historical_price_period)
+        learning = run_learning_cycle(db, limit=settings.max_update_assets * 6) if settings.enable_learning_loop else {}
+        return {"pipeline": pipeline, "financial_brain_learning": learning}
+
+    _run_job("startup_pipeline", work)
 
 
 def run_news_refresh() -> None:
@@ -82,7 +87,8 @@ def run_market_refresh() -> None:
         market = MarketDataService().update_prices(db, period=settings.refresh_price_period, limit=settings.max_update_assets)
         signals = SignalEngine().run(db, limit=settings.max_update_assets)
         etf = update_etf_trends(db)
-        return {"market_update": market, "signal_run": signals, "etf_update": etf}
+        learning = run_learning_cycle(db, limit=settings.max_update_assets * 6) if settings.enable_learning_loop else {}
+        return {"market_update": market, "signal_run": signals, "etf_update": etf, "financial_brain_learning": learning}
 
     _run_job("market_refresh", work)
 
@@ -108,6 +114,10 @@ def run_ipo_refresh() -> None:
         return update_ipo_radar(db, limit_per_form=45)
 
     _run_job("ipo_refresh", work)
+
+
+def run_learning_cycle_job() -> None:
+    _run_job("financial_brain_learning", lambda db: run_learning_cycle(db, limit=settings.max_update_assets * 6))
 
 
 def _run_job(job_name: str, work):

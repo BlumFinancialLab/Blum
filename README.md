@@ -28,6 +28,7 @@ This is not a consumer trading app and not a simple dashboard. The project is a 
 | Filing intelligence | SEC EDGAR current filing feeds for S-1, F-1 and 424B prospectus forms |
 | Accuracy layer | multi-provider checks, data quality, source credibility, macro/fundamental context and Blum Confidence Score |
 | Strategic intelligence | Opportunity Radar, Market Narrative AI, Asset Intelligence Reports, watchlist, portfolio scenarios and community sentiment |
+| Self-learning layer | signal outcome evaluation, accuracy memory, adaptive confidence, model weight versions and historical similarity cases |
 | AI sentiment | FinBERT primary, VADER baseline |
 | Semantic layer | sentence-transformers embeddings, semantic search, theme discovery |
 | Reasoning | lightweight Qwen-compatible LLM evidence-only explanation layer |
@@ -65,7 +66,10 @@ Blum does not use one generic AI model for everything.
 14. Build a Market Brain snapshot that combines stocks, ETFs, news, sentiment, IPO evidence, scenarios and risk alerts.
 15. Run the 15-point accuracy and confidence audit.
 16. Build the Strategic Intelligence dashboard: opportunity radar, narrative, watchlist alerts, portfolio scenario and similar-case validation.
-17. Produce AI explanations using only retrieved evidence.
+17. Evaluate matured signal outcomes after 1D, 3D, 7D, 14D and 30D.
+18. Update signal accuracy memory, source reliability, ticker/sector profiles and adaptive confidence adjustments.
+19. Version scoring weights in the database when real matured outcomes justify recalibration.
+20. Produce AI explanations using only retrieved evidence.
 
 ## Live Runtime
 
@@ -79,6 +83,7 @@ When the FastAPI application starts, APScheduler launches a background intellige
 - `accuracy_audit`: 15-point confidence audit every 240 minutes by default.
 - `macro_refresh`: FRED public macro context refresh every 240 minutes by default.
 - `fundamentals_refresh`: SEC companyfacts refresh every 720 minutes by default.
+- `financial_brain_learning`: self-learning evaluation, memory refresh and confidence calibration every 360 minutes by default.
 
 The dashboard polls live JSON endpoints every 30 seconds and shows worker state, latest public news, sentiment distribution, source/model diagnostics and signal readiness. No generated headlines, generated prices or fabricated sentiment are shown.
 
@@ -107,6 +112,44 @@ Strategic modules:
 - **Community & Sentiment Intelligence** summarizes public-news sentiment themes, discussed assets and possible hype-bubble review flags.
 
 The wording policy explicitly avoids `buy`, `sell`, guaranteed profit or trading instructions. Surfaces use language such as monitor, observe, setup, scenario, risk review and research candidate.
+
+## Self-Learning Financial Brain
+
+Blum now includes a measurable self-learning layer called **Blum Financial Brain**. This is not artificial consciousness and not autonomous trading. It is a controlled financial intelligence memory that checks whether prior signals were useful after real market outcomes arrive.
+
+The learning engine evaluates each signal after:
+
+- 1 trading-day horizon proxy;
+- 3-day horizon;
+- 7-day horizon;
+- 14-day horizon;
+- 30-day horizon.
+
+Each evaluation stores ticker, signal type, initial confidence, initial sentiment, initial momentum, news evidence, expected direction, price at signal, price after horizon, max drawdown, max upside, realized return, post-signal volatility, outcome, explanation quality and data quality.
+
+The memory layer persists:
+
+- `signal_evaluations`
+- `signal_outcomes`
+- `model_weight_versions`
+- `learning_events`
+- `historical_similarity_cases`
+- `confidence_adjustments`
+- `source_reliability_scores`
+- `ticker_accuracy_profiles`
+- `sector_accuracy_profiles`
+
+Adaptive confidence combines historical accuracy, sector and ticker memory, linked source reliability, price/news coherence, volatility and similar past cases. The system can increase or reduce confidence, but every adjustment is logged and explainable.
+
+Weight recalibration is database-only and reversible. Blum can create a new `model_weight_versions` row after enough matured outcomes exist, but it does not modify source code, execute trades or generate deterministic financial recommendations. If there is not enough historical evidence, it explicitly returns `insufficient_sample`.
+
+The UI exposes:
+
+- Dashboard: Financial Brain status, learning state, historical accuracy, 7D/30D success rate, calibration, best/weakest signal types, data quality and drift warning.
+- Asset Detail: Blum Memory, historical similarity, confidence evolution, outcome history and what was learned.
+- Signal Lab: pre-signal confidence, post-evaluation result, learning impact, weight status, similar past evidence and invalidating conditions.
+
+Governance rules are enforced in product language and API output: no absolute certainty, no direct financial advice, no autonomous trading, no self-modifying code and clear separation between observed data, inference and hypothesis.
 
 ## Market Brain
 
@@ -200,6 +243,15 @@ FastAPI exposes clean JSON endpoints:
 - `GET /intelligence/portfolio-scenario`
 - `GET /intelligence/reports/{ticker}`
 - `GET /intelligence/backtest/{ticker}`
+- `GET /brain/status`
+- `GET /brain/accuracy`
+- `GET /brain/learning-events`
+- `GET /brain/signal-evaluations`
+- `GET /brain/asset-memory/{ticker}`
+- `GET /brain/confidence-history/{ticker}`
+- `POST /brain/evaluate-signals`
+- `POST /brain/recalculate-weights`
+- `POST /brain/run-learning-cycle`
 - `POST /signals/run`
 - `POST /pipeline/run`
 - `GET /pipeline/status`
@@ -240,6 +292,7 @@ Interactive API docs are available at `/docs`.
 - AI Portfolio Scenario
 - Market Brain
 - Asset Detail
+- Blum Memory
 - Stock Radar
 - ETF Radar
 - IPO Radar
@@ -273,6 +326,15 @@ export BLUM_FINANCIAL_BRAIN_MODEL=AdaptLLM/finance-chat
 ```
 
 Keep this disabled on constrained CPU demos unless enough memory is available. The deterministic Financial Brain fallback remains evidence-bound and transparent.
+
+Optional self-learning cadence:
+
+```bash
+export BLUM_ENABLE_LEARNING_LOOP=true
+export BLUM_LEARNING_LOOP_MINUTES=360
+```
+
+The learning loop only updates database memory, confidence adjustments and reversible scoring-weight versions.
 
 ## Docker
 

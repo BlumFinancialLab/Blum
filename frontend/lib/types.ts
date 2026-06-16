@@ -164,6 +164,103 @@ export type SystemStatus = {
   why_gui_can_look_unchanged: string[];
 };
 
+export type BrainPerformanceRow = {
+  key: string;
+  mature_count: number;
+  success_rate: number | null;
+  neutral_rate: number | null;
+  average_return: number | null;
+  average_drawdown: number | null;
+  accuracy_score: number;
+};
+
+export type BrainStatus = {
+  name: string;
+  generated_at: string;
+  learning_state: string;
+  scheduler_enabled: boolean;
+  learning_interval_minutes: number;
+  signals_evaluated: number;
+  mature_evaluations: number;
+  pending_evaluations: number;
+  historical_accuracy: number | null;
+  success_rate_7d: number | null;
+  success_rate_30d: number | null;
+  confidence_calibration: Record<string, any>;
+  best_performing_signal_types: BrainPerformanceRow[];
+  weakest_signal_types: BrainPerformanceRow[];
+  data_quality_score: number;
+  model_drift_warning: { status: string; severity: string; message: string };
+  active_weight_version: Record<string, any> | null;
+  governance: string[];
+  disclaimer: string;
+};
+
+export type BrainEvaluation = {
+  id: number;
+  signal_id?: number | null;
+  ticker: string;
+  sector: string;
+  signal_type: string;
+  expected_direction: string;
+  time_horizon: string;
+  horizon_days: number;
+  signal_created_at: string;
+  initial_confidence: number;
+  initial_sentiment: number;
+  initial_momentum: number;
+  news_evidence: Record<string, any>;
+  price_at_signal: number | null;
+  price_after_horizon: number | null;
+  max_drawdown: number | null;
+  max_upside: number | null;
+  realized_return: number | null;
+  volatility_after_signal: number | null;
+  outcome: string;
+  explanation_quality_score: number;
+  data_quality_score: number;
+  evaluation_payload: Record<string, any>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type BrainAssetMemory = {
+  ticker: string;
+  generated_at: string;
+  learning_state: string;
+  latest_signal: Record<string, any> | null;
+  blum_memory_summary: string;
+  historical_similarity: {
+    similar_cases_found: number;
+    average_return: number | null;
+    success_rate: number | null;
+    average_drawdown: number | null;
+    confidence_adjustment: number;
+    explanation: string;
+  };
+  similar_historical_setups: Array<Record<string, any>>;
+  confidence_evolution: Array<Record<string, any>>;
+  signal_outcome_history: BrainEvaluation[];
+  why_confidence_changed: string[];
+  what_blum_learned: string[];
+  governance_note: string;
+  disclaimer: string;
+};
+
+export type BrainAccuracy = {
+  generated_at: string;
+  historical_accuracy: number | null;
+  success_rate_7d: number | null;
+  success_rate_30d: number | null;
+  confidence_calibration: Record<string, any>;
+  by_signal_type: BrainPerformanceRow[];
+  by_sector: BrainPerformanceRow[];
+  ticker_profiles: Array<Record<string, any>>;
+  sector_profiles: Array<Record<string, any>>;
+  source_reliability: Array<Record<string, any>>;
+  disclaimer: string;
+};
+
 export type Signal = {
   ticker: string;
   classification: string;

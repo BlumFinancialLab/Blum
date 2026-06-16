@@ -12,6 +12,7 @@ from app.models import Asset, IntelligenceReport, PortfolioScenario, SignalSnaps
 from app.scoring.factor_engine import compute_opportunity_score
 from app.services.accuracy import asset_accuracy_profile
 from app.services.etf import list_etf_trends
+from app.services.financial_brain_learning import active_model_weights
 from app.services.live import live_news, market_sentiment
 from app.services.macro import macro_overview
 from app.services.market_data import market_snapshot_for_asset
@@ -59,12 +60,13 @@ def opportunity_radar(db: Session, limit: int = 30) -> dict:
     macro = macro_overview(db)
     macro_score = macro_context_score(macro)
     sector_scores = sector_score_map(stocks.get("sector_leaders", []))
+    active_weights = active_model_weights(db)
     rows = []
     for row in stocks.get("rows", []):
         signal = row.get("signal")
         asset = row.get("asset") or {}
         sector_score = sector_scores.get(asset.get("sector"), 50)
-        factors = compute_opportunity_score(asset, {**(signal or {}), **row}, row.get("market_snapshot") or {}, sector_score=sector_score, macro_score=macro_score)
+        factors = compute_opportunity_score(asset, {**(signal or {}), **row}, row.get("market_snapshot") or {}, sector_score=sector_score, macro_score=macro_score, weights_override=active_weights)
         rows.append(opportunity_row(len(rows) + 1, row, factors, "equity"))
     for item in etfs:
         signal_like = {
@@ -78,7 +80,7 @@ def opportunity_radar(db: Session, limit: int = 30) -> dict:
             "technical_flags": {},
             "narrative_flags": {},
         }
-        factors = compute_opportunity_score(item.get("asset") or {}, signal_like, item.get("market_snapshot") or {}, sector_score=item.get("confirmation_score", 50), macro_score=macro_score)
+        factors = compute_opportunity_score(item.get("asset") or {}, signal_like, item.get("market_snapshot") or {}, sector_score=item.get("confirmation_score", 50), macro_score=macro_score, weights_override=active_weights)
         rows.append(opportunity_row(len(rows) + 1, {"ticker": item["ticker"], "asset": item.get("asset"), "market_snapshot": item.get("market_snapshot"), "signal": signal_like, "why_watch": "ETF rotation proxy with thematic and momentum confirmation."}, factors, "etf"))
     rows = sorted(rows, key=lambda item: item["opportunity_score"], reverse=True)
     for index, row in enumerate(rows, start=1):
