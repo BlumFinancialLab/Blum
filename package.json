@@ -1,6 +1,6 @@
 {
   "name": "blum-ai-financial-intelligence",
-  "version": "0.5.7",
+  "version": "0.5.8",
   "private": true,
   "scripts": {
     "frontend:dev": "npm --prefix frontend run dev",

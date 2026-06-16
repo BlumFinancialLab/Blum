@@ -29,6 +29,7 @@ This is not a consumer trading app and not a simple dashboard. The project is a 
 | Accuracy layer | multi-provider checks, data quality, source credibility, macro/fundamental context and Blum Confidence Score |
 | Strategic intelligence | Opportunity Radar, Market Narrative AI, Asset Intelligence Reports, watchlist, portfolio scenarios and community sentiment |
 | Self-learning layer | signal outcome evaluation, accuracy memory, adaptive confidence, model weight versions and historical similarity cases |
+| Chart intelligence | Qwen3-VL/InternVL3-ready visual chart analyst plus deterministic OHLCV technical engine |
 | AI sentiment | FinBERT primary, VADER baseline |
 | Semantic layer | sentence-transformers embeddings, semantic search, theme discovery |
 | Reasoning | lightweight Qwen-compatible LLM evidence-only explanation layer |
@@ -45,6 +46,8 @@ Blum does not use one generic AI model for everything.
 - sentence-transformers: embeddings for semantic search, narrative clustering, recurring themes and links between assets, sectors and macro trends.
 - Qwen-compatible lightweight LLM: structured explanations from retrieved evidence only.
 - Blum Financial Brain: finance-domain reasoning adapter for regime interpretation, opportunity hypotheses, risk hypotheses and monitoring plans.
+- Chart Vision Technical Analyst: Qwen3-VL primary VLM for visual chart interpretation when configured, InternVL3 fallback for low-confidence or failed primary visual reads.
+- Deterministic Technical Analysis Engine: OHLCV-derived trend structure, levels, moving averages, RSI, MACD, Bollinger Bands, ATR, volume, gaps, divergences, volatility compression and risk/reward.
 - Statistical time-series module: anomalies, volatility regimes and scenario bands, ready for Chronos, TimesFM or PatchTST integration.
 - Rule-based quantitative engine: scoring, ranking, risk controls and classifications.
 
@@ -69,7 +72,9 @@ Blum does not use one generic AI model for everything.
 17. Evaluate matured signal outcomes after 1D, 3D, 7D, 14D and 30D.
 18. Update signal accuracy memory, source reliability, ticker/sector profiles and adaptive confidence adjustments.
 19. Version scoring weights in the database when real matured outcomes justify recalibration.
-20. Produce AI explanations using only retrieved evidence.
+20. Generate professional chart analysis from deterministic OHLCV evidence and optional Qwen3-VL/InternVL3 visual interpretation.
+21. Persist chart analyses, technical levels, technical signals and chart pattern memory.
+22. Produce AI explanations using only retrieved evidence.
 
 ## Live Runtime
 
@@ -150,6 +155,49 @@ The UI exposes:
 - Signal Lab: pre-signal confidence, post-evaluation result, learning impact, weight status, similar past evidence and invalidating conditions.
 
 Governance rules are enforced in product language and API output: no absolute certainty, no direct financial advice, no autonomous trading, no self-modifying code and clear separation between observed data, inference and hypothesis.
+
+## Chart Vision Technical Analyst
+
+Blum includes a dedicated technical chart intelligence module. It is designed to read financial chart images when a vision model is configured, but it never relies only on visual interpretation.
+
+The module combines:
+
+- **Qwen3-VL** as the primary configurable vision-language model for chart screenshots.
+- **InternVL3** as a fallback model for low-confidence or failed visual interpretation.
+- A deterministic OHLCV technical analysis engine for objective indicator and level calculation.
+- Blum Financial Brain memory for historical context and similarity.
+- Existing sentiment/news context for confirmation or contradiction checks.
+
+The deterministic engine calculates:
+
+- trend direction;
+- higher highs, higher lows, lower highs and lower lows;
+- support and resistance zones;
+- EMA 9/21/50/200 and SMA 20/50/200;
+- RSI, MACD, Bollinger Bands and ATR;
+- relative volume and volume pressure;
+- volatility regime and compression;
+- gaps, consolidation zones and pullback quality;
+- accumulation/distribution bias;
+- price/RSI and price/MACD divergences;
+- breakout probability;
+- trend strength;
+- risk/reward geometry.
+
+The hybrid layer outputs trend summary, key levels, bullish/bearish/neutral evidence, confirmation signals, contradiction signals, invalidation level, risk zone, opportunity zone, confidence, scenarios, what to watch next and historical chart similarity.
+
+Model serving is configurable:
+
+```bash
+export CHART_VISION_MODEL=Qwen/Qwen3-VL
+export CHART_VISION_FALLBACK_MODEL=OpenGVLab/InternVL3
+export CHART_VISION_MODE=disabled   # local | remote | disabled
+export CHART_VISION_MIN_CONFIDENCE=0.70
+export CHART_VISION_REMOTE_URL=
+export CHART_VISION_REMOTE_TOKEN=
+```
+
+Default Docker demo behavior is `CHART_VISION_MODE=disabled`, so the app remains reliable on CPU Spaces. The UI displays: `Vision model unavailable, deterministic analysis active`. Use `remote` mode for a production VLM endpoint.
 
 ## Market Brain
 
@@ -252,6 +300,12 @@ FastAPI exposes clean JSON endpoints:
 - `POST /brain/evaluate-signals`
 - `POST /brain/recalculate-weights`
 - `POST /brain/run-learning-cycle`
+- `POST /chart/analyze-image`
+- `POST /chart/analyze-ticker`
+- `GET /chart/technical-report/{ticker}`
+- `GET /chart/levels/{ticker}`
+- `GET /chart/signals/{ticker}`
+- `GET /chart/history/{ticker}`
 - `POST /signals/run`
 - `POST /pipeline/run`
 - `GET /pipeline/status`
@@ -291,6 +345,7 @@ Interactive API docs are available at `/docs`.
 - Asset Intelligence Report
 - AI Portfolio Scenario
 - Market Brain
+- Chart Analyst
 - Asset Detail
 - Blum Memory
 - Stock Radar
@@ -387,6 +442,7 @@ Backtesting is included for research validation only. It reports historical hit 
 - SEC EDGAR current feeds are public filing evidence. They do not cover private-company rumor, expected listings without filings or licensed IPO calendars.
 - The system does not generate synthetic prices. If public providers fail or rate-limit, the affected assets are reported as missing instead of being filled with fake data.
 - FinBERT, embeddings and LLM model loading depend on runtime memory and Hugging Face model availability.
+- Qwen3-VL and InternVL3 chart vision are optional because multimodal models can exceed CPU Space resources. Deterministic OHLCV technical analysis remains active without them.
 - The reasoning layer must not invent data; it is constrained to retrieved evidence.
 - Signal classifications are research triage outputs, not investment recommendations.
 - PostgreSQL is the database layer; the Docker demo can start an embedded PostgreSQL instance for Hugging Face convenience.

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { BarChart3, Brain, Cpu, Database, Gauge, Network, Radar, Search, ShieldAlert, type LucideIcon } from "lucide-react";
+import { BarChart3, Brain, Cpu, Database, Gauge, LineChart, Network, Radar, Search, ShieldAlert, type LucideIcon } from "lucide-react";
 import clsx from "clsx";
 import { api } from "@/lib/api";
 import { SystemStatus } from "@/lib/types";
@@ -19,6 +19,7 @@ const nav: NavItem[] = [
   { href: "/", label: "Dashboard", icon: Gauge, aliases: ["/dashboard"] },
   { href: "/market-brain", label: "Market Brain", icon: Cpu },
   { href: "/stock-radar", label: "Radar", icon: Radar, aliases: ["/etf-radar", "/ipo-radar", "/assets"] },
+  { href: "/chart-analyst", label: "Chart Analyst", icon: LineChart },
   { href: "/themes", label: "Themes", icon: Network },
   { href: "/signal-lab", label: "Signal Lab", icon: Search },
   { href: "/methodology", label: "Methodology", icon: Brain }

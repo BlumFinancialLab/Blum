@@ -956,6 +956,71 @@ p { color: var(--muted); line-height: 1.55; }
   padding: 10px;
   font-size: 12px;
 }
+.chart-analyst-shell {
+  margin-top: 12px;
+}
+.compact-header {
+  margin-bottom: 12px;
+}
+.chart-snapshot-panel .brain-status-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.key-level-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.key-level-grid div {
+  min-height: 66px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 9px;
+  background: #070a0f;
+}
+.key-level-grid span {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  font-weight: 900;
+}
+.key-level-grid strong {
+  display: block;
+  margin-top: 7px;
+  color: var(--amber);
+  font-size: 20px;
+}
+.evidence-columns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.evidence-columns h3 {
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+.scenario-list {
+  display: grid;
+  gap: 8px;
+}
+.scenario-list div {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px;
+  background: #070a0f;
+}
+.scenario-list strong {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--text);
+}
+.scenario-list span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
 
 .control-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
 .button { border: 1px solid var(--line); background: #101722; color: var(--text); border-radius: 6px; padding: 9px 12px; font-weight: 900; cursor: pointer; }
@@ -993,7 +1058,7 @@ p { color: var(--muted); line-height: 1.55; }
   .system-card { position: static; margin-top: 14px; }
   .page-header { align-items: flex-start; flex-direction: column; }
   .header-actions { justify-content: flex-start; }
-  .hero, .grid-2, .grid-3, .grid-4, .live-grid, .realtime-strip, .deployment-banner, .diagnostic-grid, .instrument-card, .market-strip, .market-strip.compact, .brain-hero, .scenario-grid, .evidence-grid, .method-grid, .event-graph, .financial-brain-grid, .quality-lists, .macro-list, .executive-hero, .executive-command, .executive-grid, .narrative-grid, .sentiment-columns, .opportunity-card, .score-stack, .allocation-list div, .brain-status-grid, .brain-two-col { grid-template-columns: 1fr; }
+  .hero, .grid-2, .grid-3, .grid-4, .live-grid, .realtime-strip, .deployment-banner, .diagnostic-grid, .instrument-card, .market-strip, .market-strip.compact, .brain-hero, .scenario-grid, .evidence-grid, .method-grid, .event-graph, .financial-brain-grid, .quality-lists, .macro-list, .executive-hero, .executive-command, .executive-grid, .narrative-grid, .sentiment-columns, .opportunity-card, .score-stack, .allocation-list div, .brain-status-grid, .brain-two-col, .chart-snapshot-panel .brain-status-grid, .key-level-grid, .evidence-columns { grid-template-columns: 1fr; }
   .tape-row { grid-template-columns: 1fr; }
   .tape-meta { justify-content: flex-start; max-width: none; }
 }

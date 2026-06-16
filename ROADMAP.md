@@ -2,7 +2,7 @@
 
 This roadmap is the execution plan for turning Blum into a credible open-source AI financial intelligence platform. Each phase should ship with working code, API coverage, UI coverage, documentation and explicit limitations.
 
-## Current Increment - Self-Learning Financial Brain
+## Current Increment - Chart Vision Technical Analyst
 
 Shipped in the current architecture:
 
@@ -37,6 +37,14 @@ Shipped in the current architecture:
 - Asset Detail now exposes Blum Memory: similar historical setups, confidence evolution, outcome history, confidence-change reasons and what Blum learned.
 - Signal Lab now exposes pre-signal confidence, post-evaluation result, learning impact and invalidating conditions for stored horizon evaluations.
 - Governance is explicit: no autonomous code modification, no trading, no certainty claims, no direct financial advice and every database-only weight change is reversible.
+- Chart Vision Technical Analyst adds a Qwen3-VL primary / InternVL3 fallback architecture for chart image interpretation, with deterministic OHLCV analysis as the always-on backbone.
+- New chart tables include `chart_analyses`, `technical_levels`, `technical_signals` and `chart_pattern_memory`.
+- New chart APIs include `/chart/analyze-image`, `/chart/analyze-ticker`, `/chart/technical-report/{ticker}`, `/chart/levels/{ticker}`, `/chart/signals/{ticker}` and `/chart/history/{ticker}`.
+- The deterministic engine calculates trend structure, moving averages, RSI, MACD, Bollinger Bands, ATR, support/resistance, volume pressure, gaps, consolidation, accumulation/distribution, divergences, breakout probability, pullback quality and risk/reward geometry.
+- The hybrid chart layer compares visual observations, OHLCV indicators, sentiment/news, Blum memory and similar chart setups.
+- Asset Detail now includes a Chart Analyst module with timeframe selector, key-level overlays, technical snapshot, signal evidence, analyst report and historical similarity.
+- A dedicated Chart Analyst page allows fast ticker-level technical analysis without opening an asset detail first.
+- Default Space behavior keeps `CHART_VISION_MODE=disabled` for CPU reliability; the UI explicitly reports deterministic analysis active when the VLM is unavailable.
 
 ## Phase 0 - Stabilize Docker Space Deployment
 

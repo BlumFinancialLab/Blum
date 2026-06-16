@@ -1,4 +1,4 @@
-import { AccuracyOverview, AccuracyProfile, Asset, BrainAccuracy, BrainAssetMemory, BrainEvaluation, BrainStatus, CommunitySentimentPayload, DashboardOverview, DataCoverage, ExecutiveDashboardPayload, IPORadar, LiveNewsArticle, MacroOverview, MarketBrain, MarketBrainHistoryRow, MarketNarrativePayload, MarketSentiment, OpportunityRadarPayload, PipelineStatus, PortfolioScenarioPayload, RelatedNews, Signal, SignalValidationReport, StockRadar, SystemStatus, WatchlistPayload } from "./types";
+import { AccuracyOverview, AccuracyProfile, Asset, BrainAccuracy, BrainAssetMemory, BrainEvaluation, BrainStatus, ChartReport, CommunitySentimentPayload, DashboardOverview, DataCoverage, ExecutiveDashboardPayload, IPORadar, LiveNewsArticle, MacroOverview, MarketBrain, MarketBrainHistoryRow, MarketNarrativePayload, MarketSentiment, OpportunityRadarPayload, PipelineStatus, PortfolioScenarioPayload, RelatedNews, Signal, SignalValidationReport, StockRadar, SystemStatus, WatchlistPayload } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
 
@@ -43,6 +43,11 @@ export const api = {
   evaluateBrainSignals: (limit = 240) => postJson<any>(`/brain/evaluate-signals?limit=${limit}`, {}),
   recalculateBrainWeights: () => postJson<any>("/brain/recalculate-weights", {}),
   runLearningCycle: (limit = 240) => postJson<any>(`/brain/run-learning-cycle?limit=${limit}`, {}),
+  chartAnalyzeTicker: (ticker: string, timeframe = "6M", period = "1y", includeVisual = false) => getPostChart<ChartReport>(`/chart/analyze-ticker?ticker=${encodeURIComponent(ticker)}&timeframe=${encodeURIComponent(timeframe)}&period=${encodeURIComponent(period)}&include_visual=${includeVisual ? "true" : "false"}`),
+  chartTechnicalReport: (ticker: string, timeframe = "6M") => getJson<ChartReport>(`/chart/technical-report/${encodeURIComponent(ticker)}?timeframe=${encodeURIComponent(timeframe)}`),
+  chartLevels: (ticker: string, timeframe = "6M") => getJson<any>(`/chart/levels/${encodeURIComponent(ticker)}?timeframe=${encodeURIComponent(timeframe)}`),
+  chartSignals: (ticker: string, timeframe = "6M") => getJson<any[]>(`/chart/signals/${encodeURIComponent(ticker)}?timeframe=${encodeURIComponent(timeframe)}`),
+  chartHistory: (ticker: string, limit = 30) => getJson<any[]>(`/chart/history/${encodeURIComponent(ticker)}?limit=${limit}`),
   assets: () => getJson<Asset[]>("/assets"),
   asset: (ticker: string) => getJson<{ asset: Asset; market_snapshot: Asset["market_snapshot"]; prices: any[]; latest_signal: Signal | null; related_news: RelatedNews[] }>(`/assets/${encodeURIComponent(ticker)}`),
   overview: () => getJson<DashboardOverview>("/dashboard/overview"),
@@ -92,3 +97,7 @@ export const api = {
   runPipeline: () => postJson<any>("/pipeline/run", { refresh_prices: false, limit: 36 }),
   backtest: (ticker: string) => postJson<any>(`/backtest/${ticker}`, {})
 };
+
+function getPostChart<T>(path: string): Promise<T> {
+  return postJson<T>(path, {});
+}

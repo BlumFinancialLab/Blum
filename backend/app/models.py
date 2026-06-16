@@ -466,6 +466,89 @@ class SectorAccuracyProfile(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
 
 
+class ChartAnalysis(Base):
+    __tablename__ = "chart_analyses"
+    __table_args__ = (
+        Index("ix_chart_analyses_ticker_timeframe_created", "ticker", "timeframe", "created_at"),
+        Index("ix_chart_analyses_image_hash", "image_hash"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    asset_id: Mapped[int | None] = mapped_column(ForeignKey("assets.id", ondelete="SET NULL"), index=True)
+    ticker: Mapped[str | None] = mapped_column(String(32), index=True)
+    timeframe: Mapped[str] = mapped_column(String(40), default="6M", index=True)
+    period: Mapped[str] = mapped_column(String(40), default="1y", index=True)
+    image_hash: Mapped[str | None] = mapped_column(String(128), index=True)
+    model_used: Mapped[str] = mapped_column(String(180), default="deterministic_technical_analysis", index=True)
+    visual_analysis_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    deterministic_analysis_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    hybrid_analysis_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    chart_image: Mapped[str | None] = mapped_column(Text)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    asset = relationship("Asset")
+
+
+class TechnicalLevel(Base):
+    __tablename__ = "technical_levels"
+    __table_args__ = (
+        UniqueConstraint("ticker", "timeframe", name="uq_technical_levels_ticker_timeframe"),
+        Index("ix_technical_levels_ticker_updated", "ticker", "updated_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    asset_id: Mapped[int | None] = mapped_column(ForeignKey("assets.id", ondelete="SET NULL"), index=True)
+    ticker: Mapped[str] = mapped_column(String(32), index=True)
+    timeframe: Mapped[str] = mapped_column(String(40), default="6M", index=True)
+    support_levels_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    resistance_levels_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    breakout_level: Mapped[float | None] = mapped_column(Float)
+    breakdown_level: Mapped[float | None] = mapped_column(Float)
+    invalidation_level: Mapped[float | None] = mapped_column(Float)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+    asset = relationship("Asset")
+
+
+class TechnicalSignal(Base):
+    __tablename__ = "technical_signals"
+    __table_args__ = (Index("ix_technical_signals_ticker_timeframe_created", "ticker", "timeframe", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    asset_id: Mapped[int | None] = mapped_column(ForeignKey("assets.id", ondelete="SET NULL"), index=True)
+    ticker: Mapped[str] = mapped_column(String(32), index=True)
+    timeframe: Mapped[str] = mapped_column(String(40), default="6M", index=True)
+    signal_type: Mapped[str] = mapped_column(String(120), index=True)
+    direction: Mapped[str] = mapped_column(String(40), index=True)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    evidence_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    invalidation_level: Mapped[float | None] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    asset = relationship("Asset")
+
+
+class ChartPatternMemory(Base):
+    __tablename__ = "chart_pattern_memory"
+    __table_args__ = (Index("ix_chart_pattern_memory_ticker_pattern_created", "ticker", "pattern_type", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    asset_id: Mapped[int | None] = mapped_column(ForeignKey("assets.id", ondelete="SET NULL"), index=True)
+    ticker: Mapped[str] = mapped_column(String(32), index=True)
+    timeframe: Mapped[str] = mapped_column(String(40), default="6M", index=True)
+    pattern_type: Mapped[str] = mapped_column(String(120), index=True)
+    setup_embedding: Mapped[dict] = mapped_column(JsonType, default=dict)
+    outcome_1d: Mapped[float | None] = mapped_column(Float)
+    outcome_7d: Mapped[float | None] = mapped_column(Float)
+    outcome_30d: Mapped[float | None] = mapped_column(Float)
+    max_drawdown: Mapped[float | None] = mapped_column(Float)
+    success: Mapped[bool | None] = mapped_column(Boolean, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    asset = relationship("Asset")
+
+
 class AccuracySnapshot(Base):
     __tablename__ = "accuracy_snapshots"
     __table_args__ = (Index("ix_accuracy_snapshots_scope_created", "scope", "created_at"),)

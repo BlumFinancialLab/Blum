@@ -261,6 +261,42 @@ export type BrainAccuracy = {
   disclaimer: string;
 };
 
+export type ChartReport = {
+  id?: number;
+  ticker: string;
+  timeframe: string;
+  period?: string;
+  chart_image?: string | null;
+  price_series?: PricePoint[];
+  visual_analysis: Record<string, any>;
+  deterministic_analysis: Record<string, any>;
+  hybrid_analysis: {
+    trend_summary?: string;
+    key_levels?: Record<string, number | null>;
+    technical_signals?: Array<Record<string, any>>;
+    confirmation_signals?: string[];
+    contradiction_signals?: string[];
+    invalidation_level?: number | null;
+    risk_zone?: Record<string, any>;
+    opportunity_zone?: Record<string, any>;
+    confidence_score?: number;
+    timeframe_relevance?: string;
+    possible_scenarios?: Array<Record<string, any>>;
+    what_to_watch_next?: string[];
+    bullish_evidence?: string[];
+    bearish_evidence?: string[];
+    neutral_evidence?: string[];
+    analyst_report?: string;
+    historical_similarity?: Record<string, any>;
+    warnings?: string[];
+    disclaimer?: string;
+  };
+  confidence: number;
+  warnings?: string[];
+  created_at?: string;
+  disclaimer: string;
+};
+
 export type Signal = {
   ticker: string;
   classification: string;

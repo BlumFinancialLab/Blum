@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
 import os
 
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 
 from app.ai.orchestrator import AIOrchestrator
 from app.ai.financial_brain import FinancialBrainModel
@@ -16,6 +17,8 @@ from app.models import (
     AIInsight,
     AccuracySnapshot,
     Asset,
+    ChartAnalysis,
+    ChartPatternMemory,
     ConfidenceAdjustment,
     EmbeddingVector,
     FundamentalSnapshot,
@@ -35,6 +38,8 @@ from app.models import (
     SignalOutcome,
     SignalSnapshot,
     SourceReliabilityScore,
+    TechnicalLevel,
+    TechnicalSignal,
     TickerAccuracyProfile,
     WatchlistItem,
 )
@@ -44,6 +49,7 @@ from app.services.dashboard import dashboard_overview, signal_payload
 from app.services.data_continuity import data_coverage_report, repair_data_gaps
 from app.services.etf import list_etf_trends, update_etf_trends
 from app.services.fundamentals import fundamentals_for_asset, update_fundamentals
+from app.services.chart_vision_engine import ChartVisionEngine
 from app.services.financial_brain_learning import (
     brain_accuracy,
     brain_asset_memory,
@@ -55,6 +61,7 @@ from app.services.financial_brain_learning import (
     recalculate_model_weights,
     run_learning_cycle,
 )
+from app.services.hybrid_chart_intelligence import HybridChartIntelligence
 from app.services.ipo import ipo_radar, sec_company_submissions, update_ipo_radar
 from app.services.live import live_news, market_sentiment
 from app.services.macro import macro_overview, update_macro_snapshots
@@ -94,7 +101,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
     return {
         "service": "blum-ai-financial-intelligence",
         "app_version": settings.app_version,
-        "feature_set": "self-learning-financial-brain-v0.5.7",
+        "feature_set": "chart-vision-technical-analyst-v0.5.8",
         "environment": settings.environment,
         "generated_at": datetime.utcnow().isoformat(),
         "hugging_face": {
@@ -115,6 +122,8 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "accuracy_audit_minutes": settings.accuracy_audit_minutes,
             "learning_loop_enabled": settings.enable_learning_loop,
             "learning_loop_minutes": settings.learning_loop_minutes,
+            "chart_vision_mode": settings.chart_vision_mode,
+            "chart_vision_min_confidence": settings.chart_vision_min_confidence,
             "fundamentals_refresh_minutes": settings.fundamentals_refresh_minutes,
             "macro_refresh_minutes": settings.macro_refresh_minutes,
         },
@@ -124,6 +133,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "reasoning_llm": settings.llm_model,
             "financial_brain_configured": settings.financial_brain_model,
             "financial_brain_runtime": FinancialBrainModel().status(),
+            "chart_vision": ChartVisionEngine().status(),
         },
         "feature_visibility": {
             "market_brain_page": True,
@@ -137,6 +147,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "macro_fundamental_context": True,
             "strategic_intelligence_layer": True,
             "self_learning_financial_brain": True,
+            "chart_vision_technical_analyst": True,
             "portfolio_scenario": True,
             "watchlist": True,
         },
@@ -161,13 +172,17 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "source_reliability_scores": int(db.scalar(select(func.count(SourceReliabilityScore.id))) or 0),
             "ticker_accuracy_profiles": int(db.scalar(select(func.count(TickerAccuracyProfile.id))) or 0),
             "sector_accuracy_profiles": int(db.scalar(select(func.count(SectorAccuracyProfile.id))) or 0),
+            "chart_analyses": int(db.scalar(select(func.count(ChartAnalysis.id))) or 0),
+            "technical_levels": int(db.scalar(select(func.count(TechnicalLevel.id))) or 0),
+            "technical_signals": int(db.scalar(select(func.count(TechnicalSignal.id))) or 0),
+            "chart_pattern_memory": int(db.scalar(select(func.count(ChartPatternMemory.id))) or 0),
         },
         "latest_news_created_at": latest_brain,
         "why_gui_can_look_unchanged": [
             "Hugging Face serves the previous image until the Docker build finishes successfully.",
             "The finance-domain 7B model is disabled by default unless BLUM_ENABLE_FINANCIAL_BRAIN_MODEL=true.",
             "Existing snapshots must be regenerated with Run brain or full pipeline after a new deployment.",
-            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.5.7.",
+            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.5.8.",
         ],
     }
 
@@ -221,6 +236,64 @@ def financial_brain_recalculate_weights(db: Session = Depends(get_db)) -> dict:
 @router.post("/brain/run-learning-cycle")
 def financial_brain_run_learning_cycle(limit: int = Query(default=240, ge=1, le=1000), db: Session = Depends(get_db)) -> dict:
     return run_learning_cycle(db, limit=limit)
+
+
+@router.post("/chart/analyze-image")
+async def chart_analyze_image(
+    image: UploadFile = File(...),
+    ticker: str | None = Form(default=None),
+    timeframe: str = Form(default="unknown"),
+    ohlcv_data: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+) -> dict:
+    image_bytes = await image.read()
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded chart image is empty.")
+    parsed_ohlcv = parse_ohlcv_payload(ohlcv_data)
+    return HybridChartIntelligence().analyze_uploaded_image(
+        db,
+        image_bytes=image_bytes,
+        ticker=ticker.upper() if ticker else None,
+        timeframe=timeframe,
+        ohlcv_rows=parsed_ohlcv,
+        persist=bool(ticker),
+    )
+
+
+@router.post("/chart/analyze-ticker")
+def chart_analyze_ticker(
+    ticker: str = Query(...),
+    timeframe: str = Query(default="6M"),
+    period: str = Query(default="1y"),
+    include_visual: bool = Query(default=False),
+    db: Session = Depends(get_db),
+) -> dict:
+    asset = require_asset(db, ticker)
+    return HybridChartIntelligence().analyze_ticker(db, asset, timeframe=timeframe, period=period, include_visual=include_visual, persist=True)
+
+
+@router.get("/chart/technical-report/{ticker}")
+def chart_technical_report(ticker: str, timeframe: str = Query(default="6M"), db: Session = Depends(get_db)) -> dict:
+    asset = require_asset(db, ticker)
+    return HybridChartIntelligence().latest_report(db, asset, timeframe=timeframe)
+
+
+@router.get("/chart/levels/{ticker}")
+def chart_levels(ticker: str, timeframe: str = Query(default="6M"), db: Session = Depends(get_db)) -> dict:
+    asset = require_asset(db, ticker)
+    return HybridChartIntelligence().levels(db, asset, timeframe=timeframe)
+
+
+@router.get("/chart/signals/{ticker}")
+def chart_signals(ticker: str, timeframe: str = Query(default="6M"), limit: int = Query(default=30, ge=1, le=120), db: Session = Depends(get_db)) -> list[dict]:
+    asset = require_asset(db, ticker)
+    return HybridChartIntelligence().signals(db, asset, timeframe=timeframe, limit=limit)
+
+
+@router.get("/chart/history/{ticker}")
+def chart_history(ticker: str, limit: int = Query(default=30, ge=1, le=120), db: Session = Depends(get_db)) -> list[dict]:
+    asset = require_asset(db, ticker)
+    return HybridChartIntelligence().history(db, asset, limit=limit)
 
 
 @router.get("/assets")
@@ -580,9 +653,12 @@ def ai_model_status(db: Session = Depends(get_db)):
             "embeddings": settings.embedding_model,
             "reasoning_llm": settings.llm_model,
             "financial_brain": settings.financial_brain_model,
+            "chart_vision_primary": settings.chart_vision_model,
+            "chart_vision_fallback": settings.chart_vision_fallback_model,
             "time_series": "statistical-fallback with adapter-ready interface",
         },
         "financial_brain": FinancialBrainModel().status(),
+        "chart_vision": ChartVisionEngine().status(),
         "observed_models": {
             "sentiment": [{"model_name": model, "records": int(count)} for model, count in sentiment_models],
             "embeddings": [{"model_name": model, "records": int(count)} for model, count in embedding_models],
@@ -593,6 +669,7 @@ def ai_model_status(db: Session = Depends(get_db)):
             "embeddings": "sentence-transformers primary when loadable; deterministic embedding fallback is explicit in code path.",
             "reasoning": "Configured LLM when loadable; deterministic evidence reasoner fallback never invents data.",
             "time_series": "Transparent statistical fallback until Chronos, TimesFM or PatchTST adapter is enabled.",
+            "chart_vision": "Qwen3-VL primary when remote/local vision is configured; InternVL3 fallback; deterministic OHLCV analysis remains active if VLM is unavailable.",
         },
     }
 
@@ -642,6 +719,33 @@ def ai_explain(ticker: str, db: Session = Depends(get_db)):
 def backtest(ticker: str, db: Session = Depends(get_db)):
     asset = require_asset(db, ticker)
     return run_simple_backtest(db, asset.id, asset.ticker)
+
+
+def parse_ohlcv_payload(raw: str | None) -> list[dict] | None:
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid ohlcv_data JSON: {exc.msg}") from exc
+    rows = payload.get("rows") if isinstance(payload, dict) else payload
+    if not isinstance(rows, list):
+        raise HTTPException(status_code=400, detail="ohlcv_data must be a JSON array or an object with a rows array.")
+    normalized = []
+    for row in rows:
+        if not isinstance(row, dict) or "close" not in row:
+            continue
+        normalized.append(
+            {
+                "date": row.get("date"),
+                "open": row.get("open", row.get("close")),
+                "high": row.get("high", row.get("close")),
+                "low": row.get("low", row.get("close")),
+                "close": row.get("close"),
+                "volume": row.get("volume", 0),
+            }
+        )
+    return normalized
 
 
 def require_asset(db: Session, ticker: str) -> Asset:

@@ -6,6 +6,7 @@ import { AccuracyProfile, PricePoint, RelatedNews, Signal } from "@/lib/types";
 import { LoadingState } from "@/components/LoadingState";
 import { BlumMemoryPanel } from "@/components/BlumMemoryPanel";
 import { BreakdownBars } from "@/components/BreakdownBars";
+import { ChartAnalystPanel } from "@/components/ChartAnalystPanel";
 import { formatPercent, formatPrice, formatVolume, MarketSnapshotStrip } from "@/components/MarketSnapshotStrip";
 import { PlotPanel } from "@/components/PlotPanel";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -106,6 +107,8 @@ export function AssetDetailClient({ ticker }: { ticker: string }) {
       {report && <AssetIntelligenceReportPanel report={report} />}
 
       <BlumMemoryPanel memory={brainMemory} />
+
+      <ChartAnalystPanel ticker={data.asset.ticker} prices={prices} />
 
       <section className="grid-2" style={{ marginTop: 12 }}>
         <PlotPanel
