@@ -5,7 +5,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 
-revision = "0005_strategic_intelligence_layer"
+revision = "0005_strategic_intel"
 down_revision = "0004_accuracy_confidence_layer"
 branch_labels = None
 depends_on = None

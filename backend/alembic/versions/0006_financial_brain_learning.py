@@ -6,7 +6,7 @@ from sqlalchemy.dialects import postgresql
 
 
 revision = "0006_financial_brain_learning"
-down_revision = "0005_strategic_intelligence_layer"
+down_revision = "0005_strategic_intel"
 branch_labels = None
 depends_on = None
 

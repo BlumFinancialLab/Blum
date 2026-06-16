@@ -5,7 +5,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 
-revision = "0007_chart_vision_technical_analyst"
+revision = "0007_chart_vision"
 down_revision = "0006_financial_brain_learning"
 branch_labels = None
 depends_on = None
