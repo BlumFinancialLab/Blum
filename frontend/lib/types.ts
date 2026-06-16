@@ -25,6 +25,103 @@ export type MarketSnapshot = {
   perf_1m: number | null;
 };
 
+export type OpportunityRow = {
+  rank: number;
+  module: string;
+  ticker: string;
+  name: string;
+  sector: string;
+  asset_type: string;
+  last_price: number | null;
+  currency?: string | null;
+  change_percent: number | null;
+  volume_relative: number;
+  opportunity_score: number;
+  trend_score: number;
+  momentum_score: number;
+  sentiment_score: number;
+  news_score: number;
+  risk_score: number;
+  status_label: string;
+  why_today: string;
+  watch_points: string[];
+  classification: string;
+  risk_level: string;
+  data_status: string;
+};
+
+export type OpportunityRadarPayload = {
+  status: string;
+  data_mode: string;
+  rows: OpportunityRow[];
+  sector_rotation: Array<{ sector: string; average_opportunity: number; average_risk: number; leaders: string[] }>;
+  methodology: Record<string, any>;
+  disclaimer: string;
+};
+
+export type MarketNarrativePayload = {
+  dominant_theme: { theme: string; headline_count: number; avg_sentiment: number };
+  emerging_subthemes: Array<{ theme: string; headline_count: number; avg_sentiment: number }>;
+  beneficiary_sectors: string[];
+  linked_assets: string[];
+  macro_risks: string[];
+  contrary_signals: string[];
+  market_mood: string;
+  operating_summary: string;
+  synthesis: string;
+  data_mode: string;
+  disclaimer: string;
+};
+
+export type CommunitySentimentPayload = {
+  data_mode: string;
+  themes_rising: Array<{ theme: string; headline_count: number; avg_sentiment: number }>;
+  themes_falling: Array<{ theme: string; headline_count: number; avg_sentiment: number }>;
+  most_discussed_assets: Array<{ ticker: string; discussion_count: number; hype_bubble_risk: string }>;
+  average_sentiment: number;
+  possible_hype_bubbles: Array<{ ticker: string; discussion_count: number; hype_bubble_risk: string }>;
+  rank_change_policy: string;
+  disclaimer: string;
+};
+
+export type PortfolioScenarioPayload = {
+  scenario_name: string;
+  risk_profile: string;
+  time_horizon: string;
+  allocation: Array<{ bucket: string; weight: number; leaders: string[]; rationale: string }>;
+  rationale: string[];
+  monitor: string[];
+  defensive_alternative: Array<{ bucket: string; weight: number; leaders: string[]; rationale: string }>;
+  data_mode: string;
+  disclaimer: string;
+};
+
+export type WatchlistPayload = {
+  status: string;
+  items: Array<Record<string, any>>;
+  suggested_items?: OpportunityRow[];
+  alerts: Array<{ ticker: string; message: string; severity?: string }>;
+  disclaimer: string;
+};
+
+export type ExecutiveDashboardPayload = {
+  title: string;
+  generated_at: string;
+  data_mode: string;
+  market_mood: string;
+  dominant_narrative: { theme: string; headline_count: number; avg_sentiment: number };
+  risk_level: string;
+  top_opportunities_today: OpportunityRow[];
+  sector_rotation: Array<{ sector: string; average_opportunity: number; average_risk: number; leaders: string[] }>;
+  watchlist_alerts: Array<{ ticker: string; message: string; severity?: string }>;
+  best_ai_reports: Array<Record<string, any>>;
+  last_backtests: Array<Record<string, any>>;
+  narrative: MarketNarrativePayload;
+  community_sentiment: CommunitySentimentPayload;
+  portfolio_scenario: PortfolioScenarioPayload;
+  disclaimer: string;
+};
+
 export type SystemStatus = {
   service: string;
   app_version: string;

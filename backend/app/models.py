@@ -223,6 +223,59 @@ class BacktestResult(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
 
+class WatchlistItem(Base):
+    __tablename__ = "watchlist_items"
+    __table_args__ = (
+        UniqueConstraint("ticker", "watchlist_name", name="uq_watchlist_ticker_name"),
+        Index("ix_watchlist_items_name_created", "watchlist_name", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    asset_id: Mapped[int | None] = mapped_column(ForeignKey("assets.id", ondelete="SET NULL"), index=True)
+    ticker: Mapped[str] = mapped_column(String(32), index=True)
+    watchlist_name: Mapped[str] = mapped_column(String(120), default="Strategic Watchlist", index=True)
+    status: Mapped[str] = mapped_column(String(80), default="active", index=True)
+    thesis: Mapped[str] = mapped_column(Text, default="")
+    alert_rules: Mapped[dict] = mapped_column(JsonType, default=dict)
+    last_score: Mapped[float | None] = mapped_column(Float)
+    metadata_payload: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    asset = relationship("Asset")
+
+
+class IntelligenceReport(Base):
+    __tablename__ = "intelligence_reports"
+    __table_args__ = (Index("ix_intelligence_reports_ticker_created", "ticker", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    asset_id: Mapped[int | None] = mapped_column(ForeignKey("assets.id", ondelete="SET NULL"), index=True)
+    ticker: Mapped[str | None] = mapped_column(String(32), index=True)
+    report_type: Mapped[str] = mapped_column(String(80), default="asset_intelligence", index=True)
+    title: Mapped[str] = mapped_column(String(260))
+    summary: Mapped[str] = mapped_column(Text, default="")
+    structured_output: Mapped[dict] = mapped_column(JsonType, default=dict)
+    data_mode: Mapped[str] = mapped_column(String(80), default="real_public_data", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    asset = relationship("Asset")
+
+
+class PortfolioScenario(Base):
+    __tablename__ = "portfolio_scenarios"
+    __table_args__ = (Index("ix_portfolio_scenarios_created", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    scenario_name: Mapped[str] = mapped_column(String(160), index=True)
+    risk_profile: Mapped[str] = mapped_column(String(80), default="balanced", index=True)
+    allocation: Mapped[dict] = mapped_column(JsonType, default=dict)
+    rationale: Mapped[dict] = mapped_column(JsonType, default=dict)
+    disclaimer: Mapped[str] = mapped_column(Text, default="")
+    data_mode: Mapped[str] = mapped_column(String(80), default="real_public_data", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
 class AccuracySnapshot(Base):
     __tablename__ = "accuracy_snapshots"
     __table_args__ = (Index("ix_accuracy_snapshots_scope_created", "scope", "created_at"),)

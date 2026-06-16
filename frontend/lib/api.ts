@@ -1,4 +1,4 @@
-import { AccuracyOverview, AccuracyProfile, Asset, DashboardOverview, DataCoverage, IPORadar, LiveNewsArticle, MacroOverview, MarketBrain, MarketBrainHistoryRow, MarketSentiment, PipelineStatus, RelatedNews, Signal, SignalValidationReport, StockRadar, SystemStatus } from "./types";
+import { AccuracyOverview, AccuracyProfile, Asset, CommunitySentimentPayload, DashboardOverview, DataCoverage, ExecutiveDashboardPayload, IPORadar, LiveNewsArticle, MacroOverview, MarketBrain, MarketBrainHistoryRow, MarketNarrativePayload, MarketSentiment, OpportunityRadarPayload, PipelineStatus, PortfolioScenarioPayload, RelatedNews, Signal, SignalValidationReport, StockRadar, SystemStatus, WatchlistPayload } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
 
@@ -49,6 +49,15 @@ export const api = {
   updateMacro: () => postJson<any>("/macro/update", {}),
   updateFundamentals: (limit = 24) => postJson<any>(`/fundamentals/update?limit=${limit}`, {}),
   fundamentals: (ticker: string) => getJson<any>(`/fundamentals/${encodeURIComponent(ticker)}`),
+  executiveDashboard: () => getJson<ExecutiveDashboardPayload>("/intelligence/executive"),
+  opportunityRadar: (limit = 30) => getJson<OpportunityRadarPayload>(`/intelligence/opportunities?limit=${limit}`),
+  marketNarrative: () => getJson<MarketNarrativePayload>("/intelligence/narrative"),
+  communitySentiment: () => getJson<CommunitySentimentPayload>("/intelligence/community"),
+  watchlist: () => getJson<WatchlistPayload>("/intelligence/watchlist"),
+  addWatchlist: (ticker: string, thesis = "") => postJson<WatchlistPayload>(`/intelligence/watchlist/${encodeURIComponent(ticker)}?thesis=${encodeURIComponent(thesis)}`, {}),
+  portfolioScenario: (riskProfile = "balanced") => getJson<PortfolioScenarioPayload>(`/intelligence/portfolio-scenario?risk_profile=${encodeURIComponent(riskProfile)}`),
+  intelligenceReport: (ticker: string) => getJson<any>(`/intelligence/reports/${encodeURIComponent(ticker)}`),
+  similarBacktest: (ticker: string) => getJson<any>(`/intelligence/backtest/${encodeURIComponent(ticker)}`),
   pipelineStatus: () => getJson<PipelineStatus>("/pipeline/status"),
   topSignals: (query = "") => getJson<Signal[]>(`/signals/top${query}`),
   signal: (ticker: string) => getJson<Signal>(`/signals/${ticker}`),

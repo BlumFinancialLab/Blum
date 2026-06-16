@@ -12,7 +12,7 @@ from app.ai.financial_brain import FinancialBrainModel
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.ingestion.news_ingestor import NewsIngestor
-from app.models import AIInsight, AccuracySnapshot, Asset, EmbeddingVector, FundamentalSnapshot, MacroSnapshot, NewsArticle, NewsAssetLink, PriceHistory, PriceProviderCheck, SentimentAnalysis, SignalSnapshot
+from app.models import AIInsight, AccuracySnapshot, Asset, EmbeddingVector, FundamentalSnapshot, IntelligenceReport, MacroSnapshot, NewsArticle, NewsAssetLink, PortfolioScenario, PriceHistory, PriceProviderCheck, SentimentAnalysis, SignalSnapshot, WatchlistItem
 from app.schemas import AssetOut, MarketUpdateRequest, NewsOut, NewsUpdateRequest, SemanticSearchRequest, SignalRunRequest
 from app.services.accuracy import asset_accuracy_profile, latest_accuracy_snapshot, market_accuracy_overview, run_accuracy_audit, signal_validation_report
 from app.services.dashboard import dashboard_overview, signal_payload
@@ -28,6 +28,17 @@ from app.services.pipeline import PipelineService
 from app.services.realtime import realtime_status
 from app.services.semantic import SemanticService
 from app.services.stock import stock_radar, update_stock_radar
+from app.services.strategic_intelligence import (
+    add_watchlist_item,
+    asset_intelligence_report,
+    community_sentiment,
+    executive_dashboard,
+    market_narrative,
+    opportunity_radar,
+    portfolio_scenario,
+    similar_cases_backtest,
+    list_watchlist,
+)
 from app.signals.backtest import run_simple_backtest
 from app.signals.engine import SignalEngine
 
@@ -47,7 +58,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
     return {
         "service": "blum-ai-financial-intelligence",
         "app_version": settings.app_version,
-        "feature_set": "accuracy-confidence-layer-v0.5.5",
+        "feature_set": "strategic-market-intelligence-v0.5.6",
         "environment": settings.environment,
         "generated_at": datetime.utcnow().isoformat(),
         "hugging_face": {
@@ -86,6 +97,9 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "sec_submissions": True,
             "accuracy_confidence_layer": True,
             "macro_fundamental_context": True,
+            "strategic_intelligence_layer": True,
+            "portfolio_scenario": True,
+            "watchlist": True,
         },
         "database_counts": {
             "assets": int(db.scalar(select(func.count(Asset.id))) or 0),
@@ -96,13 +110,16 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "fundamental_snapshots": int(db.scalar(select(func.count(FundamentalSnapshot.id))) or 0),
             "macro_snapshots": int(db.scalar(select(func.count(MacroSnapshot.id))) or 0),
             "price_provider_checks": int(db.scalar(select(func.count(PriceProviderCheck.id))) or 0),
+            "watchlist_items": int(db.scalar(select(func.count(WatchlistItem.id))) or 0),
+            "intelligence_reports": int(db.scalar(select(func.count(IntelligenceReport.id))) or 0),
+            "portfolio_scenarios": int(db.scalar(select(func.count(PortfolioScenario.id))) or 0),
         },
         "latest_news_created_at": latest_brain,
         "why_gui_can_look_unchanged": [
             "Hugging Face serves the previous image until the Docker build finishes successfully.",
             "The finance-domain 7B model is disabled by default unless BLUM_ENABLE_FINANCIAL_BRAIN_MODEL=true.",
             "Existing snapshots must be regenerated with Run brain or full pipeline after a new deployment.",
-            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.5.5.",
+            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.5.6.",
         ],
     }
 
@@ -201,6 +218,54 @@ def fundamentals_for_ticker(ticker: str, db: Session = Depends(get_db)):
 @router.post("/fundamentals/update")
 def fundamentals_update(limit: int = Query(default=24, ge=1, le=80), db: Session = Depends(get_db)):
     return update_fundamentals(db, limit=limit)
+
+
+@router.get("/intelligence/executive")
+def intelligence_executive(db: Session = Depends(get_db)):
+    return executive_dashboard(db)
+
+
+@router.get("/intelligence/opportunities")
+def intelligence_opportunities(limit: int = Query(default=30, ge=5, le=100), db: Session = Depends(get_db)):
+    return opportunity_radar(db, limit=limit)
+
+
+@router.get("/intelligence/narrative")
+def intelligence_narrative(db: Session = Depends(get_db)):
+    return market_narrative(db)
+
+
+@router.get("/intelligence/community")
+def intelligence_community(db: Session = Depends(get_db)):
+    return community_sentiment(db)
+
+
+@router.get("/intelligence/watchlist")
+def intelligence_watchlist(db: Session = Depends(get_db)):
+    return list_watchlist(db)
+
+
+@router.post("/intelligence/watchlist/{ticker}")
+def intelligence_watchlist_add(ticker: str, thesis: str = Query(default=""), db: Session = Depends(get_db)):
+    asset = require_asset(db, ticker)
+    return add_watchlist_item(db, asset, thesis=thesis)
+
+
+@router.get("/intelligence/portfolio-scenario")
+def intelligence_portfolio_scenario(risk_profile: str = Query(default="balanced"), persist: bool = Query(default=False), db: Session = Depends(get_db)):
+    return portfolio_scenario(db, risk_profile=risk_profile, persist=persist)
+
+
+@router.get("/intelligence/reports/{ticker}")
+def intelligence_asset_report(ticker: str, persist: bool = Query(default=False), db: Session = Depends(get_db)):
+    asset = require_asset(db, ticker)
+    return asset_intelligence_report(db, asset, persist=persist)
+
+
+@router.get("/intelligence/backtest/{ticker}")
+def intelligence_similar_backtest(ticker: str, db: Session = Depends(get_db)):
+    asset = require_asset(db, ticker)
+    return similar_cases_backtest(db, asset)
 
 
 @router.post("/news/update")

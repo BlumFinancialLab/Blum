@@ -5,6 +5,8 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { assetPath } from "@/lib/routes";
 import { AccuracyOverview, DashboardOverview, LiveNewsArticle, MacroOverview, MarketSentiment, PipelineStatus, SignalValidationReport, SystemStatus } from "@/lib/types";
+import { ExecutiveDashboardPayload } from "@/lib/types";
+import { ExecutiveDashboard } from "@/components/ExecutiveDashboard";
 import { LoadingState } from "@/components/LoadingState";
 import { ScoreCard } from "@/components/ScoreCard";
 import { SignalTable } from "@/components/SignalTable";
@@ -17,6 +19,7 @@ export default function DashboardPage() {
   const [marketSentiment, setMarketSentiment] = useState<MarketSentiment | null>(null);
   const [pipelineStatus, setPipelineStatus] = useState<PipelineStatus | null>(null);
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
+  const [executive, setExecutive] = useState<ExecutiveDashboardPayload | null>(null);
   const [error, setError] = useState("");
   const [liveError, setLiveError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -28,22 +31,25 @@ export default function DashboardPage() {
       setError("");
       const overview = await api.overview();
       setData(overview);
-      const [newsResult, sentimentResult, statusResult, systemResult] = await Promise.allSettled([
+      const [newsResult, sentimentResult, statusResult, systemResult, executiveResult] = await Promise.allSettled([
         api.liveNews(48),
         api.marketSentiment(48),
         api.pipelineStatus(),
-        api.systemStatus()
+        api.systemStatus(),
+        api.executiveDashboard()
       ] as const);
       if (newsResult.status === "fulfilled") setLiveNews(newsResult.value);
       if (sentimentResult.status === "fulfilled") setMarketSentiment(sentimentResult.value);
       if (statusResult.status === "fulfilled") setPipelineStatus(statusResult.value);
       if (systemResult.status === "fulfilled") setSystemStatus(systemResult.value);
+      if (executiveResult.status === "fulfilled") setExecutive(executiveResult.value);
       setLiveError(
         [
           newsResult.status === "rejected" ? `news ${errorMessage(newsResult.reason)}` : "",
           sentimentResult.status === "rejected" ? `sentiment ${errorMessage(sentimentResult.reason)}` : "",
           statusResult.status === "rejected" ? `status ${errorMessage(statusResult.reason)}` : "",
-          systemResult.status === "rejected" ? `system ${errorMessage(systemResult.reason)}` : ""
+          systemResult.status === "rejected" ? `system ${errorMessage(systemResult.reason)}` : "",
+          executiveResult.status === "rejected" ? `executive ${errorMessage(executiveResult.reason)}` : ""
         ].filter(Boolean).join(" | ")
       );
       setLastRefresh(new Date().toISOString());
@@ -108,6 +114,16 @@ export default function DashboardPage() {
     }
   };
 
+  const addWatch = async (ticker: string) => {
+    setBusy(true);
+    try {
+      setPipelineResult(await api.addWatchlist(ticker));
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (error) return <div className="empty-state">API error: {error}</div>;
   if (!data) return <LoadingState />;
 
@@ -118,7 +134,7 @@ export default function DashboardPage() {
       <div className="page-header">
         <div>
           <div className="kicker">Live Intelligence Dashboard</div>
-          <h1>Market narrative, sentiment and signal engine.</h1>
+          <h1>Strategic market intelligence command center.</h1>
         </div>
         <button className="button primary" onClick={runPipeline} disabled={busy}>{busy ? "Running pipeline..." : "Run full pipeline"}</button>
       </div>
@@ -157,6 +173,8 @@ export default function DashboardPage() {
           </div>
         </section>
       )}
+
+      {executive && <ExecutiveDashboard data={executive} onAddWatch={addWatch} />}
 
       <section className="grid-4 market-metrics">
         <Metric label="Assets" value={data.market_pulse.asset_count} />

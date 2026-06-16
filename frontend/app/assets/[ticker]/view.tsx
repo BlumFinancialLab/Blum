@@ -13,6 +13,7 @@ export function AssetDetailClient({ ticker }: { ticker: string }) {
   const [data, setData] = useState<{ asset: any; market_snapshot?: any; prices: PricePoint[]; latest_signal: Signal | null; related_news: RelatedNews[] } | null>(null);
   const [accuracy, setAccuracy] = useState<AccuracyProfile | null>(null);
   const [fundamentals, setFundamentals] = useState<any>(null);
+  const [report, setReport] = useState<any>(null);
   const [insight, setInsight] = useState<any>(null);
   const [insightError, setInsightError] = useState("");
   const [insightLoading, setInsightLoading] = useState(false);
@@ -23,14 +24,16 @@ export function AssetDetailClient({ ticker }: { ticker: string }) {
     setData(null);
     setAccuracy(null);
     setFundamentals(null);
+    setReport(null);
     setInsight(null);
     setInsightError("");
-    Promise.allSettled([api.asset(ticker), api.assetAccuracy(ticker), api.fundamentals(ticker)] as const)
-      .then(([assetResult, accuracyResult, fundamentalsResult]) => {
+    Promise.allSettled([api.asset(ticker), api.assetAccuracy(ticker), api.fundamentals(ticker), api.intelligenceReport(ticker)] as const)
+      .then(([assetResult, accuracyResult, fundamentalsResult, reportResult]) => {
         if (assetResult.status === "fulfilled") setData(assetResult.value);
         else setError((assetResult.reason as Error).message);
         if (accuracyResult.status === "fulfilled") setAccuracy(accuracyResult.value);
         if (fundamentalsResult.status === "fulfilled") setFundamentals(fundamentalsResult.value);
+        if (reportResult.status === "fulfilled") setReport(reportResult.value);
       });
   }, [ticker]);
 
@@ -95,6 +98,8 @@ export function AssetDetailClient({ ticker }: { ticker: string }) {
         <EvidenceConfidencePanel accuracy={accuracy} />
         <FundamentalContextPanel fundamentals={fundamentals} assetType={data.asset.asset_type} />
       </section>
+
+      {report && <AssetIntelligenceReportPanel report={report} />}
 
       <section className="grid-2" style={{ marginTop: 12 }}>
         <PlotPanel
@@ -211,6 +216,41 @@ function FundamentalContextPanel({ fundamentals, assetType }: { fundamentals: an
   );
 }
 
+function AssetIntelligenceReportPanel({ report }: { report: any }) {
+  const backtest = report.similar_signal_history ?? {};
+  return (
+    <section className="panel" style={{ marginTop: 12 }}>
+      <div className="panel-head">
+        <span>Asset Intelligence Report</span>
+        <strong>{String(report.data_mode ?? "evidence").replaceAll("_", " ")}</strong>
+      </div>
+      <div className="grid-2">
+        <div>
+          <h3>Why it surfaced</h3>
+          <p>{report.why_in_radar}</p>
+          <h3>Bullish scenario</h3>
+          <p>{report.bullish_scenario}</p>
+          <h3>Bearish scenario</h3>
+          <p>{report.bearish_scenario}</p>
+        </div>
+        <div className="macro-list">
+          <div><strong>Similar cases</strong><span>{backtest.case_count ?? 0} / {backtest.data_mode ?? "n/a"}</span></div>
+          <div><strong>5D avg</strong><span>{display(backtest.avg_forward_return_5d)}%</span></div>
+          <div><strong>20D avg</strong><span>{display(backtest.avg_forward_return_20d)}%</span></div>
+          <div><strong>Positive 20D</strong><span>{display(backtest.positive_outcome_probability_20d)}</span></div>
+          <div><strong>Avg drawdown</strong><span>{display(backtest.average_drawdown)}%</span></div>
+          <div><strong>Reliability</strong><span>{backtest.statistical_reliability ?? "n/a"}</span></div>
+        </div>
+      </div>
+      <div className="issue-list">
+        {(report.risk_review ?? []).slice(0, 5).map((item: string) => <span key={item}>{item}</span>)}
+      </div>
+      <p><strong>AI conclusion:</strong> {report.ai_conclusion}</p>
+      <p>{report.disclaimer}</p>
+    </section>
+  );
+}
+
 function compactNumber(value: number | null | undefined) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return "n/a";
   return new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(Number(value));
@@ -220,6 +260,11 @@ function factValue(value: any): number | null {
   if (typeof value === "number") return value;
   if (value && typeof value.value === "number") return value.value;
   return null;
+}
+
+function display(value: any) {
+  if (value === undefined || value === null || Number.isNaN(Number(value))) return "n/a";
+  return Number(value).toFixed(2);
 }
 
 function Diagnostics({ diagnostics }: { diagnostics: any }) {

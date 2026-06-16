@@ -27,6 +27,7 @@ This is not a consumer trading app and not a simple dashboard. The project is a 
 | News ingestion | RSS feeds, public web-search RSS, deduplication, ticker linking |
 | Filing intelligence | SEC EDGAR current filing feeds for S-1, F-1 and 424B prospectus forms |
 | Accuracy layer | multi-provider checks, data quality, source credibility, macro/fundamental context and Blum Confidence Score |
+| Strategic intelligence | Opportunity Radar, Market Narrative AI, Asset Intelligence Reports, watchlist, portfolio scenarios and community sentiment |
 | AI sentiment | FinBERT primary, VADER baseline |
 | Semantic layer | sentence-transformers embeddings, semantic search, theme discovery |
 | Reasoning | lightweight Qwen-compatible LLM evidence-only explanation layer |
@@ -63,7 +64,8 @@ Blum does not use one generic AI model for everything.
 13. Score IPO/pre-listing candidates through a separate readiness, probability, narrative and risk model.
 14. Build a Market Brain snapshot that combines stocks, ETFs, news, sentiment, IPO evidence, scenarios and risk alerts.
 15. Run the 15-point accuracy and confidence audit.
-16. Produce AI explanations using only retrieved evidence.
+16. Build the Strategic Intelligence dashboard: opportunity radar, narrative, watchlist alerts, portfolio scenario and similar-case validation.
+17. Produce AI explanations using only retrieved evidence.
 
 ## Live Runtime
 
@@ -89,6 +91,22 @@ Blum separates opportunity scoring from evidence quality. The **Blum Intelligenc
 The 15-point audit covers multi-provider price validation, corporate-action review, point-in-time consistency, per-asset data quality, entity resolution, source credibility, semantic news deduplication, structured event extraction, confidence-aware AI reasoning, contradiction checks, SEC fundamentals where available, FRED macro context, sector/ETF confirmation, historical signal validation and the final confidence label.
 
 Missing public data lowers confidence instead of creating placeholders. No synthetic prices, headlines, filings, fundamentals, macro values or scores are generated.
+
+## Strategic Intelligence Layer
+
+Blum now exposes an **AI Market Intelligence Officer** surface. It answers: what should be monitored today, why it matters, which data confirms it and which risks limit conviction.
+
+Strategic modules:
+
+- **AI Opportunity Radar** ranks equities and ETFs for research attention using opportunity, trend, momentum, sentiment, news and risk scores.
+- **Market Narrative AI** summarizes the dominant theme, emerging subthemes, beneficiary sectors, macro risks and contrary signals.
+- **Asset Intelligence Report** builds a professional asset brief with overview, technical levels, sentiment, recent news, bullish/bearish scenarios, risks and similar-case validation.
+- **Similar-Case Backtesting** uses real stored OHLCV when enough history exists. If sample depth is insufficient, it returns `demonstration_mode` statistics clearly labeled as non-production evidence.
+- **Strategic Watchlist** stores monitored assets, score baseline, alert rules and simulated alerts.
+- **AI Portfolio Scenario** produces a non-consultative hypothetical allocation with rationale, risk context, monitoring plan and defensive alternative.
+- **Community & Sentiment Intelligence** summarizes public-news sentiment themes, discussed assets and possible hype-bubble review flags.
+
+The wording policy explicitly avoids `buy`, `sell`, guaranteed profit or trading instructions. Surfaces use language such as monitor, observe, setup, scenario, risk review and research candidate.
 
 ## Market Brain
 
@@ -173,6 +191,15 @@ FastAPI exposes clean JSON endpoints:
 - `POST /macro/update`
 - `GET /fundamentals/{ticker}`
 - `POST /fundamentals/update`
+- `GET /intelligence/executive`
+- `GET /intelligence/opportunities`
+- `GET /intelligence/narrative`
+- `GET /intelligence/community`
+- `GET /intelligence/watchlist`
+- `POST /intelligence/watchlist/{ticker}`
+- `GET /intelligence/portfolio-scenario`
+- `GET /intelligence/reports/{ticker}`
+- `GET /intelligence/backtest/{ticker}`
 - `POST /signals/run`
 - `POST /pipeline/run`
 - `GET /pipeline/status`
@@ -206,6 +233,11 @@ Interactive API docs are available at `/docs`.
 
 - Case Study Home
 - Intelligence Dashboard
+- Executive Dashboard
+- AI Opportunity Radar
+- Market Narrative AI
+- Asset Intelligence Report
+- AI Portfolio Scenario
 - Market Brain
 - Asset Detail
 - Stock Radar

@@ -2,7 +2,7 @@
 
 This roadmap is the execution plan for turning Blum into a credible open-source AI financial intelligence platform. Each phase should ship with working code, API coverage, UI coverage, documentation and explicit limitations.
 
-## Current Increment - Market Brain And IPO Intelligence
+## Current Increment - Strategic Market Intelligence Officer
 
 Shipped in the current architecture:
 
@@ -26,6 +26,10 @@ Shipped in the current architecture:
 - The Accuracy And Confidence Layer now implements the 15-point audit: multi-provider checks, corporate-action review, point-in-time consistency, per-asset data quality, entity resolution, source credibility, semantic dedupe, event extraction, AI reasoning confidence, contradictions, fundamentals, macro context, ETF confirmation, historical validation and Blum Confidence Score.
 - `/accuracy/overview`, `/accuracy/{ticker}`, `/accuracy/run`, `/validation/signals`, `/macro/overview`, `/macro/update`, `/fundamentals/{ticker}` and `/fundamentals/update` expose confidence, macro and fundamental evidence through JSON APIs.
 - Startup and background workers now seed accuracy snapshots, repair historical OHLCV gaps, refresh public FRED macro data and refresh SEC companyfacts fundamentals where public CIK mapping is available.
+- The Strategic Intelligence Layer now adds an AI Opportunity Radar, Market Narrative AI, Asset Intelligence Report, similar-case backtesting, strategic watchlist, AI Portfolio Scenario and Community & Sentiment Intelligence.
+- New APIs include `/intelligence/executive`, `/intelligence/opportunities`, `/intelligence/narrative`, `/intelligence/community`, `/intelligence/watchlist`, `/intelligence/portfolio-scenario`, `/intelligence/reports/{ticker}` and `/intelligence/backtest/{ticker}`.
+- The executive dashboard now opens with strategic market triage: Top Opportunities Today, Market Mood, Dominant Narrative, Risk Level, Sector Rotation, Watchlist Alerts, Best AI Reports and Last Backtests.
+- Demo fallback policy is explicit: no synthetic prices are generated; if similar-case backtest sample depth is insufficient, statistics are returned as `demonstration_mode` and marked as non-production evidence.
 
 ## Phase 0 - Stabilize Docker Space Deployment
 
