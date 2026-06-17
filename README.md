@@ -211,6 +211,59 @@ The objective is not to predict stock prices. The objective is to learn how Blum
 
 The autonomous Blum Financial Model cycle is server-side and evidence-bound. When `BLUM_ENABLE_LEARNING_LOOP=true`, it runs on startup, during market refresh and on its own interval controlled by `BLUM_MODEL_CYCLE_MINUTES` and `BLUM_MODEL_CYCLE_LIMIT`. Each cycle captures recent signal reasoning, evaluates matured thesis outcomes, refreshes training examples and logs a `blum_model_autonomous_cycle` learning event. It updates database memory only; it does not self-modify source code and it does not execute trades.
 
+## Autonomous Research Engine
+
+Blum now runs a server-side autonomous research cycle by default. Manual refresh buttons are diagnostics; normal operation does not require user input. The default cycle is controlled by:
+
+```bash
+export BLUM_ENABLE_AUTONOMOUS_ENGINE=true
+export BLUM_AUTONOMOUS_CYCLE_MINUTES=20
+```
+
+The autonomous cycle executes in this strict order:
+
+1. Refresh Hugging Face financial dataset catalog.
+2. Update macro context.
+3. Update SEC companyfacts fundamentals.
+4. Hydrate historical and recent OHLCV prices from public providers.
+5. Ingest public news and sentiment.
+6. Generate signal snapshots.
+7. Update ETF intelligence.
+8. Update IPO radar.
+9. Run accuracy audit.
+10. Run Blum Financial Model reasoning and outcome learning.
+11. Persist embedded PostgreSQL backup when configured.
+
+Every cycle creates an `autonomous_engine_runs` row and a `learning_events` audit entry. If a provider fails, the run is marked `degraded` with the failing stage and traceback, rather than hiding the issue.
+
+New APIs:
+
+- `GET /autonomous/status`
+- `POST /autonomous/run`
+- `GET /datasets/sources`
+- `POST /datasets/refresh`
+
+## Hugging Face Dataset Intelligence
+
+Blum catalogs real Hugging Face datasets for historical prices, SEC filings, earnings transcripts, finance reasoning and benchmark evidence. The catalog is metadata-first and incremental by design: large corpora are validated through Dataset Viewer/parquet metadata before any targeted ingestion is attempted.
+
+Initial curated sources include:
+
+- `defeatbeta/yahoo-finance-data`
+- `paperswithbacktest/Stocks-Daily-Price`
+- `TeraflopAI/SEC-EDGAR`
+- `kurry/sp500_earnings_transcripts`
+- `glopardo/sp500-earnings-transcripts`
+- `paperswithbacktest/Stocks-Quarterly-Earnings`
+- `c3po-ai/edgar-corpus`
+- `PatronusAI/financebench`
+- `BUPT-Reasoning-Lab/FinanceReasoning`
+- `jlh-ibm/earnings_call`
+- `younginpiniti/us-stocks-daily-all`
+- `sfd-anonymous/edgar-forecast-benchmark`
+
+The catalog is stored in `external_dataset_sources` with dataset id, source domain, license, priority, ingestion mode, Dataset Viewer status, parquet metadata and usage policy. Blum does not copy massive datasets blindly and does not fabricate missing evidence.
+
 ## Chart Vision Technical Analyst
 
 Blum includes a dedicated technical chart intelligence module. It is designed to read financial chart images when a vision model is configured, but it never relies only on visual interpretation.
@@ -444,6 +497,8 @@ export BLUM_ENABLE_LEARNING_LOOP=true
 export BLUM_LEARNING_LOOP_MINUTES=360
 export BLUM_MODEL_CYCLE_MINUTES=5
 export BLUM_MODEL_CYCLE_LIMIT=120
+export BLUM_ENABLE_HF_DATASET_CATALOG=true
+export BLUM_HF_DATASET_REFRESH_HOURS=24
 ```
 
 The learning loops only update database memory, confidence adjustments, proprietary reasoning examples and reversible scoring-weight versions.
@@ -485,6 +540,7 @@ The UI exposes `/system/status` in the sidebar and dashboard. If the GUI looks u
 - `app_version` must show the latest deployed version.
 - `feature_set` must show the expected feature bundle.
 - `persistence.mode` must be `external_postgres` for strict no-reset durability, or `embedded_postgres` with a populated backup file plus persistent `/data` storage for demo durability.
+- `GET /autonomous/status` shows the latest autonomous run, stage diagnostics, readiness score and dataset catalog status.
 - `POST /system/persistence/backup` can force an immediate embedded PostgreSQL backup after a learning cycle or manual operations.
 - `Financial Brain` shows `fallback mode` unless `BLUM_ENABLE_FINANCIAL_BRAIN_MODEL=true`.
 - Hugging Face serves the previous Docker image until the new build finishes successfully.

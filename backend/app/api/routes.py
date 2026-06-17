@@ -17,6 +17,7 @@ from app.models import (
     AIInsight,
     AccuracySnapshot,
     Asset,
+    AutonomousEngineRun,
     BlumDatasetExport,
     BlumKnowledgeGraphEdge,
     BlumKnowledgeGraphNode,
@@ -33,6 +34,7 @@ from app.models import (
     ChartPatternMemory,
     ConfidenceAdjustment,
     EmbeddingVector,
+    ExternalDatasetSource,
     FundamentalSnapshot,
     HistoricalSimilarityCase,
     IntelligenceReport,
@@ -57,6 +59,7 @@ from app.models import (
 )
 from app.schemas import AssetOut, MarketUpdateRequest, NewsOut, NewsUpdateRequest, SemanticSearchRequest, SignalRunRequest
 from app.services.accuracy import asset_accuracy_profile, latest_accuracy_snapshot, market_accuracy_overview, run_accuracy_audit, signal_validation_report
+from app.services.autonomous_engine import AutonomousResearchEngine, latest_autonomous_status
 from app.services.blum_financial_model import (
     build_training_dataset,
     capture_ai_insight_reasoning,
@@ -93,6 +96,7 @@ from app.services.financial_brain_learning import (
     run_learning_cycle,
 )
 from app.services.hybrid_chart_intelligence import HybridChartIntelligence
+from app.services.huggingface_datasets import dataset_catalog_status, refresh_huggingface_dataset_catalog
 from app.services.ipo import ipo_radar, sec_company_submissions, update_ipo_radar
 from app.services.live import live_news, market_sentiment
 from app.services.macro import macro_overview, update_macro_snapshots
@@ -134,7 +138,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
     return {
         "service": "blum-ai-financial-intelligence",
         "app_version": settings.app_version,
-        "feature_set": "persistent-autonomous-blum-financial-model-v0.7.1",
+        "feature_set": "autonomous-dataset-intelligence-engine-v0.8.0",
         "environment": settings.environment,
         "generated_at": datetime.utcnow().isoformat(),
         "hugging_face": {
@@ -147,6 +151,8 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "model_loading_enabled": settings.enable_model_loading,
             "financial_brain_model_enabled": settings.enable_financial_brain_model,
             "live_startup_enabled": settings.enable_live_startup,
+            "autonomous_engine_enabled": settings.enable_autonomous_engine,
+            "autonomous_cycle_minutes": settings.autonomous_cycle_minutes,
             "yfinance_fallback_enabled": settings.enable_yfinance_fallback,
             "historical_price_seed_enabled": settings.seed_historical_prices_on_startup,
             "startup_signal_seed_enabled": settings.seed_signals_on_startup,
@@ -161,6 +167,8 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "chart_vision_min_confidence": settings.chart_vision_min_confidence,
             "fundamentals_refresh_minutes": settings.fundamentals_refresh_minutes,
             "macro_refresh_minutes": settings.macro_refresh_minutes,
+            "hf_dataset_catalog_enabled": settings.enable_hf_dataset_catalog,
+            "hf_dataset_refresh_hours": settings.hf_dataset_refresh_hours,
         },
         "persistence": database_persistence_status(),
         "active_models": {
@@ -189,6 +197,8 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "financial_knowledge_graph": True,
             "portfolio_scenario": True,
             "watchlist": True,
+            "autonomous_research_engine": True,
+            "huggingface_dataset_catalog": True,
         },
         "database_counts": {
             "assets": int(db.scalar(select(func.count(Asset.id))) or 0),
@@ -227,13 +237,15 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "blum_graph_edges": int(db.scalar(select(func.count(BlumKnowledgeGraphEdge.id))) or 0),
             "blum_dataset_exports": int(db.scalar(select(func.count(BlumDatasetExport.id))) or 0),
             "blum_training_jobs": int(db.scalar(select(func.count(BlumModelTrainingJob.id))) or 0),
+            "external_dataset_sources": int(db.scalar(select(func.count(ExternalDatasetSource.id))) or 0),
+            "autonomous_engine_runs": int(db.scalar(select(func.count(AutonomousEngineRun.id))) or 0),
         },
         "latest_news_created_at": latest_brain,
         "why_gui_can_look_unchanged": [
             "Hugging Face serves the previous image until the Docker build finishes successfully.",
             "The finance-domain 7B model is disabled by default unless BLUM_ENABLE_FINANCIAL_BRAIN_MODEL=true.",
             "Existing snapshots must be regenerated with Run brain or full pipeline after a new deployment.",
-            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.7.1.",
+            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.8.0.",
         ],
     }
 
@@ -241,6 +253,26 @@ def system_status(db: Session = Depends(get_db)) -> dict:
 @router.post("/system/persistence/backup")
 def trigger_database_backup() -> dict:
     return backup_embedded_postgres_if_configured(reason="manual_api_trigger")
+
+
+@router.get("/autonomous/status")
+def autonomous_status(db: Session = Depends(get_db)) -> dict:
+    return latest_autonomous_status(db)
+
+
+@router.post("/autonomous/run")
+def autonomous_run(db: Session = Depends(get_db)) -> dict:
+    return AutonomousResearchEngine().run_cycle(db, trigger="manual_diagnostic")
+
+
+@router.get("/datasets/sources")
+def datasets_sources(limit: int = Query(default=80, ge=1, le=200), db: Session = Depends(get_db)) -> dict:
+    return dataset_catalog_status(db, limit=limit)
+
+
+@router.post("/datasets/refresh")
+def datasets_refresh(db: Session = Depends(get_db)) -> dict:
+    return refresh_huggingface_dataset_catalog(db, validate=True)
 
 
 @router.get("/brain/status")

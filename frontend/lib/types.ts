@@ -138,6 +138,8 @@ export type SystemStatus = {
     model_loading_enabled: boolean;
     financial_brain_model_enabled: boolean;
     live_startup_enabled: boolean;
+    autonomous_engine_enabled?: boolean;
+    autonomous_cycle_minutes?: number;
     yfinance_fallback_enabled?: boolean;
     historical_price_seed_enabled?: boolean;
     startup_signal_seed_enabled?: boolean;
@@ -150,6 +152,8 @@ export type SystemStatus = {
     blum_model_cycle_limit?: number;
     fundamentals_refresh_minutes?: number;
     macro_refresh_minutes?: number;
+    hf_dataset_catalog_enabled?: boolean;
+    hf_dataset_refresh_hours?: number;
   };
   persistence?: {
     mode: string;

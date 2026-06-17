@@ -10,6 +10,7 @@ from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.ingestion.news_ingestor import NewsIngestor
 from app.services.accuracy import run_accuracy_audit
+from app.services.autonomous_engine import AutonomousResearchEngine
 from app.services.blum_financial_model import run_model_learning_cycle
 from app.services.data_continuity import repair_data_gaps
 from app.services.etf import update_etf_trends
@@ -44,6 +45,12 @@ def start_realtime_services() -> None:
     _scheduler = BackgroundScheduler(timezone="UTC")
     if settings.enable_live_startup:
         threading.Thread(target=run_startup_pipeline, daemon=True).start()
+    if settings.enable_autonomous_engine:
+        _scheduler.add_job(run_autonomous_engine_job, "interval", minutes=settings.autonomous_cycle_minutes, id="autonomous_research_engine", replace_existing=True, max_instances=1)
+        _scheduler.start()
+        with _state_lock:
+            _state["started"] = True
+        return
     _scheduler.add_job(run_news_refresh, "interval", minutes=settings.news_refresh_minutes, id="news_refresh", replace_existing=True, max_instances=1)
     _scheduler.add_job(run_market_refresh, "interval", minutes=settings.market_refresh_minutes, id="market_refresh", replace_existing=True, max_instances=1)
     _scheduler.add_job(run_data_gap_repair, "interval", minutes=settings.data_gap_repair_minutes, id="data_gap_repair", replace_existing=True, max_instances=1)
@@ -72,6 +79,10 @@ def realtime_status() -> dict:
 
 
 def run_startup_pipeline() -> None:
+    if settings.enable_autonomous_engine:
+        _run_job("autonomous_startup", lambda db: AutonomousResearchEngine().run_cycle(db, trigger="startup"))
+        return
+
     def work(db):
         pipeline = PipelineService().run(db, limit=settings.startup_pipeline_limit, period=settings.historical_price_period)
         learning = run_learning_cycle(db, limit=settings.max_update_assets * 6) if settings.enable_learning_loop else {}
@@ -126,6 +137,10 @@ def run_learning_cycle_job() -> None:
 
 def run_blum_model_cycle_job() -> None:
     _run_job("blum_financial_model_cycle", lambda db: run_model_learning_cycle(db, limit=settings.blum_model_cycle_limit))
+
+
+def run_autonomous_engine_job() -> None:
+    _run_job("autonomous_research_engine", lambda db: AutonomousResearchEngine().run_cycle(db, trigger="scheduled"))
 
 
 def _run_job(job_name: str, work):

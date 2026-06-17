@@ -134,6 +134,7 @@ def build_signal_thesis_payload(asset: Asset, score: dict, technical: dict, narr
         narrative=narrative,
         related_news=[],
         market_context=market_context,
+        accuracy=narrative.get("accuracy_profile", {}),
     )
     return {
         "executive_thesis": thesis["executive_thesis"],
@@ -206,6 +207,7 @@ def enrich_theme_lifecycle(theme: dict, linked_assets: list[str] | None = None, 
 
 
 def observed_facts(ticker: str, signal: dict, technical: dict, narrative: dict, related_news: list[dict], historical: dict) -> list[str]:
+    fundamentals = narrative.get("fundamentals") or {}
     facts = [
         f"{ticker} classification is {signal.get('classification', 'Insufficient Evidence')}.",
         f"Blum score is {display(signal.get('blum_score'))} and confidence is {display(signal.get('confidence_score'))}.",
@@ -213,6 +215,8 @@ def observed_facts(ticker: str, signal: dict, technical: dict, narrative: dict, 
         f"7D sentiment is {display(narrative.get('sentiment_7d'))} across {int(number(narrative.get('news_count_7d')))} linked recent news records.",
         f"Stored related news items supplied to the thesis: {len(related_news)}.",
     ]
+    if fundamentals.get("status") == "ready":
+        facts.append(f"SEC fundamental score is {display(fundamentals.get('fundamental_score'))} from provider {fundamentals.get('provider', 'unknown')}.")
     if historical:
         facts.append(f"Historical similarity data mode is {historical.get('data_mode', historical.get('statistical_reliability', 'available'))}.")
     return facts
@@ -275,6 +279,7 @@ def causal_reasoning(ticker: str, technical: dict, narrative: dict, related_news
 def supporting_evidence(signal: dict, technical: dict, narrative: dict, related_news: list[dict], historical: dict) -> list[str]:
     rows = []
     breakdown = signal.get("score_breakdown") or {}
+    fundamentals = narrative.get("fundamentals") or {}
     if number(breakdown.get("momentum_score")) >= 60:
         rows.append(f"Momentum score is {number(breakdown.get('momentum_score')):.1f}.")
     if number(breakdown.get("trend_score")) >= 60:
@@ -285,6 +290,8 @@ def supporting_evidence(signal: dict, technical: dict, narrative: dict, related_
         rows.append("Price is above both SMA20 and SMA50.")
     if number(narrative.get("news_count_7d")) >= 2:
         rows.append(f"News flow is active with {int(number(narrative.get('news_count_7d')))} linked 7D records.")
+    if number(breakdown.get("fundamental_score"), number(fundamentals.get("fundamental_score"))) >= 62:
+        rows.append(f"Fundamental evidence is supportive with score {number(breakdown.get('fundamental_score'), number(fundamentals.get('fundamental_score'))):.1f}.")
     if related_news:
         best = max(related_news, key=lambda item: number(item.get("quality_score")))
         rows.append(f"Highest-quality linked news source is {best.get('source', 'unknown')} with quality {display(best.get('quality_score'))}.")
@@ -295,6 +302,7 @@ def supporting_evidence(signal: dict, technical: dict, narrative: dict, related_
 
 def contradicting_evidence(signal: dict, technical: dict, narrative: dict, related_news: list[dict], accuracy: dict, historical: dict) -> list[str]:
     rows = []
+    fundamentals = narrative.get("fundamentals") or {}
     perf_5d = number(technical.get("perf_5d"))
     sentiment_7d = number(narrative.get("sentiment_7d"))
     if perf_5d > 4 and sentiment_7d < -0.12:
@@ -305,6 +313,10 @@ def contradicting_evidence(signal: dict, technical: dict, narrative: dict, relat
         rows.append("RSI is elevated, increasing the risk of crowded short-term momentum.")
     if signal.get("risk_level") == "High":
         rows.append("The latest signal is explicitly marked High risk.")
+    if fundamentals.get("status") == "missing":
+        rows.append("Fundamental evidence is missing, so the thesis is less complete.")
+    elif number(fundamentals.get("fundamental_score")) < 45:
+        rows.append("Fundamental score is weak relative to the technical or narrative setup.")
     if number(accuracy.get("blum_confidence_score"), 100) < 55:
         rows.append("Evidence confidence is limited by data quality checks.")
     if historical.get("data_mode") == "demonstration_mode":
@@ -331,7 +343,8 @@ def uncertainty_points(signal: dict, technical: dict, narrative: dict, related_n
 
 def missing_information(signal: dict, technical: dict, narrative: dict, related_news: list[dict], historical: dict, accuracy: dict) -> list[str]:
     rows = []
-    if technical.get("fundamental_confirmation") is None:
+    fundamentals = narrative.get("fundamentals") or {}
+    if fundamentals.get("status") != "ready":
         rows.append("Fundamental confirmation is not fully connected to the signal.")
     if number(narrative.get("news_count_7d")) == 0:
         rows.append("Recent source-backed catalyst is missing.")
@@ -370,6 +383,7 @@ def invalidation_conditions(technical: dict, narrative: dict, risk_level: str) -
 
 def thesis_risks(signal: dict, technical: dict, narrative: dict, accuracy: dict, regime: str) -> list[str]:
     rows = []
+    fundamentals = narrative.get("fundamentals") or {}
     if signal.get("risk_level") == "High":
         rows.append("High signal risk can make the thesis unstable even when momentum is strong.")
     if regime in {"Risk-Off", "Panic", "Bull Exhaustion"}:
@@ -380,6 +394,8 @@ def thesis_risks(signal: dict, technical: dict, narrative: dict, accuracy: dict,
         rows.append("Data quality limits conviction.")
     if number(narrative.get("sentiment_polarization")) > 0.8:
         rows.append("Sentiment polarization is high; narrative interpretation may be unstable.")
+    if fundamentals.get("status") == "missing":
+        rows.append("Fundamental coverage is missing or incomplete.")
     return rows or ["No dominant single risk, but thesis quality depends on continued evidence alignment."]
 
 
@@ -422,10 +438,11 @@ def conviction_score(**kwargs) -> dict:
             number(breakdown.get("trend_score")) >= 60,
             number(breakdown.get("sentiment_score")) >= 58 or number(narrative.get("sentiment_7d")) > 0.12,
             number(breakdown.get("etf_confirmation_score")) >= 55,
+            number(breakdown.get("fundamental_score")) >= 62,
             number(historical.get("case_count")) >= 12,
         ]
     )
-    confirmation_score = independent_confirmations / 5 * 100
+    confirmation_score = independent_confirmations / 6 * 100
     contradiction_score = clamp(100 - max(0, len(contradicting) - 1) * 18)
     narrative_score = clamp(number(breakdown.get("semantic_trend_score"), number(narrative.get("semantic_trend_score"))))
     technical_score = mean_safe([number(breakdown.get("momentum_score")), number(breakdown.get("trend_score"))])
@@ -455,6 +472,7 @@ def conviction_score(**kwargs) -> dict:
             "technical_coherence": round(technical_score, 1),
             "historical_support": round(historical_score, 1),
             "market_context": round(context_score, 1),
+            "fundamental_support": round(number(breakdown.get("fundamental_score")), 1),
         },
         "reducers": reducers or ["No major conviction reducer was detected, but the thesis remains conditional."],
     }

@@ -955,3 +955,53 @@ class BlumModelTrainingJob(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
 
     dataset_export = relationship("BlumDatasetExport")
+
+
+class ExternalDatasetSource(Base):
+    __tablename__ = "external_dataset_sources"
+    __table_args__ = (
+        UniqueConstraint("dataset_id", name="uq_external_dataset_source_dataset_id"),
+        Index("ix_external_dataset_sources_status_priority", "status", "priority"),
+        Index("ix_external_dataset_sources_domain_updated", "primary_domain", "updated_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    dataset_id: Mapped[str] = mapped_column(String(220), unique=True, index=True)
+    provider: Mapped[str] = mapped_column(String(80), default="hugging_face", index=True)
+    title: Mapped[str] = mapped_column(String(260), default="")
+    primary_domain: Mapped[str] = mapped_column(String(80), default="market_data", index=True)
+    data_domains: Mapped[dict] = mapped_column(JsonType, default=dict)
+    license: Mapped[str] = mapped_column(String(80), default="unknown", index=True)
+    priority: Mapped[int] = mapped_column(Integer, default=50, index=True)
+    ingestion_mode: Mapped[str] = mapped_column(String(80), default="catalog_only", index=True)
+    status: Mapped[str] = mapped_column(String(80), default="discovered", index=True)
+    dataset_url: Mapped[str] = mapped_column(Text, default="")
+    viewer_status: Mapped[dict] = mapped_column(JsonType, default=dict)
+    parquet_files: Mapped[dict] = mapped_column(JsonType, default=dict)
+    size_summary: Mapped[dict] = mapped_column(JsonType, default=dict)
+    usage_policy: Mapped[dict] = mapped_column(JsonType, default=dict)
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
+class AutonomousEngineRun(Base):
+    __tablename__ = "autonomous_engine_runs"
+    __table_args__ = (
+        UniqueConstraint("run_id", name="uq_autonomous_engine_run_id"),
+        Index("ix_autonomous_engine_runs_status_started", "status", "started_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    trigger: Mapped[str] = mapped_column(String(80), default="scheduled", index=True)
+    status: Mapped[str] = mapped_column(String(80), default="running", index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    stage_results: Mapped[dict] = mapped_column(JsonType, default=dict)
+    readiness_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    data_coverage_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    reasoning_memory_created: Mapped[int] = mapped_column(Integer, default=0)
+    warning_count: Mapped[int] = mapped_column(Integer, default=0)
+    error_payload: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)

@@ -6,13 +6,13 @@ from sqlalchemy import delete, desc, select
 from sqlalchemy.orm import Session
 
 from app.ai.orchestrator import AIOrchestrator
-from app.models import Asset, NewsAssetLink, PriceHistory, SentimentAnalysis, SignalSnapshot, TechnicalIndicator
+from app.models import AccuracySnapshot, Asset, FundamentalSnapshot, NewsAssetLink, PriceHistory, SentimentAnalysis, SignalSnapshot, TechnicalIndicator
 from app.services.blum_financial_model import capture_signal_reasoning
 from app.services.thesis_engine import build_signal_thesis_payload
 from app.signals.indicators import compute_indicators
 
 
-SCORE_VERSION = "blum-thesis-score-v0.6"
+SCORE_VERSION = "blum-thesis-score-v0.8"
 
 
 class SignalEngine:
@@ -34,9 +34,12 @@ class SignalEngine:
             indicators = compute_indicators(frame, benchmark_frame)
             ts = self.ai.time_series.analyze(frame)
             narrative = self.narrative_features(db, asset)
-            score = build_score(indicators, narrative, ts, asset)
+            fundamentals = fundamental_features(db, asset)
+            accuracy = accuracy_features(db, asset)
+            narrative = {**narrative, "fundamentals": fundamentals, "accuracy_profile": accuracy}
+            score = build_score(indicators, narrative, ts, asset, fundamentals, accuracy)
             previous = latest_signal_for_asset(db, asset.id)
-            confidence = confidence_score(frame, indicators, narrative, ts)
+            confidence = confidence_score(frame, indicators, narrative, ts, fundamentals, accuracy)
             score["confidence_score"] = confidence
             lifecycle = lifecycle_state(previous, score, confidence)
             thesis = build_signal_thesis_payload(asset, score, indicators, narrative, ts)
@@ -127,7 +130,9 @@ def load_prices(db: Session, asset_id: int) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["date", "open", "high", "low", "close", "volume"])
 
 
-def build_score(indicators: dict, narrative: dict, ts: dict, asset: Asset) -> dict:
+def build_score(indicators: dict, narrative: dict, ts: dict, asset: Asset, fundamentals: dict | None = None, accuracy: dict | None = None) -> dict:
+    fundamentals = fundamentals or {}
+    accuracy = accuracy or {}
     momentum_score = avg(
         scale(indicators.get("perf_5d"), -8, 8),
         scale(indicators.get("perf_1m"), -14, 16),
@@ -159,16 +164,20 @@ def build_score(indicators: dict, narrative: dict, ts: dict, asset: Asset) -> di
     )
     semantic_trend_score = narrative.get("semantic_trend_score", 0)
     etf_confirmation_score = etf_confirmation_proxy(asset, indicators)
+    fundamental_score = float(fundamentals.get("fundamental_score", 45.0) or 45.0)
+    historical_accuracy_score = float(accuracy.get("accuracy_score", 50.0) or 50.0)
     risk_adjustment = avg(volatility_score, scale(indicators.get("beta_vs_benchmark"), 2.1, 0.55), scale(indicators.get("recent_drawdown"), -30, 0))
     blum_score = (
-        momentum_score * 0.18
-        + trend_score * 0.18
-        + sentiment_score * 0.16
-        + volatility_score * 0.12
-        + anomaly_score * 0.10
-        + semantic_trend_score * 0.12
-        + etf_confirmation_score * 0.08
-        + risk_adjustment * 0.06
+        momentum_score * 0.16
+        + trend_score * 0.16
+        + sentiment_score * 0.13
+        + volatility_score * 0.10
+        + anomaly_score * 0.09
+        + semantic_trend_score * 0.10
+        + etf_confirmation_score * 0.07
+        + fundamental_score * 0.10
+        + historical_accuracy_score * 0.06
+        + risk_adjustment * 0.03
     )
     classification = classify_signal(blum_score, indicators, narrative, anomaly_score)
     return {
@@ -184,6 +193,8 @@ def build_score(indicators: dict, narrative: dict, ts: dict, asset: Asset) -> di
             "anomaly_score": round(anomaly_score, 1),
             "semantic_trend_score": round(semantic_trend_score, 1),
             "etf_confirmation_score": round(etf_confirmation_score, 1),
+            "fundamental_score": round(fundamental_score, 1),
+            "historical_accuracy_score": round(historical_accuracy_score, 1),
             "risk_adjustment": round(risk_adjustment, 1),
         },
     }
@@ -250,7 +261,7 @@ def build_rule_explanation(asset: Asset, score: dict, indicators: dict, narrativ
     return (
         f"{asset.ticker} is classified as {score['classification']} with a Blum Intelligence Score of "
         f"{score['blum_score']}. The engine combines momentum, trend quality, sentiment, volatility, "
-        f"semantic intensity, ETF confirmation and anomaly pressure. Current 5D performance is "
+        f"semantic intensity, ETF confirmation, fundamentals, historical accuracy and anomaly pressure. Current 5D performance is "
         f"{indicators.get('perf_5d', 0):.2f}%, 1M performance is {indicators.get('perf_1m', 0):.2f}%, "
         f"7D sentiment is {narrative.get('sentiment_7d', 0):.2f}, and the time-series regime is "
         f"{ts.get('regime', 'unknown')}."
@@ -266,13 +277,17 @@ def latest_signal_for_asset(db: Session, asset_id: int) -> SignalSnapshot | None
     )
 
 
-def confidence_score(frame: pd.DataFrame, indicators: dict, narrative: dict, ts: dict) -> float:
+def confidence_score(frame: pd.DataFrame, indicators: dict, narrative: dict, ts: dict, fundamentals: dict | None = None, accuracy: dict | None = None) -> float:
+    fundamentals = fundamentals or {}
+    accuracy = accuracy or {}
     history_depth = scale(len(frame), 60, 900)
     indicator_completeness = sum(1 for key in ["sma20", "sma50", "sma200", "rsi", "macd_hist", "atr_percent", "support", "resistance"] if indicators.get(key) is not None) / 8 * 100
     news_support = scale(narrative.get("news_count_30d", 0), 0, 12)
     sentiment_quality = scale(abs(narrative.get("sentiment_30d", 0)), 0, 0.55)
     time_series_depth = 80 if ts.get("regime") not in {"unknown", "insufficient_history"} else 35
-    return round(avg(history_depth, indicator_completeness, news_support, sentiment_quality, time_series_depth), 1)
+    fundamental_quality = float(fundamentals.get("quality_score", 0.0) or 0.0)
+    historical_accuracy = float(accuracy.get("accuracy_score", 50.0) or 50.0)
+    return round(avg(history_depth, indicator_completeness, news_support, sentiment_quality, time_series_depth, fundamental_quality, historical_accuracy), 1)
 
 
 def lifecycle_state(previous: SignalSnapshot | None, score: dict, confidence: float) -> str:
@@ -296,6 +311,72 @@ def etf_confirmation_proxy(asset: Asset, indicators: dict) -> float:
     if asset.asset_type == "ETF":
         return avg(base, scale(indicators.get("perf_1m"), -10, 14), 100 if indicators.get("above_sma50") else 35)
     return base
+
+
+def fundamental_features(db: Session, asset: Asset) -> dict:
+    snapshot = db.scalar(
+        select(FundamentalSnapshot)
+        .where(FundamentalSnapshot.asset_id == asset.id)
+        .order_by(desc(FundamentalSnapshot.period_end), desc(FundamentalSnapshot.created_at))
+        .limit(1)
+    )
+    if snapshot is None:
+        return {"status": "missing", "quality_score": 0.0, "fundamental_score": 42.0, "issues": ["No SEC fundamental snapshot is stored."]}
+    metrics = snapshot.metrics or {}
+    revenue = metric_value(metrics, "revenue")
+    net_income = metric_value(metrics, "net_income")
+    assets = metric_value(metrics, "assets")
+    liabilities = metric_value(metrics, "liabilities")
+    operating_cash_flow = metric_value(metrics, "operating_cash_flow")
+    profit_margin = net_income / revenue if revenue else None
+    leverage = liabilities / assets if assets else None
+    cash_conversion = operating_cash_flow / net_income if operating_cash_flow is not None and net_income and net_income > 0 else None
+    score = avg(
+        float(snapshot.quality_score or 0.0),
+        scale(profit_margin, -0.18, 0.30) if profit_margin is not None else 45,
+        scale(1 - leverage, 0.05, 0.72) if leverage is not None else 45,
+        scale(cash_conversion, 0.25, 1.45) if cash_conversion is not None else 45,
+    )
+    return {
+        "status": "ready",
+        "provider": snapshot.provider,
+        "period_end": snapshot.period_end.isoformat() if snapshot.period_end else None,
+        "quality_score": float(snapshot.quality_score or 0.0),
+        "fundamental_score": round(score, 1),
+        "profit_margin": round(profit_margin, 4) if profit_margin is not None else None,
+        "liabilities_to_assets": round(leverage, 4) if leverage is not None else None,
+        "cash_conversion": round(cash_conversion, 4) if cash_conversion is not None else None,
+        "data_policy": "SEC companyfacts metrics only. Missing values are not estimated.",
+    }
+
+
+def accuracy_features(db: Session, asset: Asset) -> dict:
+    snapshot = db.scalar(
+        select(AccuracySnapshot)
+        .where(AccuracySnapshot.asset_id == asset.id, AccuracySnapshot.scope == "asset")
+        .order_by(desc(AccuracySnapshot.created_at))
+        .limit(1)
+    )
+    if snapshot is None:
+        return {"status": "missing", "accuracy_score": 50.0, "confidence_label": "Unknown"}
+    return {
+        "status": "ready",
+        "accuracy_score": float(snapshot.score or 50.0),
+        "confidence_label": snapshot.confidence_label,
+        "components": snapshot.components,
+        "issues": snapshot.issues,
+        "created_at": snapshot.created_at.isoformat() if snapshot.created_at else None,
+    }
+
+
+def metric_value(metrics: dict, key: str) -> float | None:
+    payload = metrics.get(key)
+    if not isinstance(payload, dict):
+        return None
+    try:
+        return float(payload.get("value"))
+    except Exception:
+        return None
 
 
 def scale(value, low: float, high: float) -> float:
