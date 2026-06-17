@@ -82,6 +82,7 @@ from app.services.strategic_intelligence import (
     similar_cases_backtest,
     list_watchlist,
 )
+from app.services.thesis_engine import build_asset_thesis
 from app.signals.backtest import run_simple_backtest
 from app.signals.engine import SignalEngine
 
@@ -101,7 +102,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
     return {
         "service": "blum-ai-financial-intelligence",
         "app_version": settings.app_version,
-        "feature_set": "terminal-ui-ux-chart-vision-v0.5.9",
+        "feature_set": "thesis-reasoning-engine-v0.6.0",
         "environment": settings.environment,
         "generated_at": datetime.utcnow().isoformat(),
         "hugging_face": {
@@ -182,7 +183,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "Hugging Face serves the previous image until the Docker build finishes successfully.",
             "The finance-domain 7B model is disabled by default unless BLUM_ENABLE_FINANCIAL_BRAIN_MODEL=true.",
             "Existing snapshots must be regenerated with Run brain or full pipeline after a new deployment.",
-            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.5.9.",
+            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.6.0.",
         ],
     }
 
@@ -701,12 +702,27 @@ def ai_explain(ticker: str, db: Session = Depends(get_db)):
         )
         db.commit()
         return insight
+    historical = similar_cases_backtest(db, asset)
+    accuracy = asset_accuracy_profile(db, asset, persist=False)
+    market_context = {"regime": "Sideways"}
+    try:
+        latest_brain = latest_market_brain(db)
+        market_context = {
+            "regime": latest_brain.get("regime", "Sideways"),
+            "brain_score": latest_brain.get("brain_score"),
+            "summary": latest_brain.get("summary"),
+        }
+    except Exception as exc:
+        market_context = {"regime": "Sideways", "context_warning": f"Market Brain context unavailable: {exc}"}
     insight = AIOrchestrator().generate_asset_insight(
         ticker=asset.ticker,
         signal=signal_payload(signal, db),
         technical=signal.technical_summary,
         narrative=signal.narrative_summary,
         related_news=news,
+        market_context=market_context,
+        historical_similarity=historical,
+        accuracy=accuracy,
     )
     insight["evidence_status"] = "ready"
     insight["auto_hydration"] = hydration
@@ -796,11 +812,35 @@ def insufficient_evidence_insight(db: Session, asset: Asset, news: list[dict], h
     )
     if missing_assets:
         reason += f" Public price providers did not return usable data for: {', '.join(missing_assets[:6])}."
+    thesis = build_asset_thesis(
+        asset=asset,
+        signal={
+            "classification": "Insufficient Evidence",
+            "blum_score": 0,
+            "confidence_score": 0,
+            "risk_level": "Not Rated",
+            "time_horizon": "Not Rated",
+            "score_breakdown": {},
+        },
+        technical={"price_rows": price_rows},
+        narrative={"news_count_7d": len(news), "news_count_30d": len(news), "sentiment_7d": 0},
+        related_news=news,
+        market_context={"regime": "Sideways"},
+        historical_similarity={"data_mode": "missing", "case_count": 0},
+        accuracy={"blum_confidence_score": 0},
+    )
     return {
         "ticker": asset.ticker,
         "classification": "Insufficient Evidence",
         "blum_score": 0,
         "reason": reason,
+        "thesis": thesis,
+        "executive_thesis": thesis["executive_thesis"],
+        "conviction_score": thesis["conviction_score"],
+        "supporting_evidence": thesis["supporting_evidence"],
+        "contradicting_evidence": thesis["contradicting_evidence"],
+        "what_the_market_may_be_missing": thesis["what_the_market_may_be_missing"],
+        "final_blum_view": thesis["final_blum_view"],
         "watch_points": [
             "Keep the live worker running until public OHLCV providers return sufficient historical rows.",
             "Review source diagnostics to identify blocked, empty or rate-limited public feeds.",

@@ -68,6 +68,7 @@ export function AssetDetailClient({ ticker }: { ticker: string }) {
   const prices = data.prices ?? [];
   const snapshot = data.market_snapshot ?? signal?.market_snapshot ?? data.asset?.market_snapshot;
   const narrative = insight?.reason ?? signal?.explanation ?? report?.why_in_radar;
+  const thesis = insight?.thesis ?? report?.thesis ?? (signal?.narrative_summary as any)?.thesis;
   return (
     <>
       <TerminalHeader
@@ -110,6 +111,8 @@ export function AssetDetailClient({ ticker }: { ticker: string }) {
       </section>
 
       {signal && <section style={{ marginTop: 12 }}><SignalCard signal={signal} /></section>}
+
+      <ThesisResearchPanel thesis={thesis} fallbackReason={narrative} />
 
       <section className="grid-2" style={{ marginTop: 12 }}>
         <EvidenceConfidencePanel accuracy={accuracy} />
@@ -251,6 +254,150 @@ function FundamentalContextPanel({ fundamentals, assetType }: { fundamentals: an
       )}
     </div>
   );
+}
+
+function ThesisResearchPanel({ thesis, fallbackReason }: { thesis: any; fallbackReason?: string }) {
+  if (!thesis) {
+    return (
+      <BloombergPanel
+        title="Executive Thesis"
+        value="Building"
+        subtitle="Every asset requires a structured thesis before it can become a research candidate."
+        className="asset-thesis-panel"
+      >
+        <div className="empty-state">
+          Blum is collecting enough signal, news, technical, sentiment and memory evidence to create an explicit thesis. No placeholder thesis is displayed.
+        </div>
+      </BloombergPanel>
+    );
+  }
+  const conviction = thesis.conviction ?? {};
+  const context = thesis.market_context ?? {};
+  const narrative = thesis.narrative_analysis ?? {};
+  const historical = thesis.historical_similarity ?? {};
+  const causal = thesis.causal_reasoning ?? {};
+  const components = Object.entries(conviction.components ?? {}).slice(0, 7);
+  return (
+    <section style={{ marginTop: 12 }}>
+      <BloombergPanel
+        title="Executive Thesis"
+        value={`${display(thesis.conviction_score ?? conviction.score)} conviction`}
+        subtitle="Thesis strength, not probability of profit. Evidence, inference and uncertainty are separated."
+        className="asset-thesis-panel"
+      >
+        <p>{thesis.executive_thesis ?? fallbackReason ?? "The thesis is being assembled from stored evidence."}</p>
+        <div className="professional-grid-4" style={{ marginTop: 12 }}>
+          <MetricCard label="Market Regime" value={context.regime ?? "Sideways"} subvalue={context.signal_regime_adjustment ?? "Context adjustment pending"} />
+          <MetricCard label="Narrative Stage" value={narrative.lifecycle ?? "n/a"} subvalue={`Intensity ${display(narrative.intensity)} | crowding ${display(narrative.crowding)}`} />
+          <MetricCard label="Historical Cases" value={historical.similar_cases_found ?? 0} subvalue={historical.reliability ?? historical.status ?? "memory pending"} />
+          <MetricCard label="Conviction Label" value={conviction.label ?? "n/a"} subvalue={conviction.meaning ?? "Thesis strength score"} tone={(thesis.conviction_score ?? 0) >= 70 ? "positive" : "attention"} />
+        </div>
+      </BloombergPanel>
+
+      <section className="professional-grid-2" style={{ marginTop: 12 }}>
+        <BloombergPanel title="What Is Happening" value="Observed + inferred">
+          <p>{thesis.what_is_happening}</p>
+          <h3>Causal read</h3>
+          <p>{thesis.why_it_may_be_happening}</p>
+          <div className="macro-list">
+            <div><strong>Price caused sentiment</strong><span>{causal.price_caused_sentiment ?? "not established"}</span></div>
+            <div><strong>Sentiment caused price</strong><span>{causal.sentiment_caused_price ?? "not established"}</span></div>
+            <div><strong>External event explains both</strong><span>{causal.external_event_explains_both ?? "not observed"}</span></div>
+          </div>
+        </BloombergPanel>
+        <BloombergPanel title="Market Context" value={context.regime ?? "Regime"}>
+          <p>{context.interpretation ?? "Market regime context is pending."}</p>
+          <ThesisList items={thesis.facts_observed} empty="Observed facts are still being collected." />
+        </BloombergPanel>
+      </section>
+
+      <section className="professional-grid-2" style={{ marginTop: 12 }}>
+        <BloombergPanel title="Supporting Evidence" value={`${thesisItems(thesis.supporting_evidence).length} items`}>
+          <ThesisList items={thesis.supporting_evidence} empty="No strong independent support is available yet." />
+        </BloombergPanel>
+        <BloombergPanel title="Contradicting Evidence" value={`${thesisItems(thesis.contradicting_evidence).length} items`}>
+          <ThesisList items={thesis.contradicting_evidence} empty="No contradiction was found, but this does not prove the thesis." />
+        </BloombergPanel>
+      </section>
+
+      <section className="professional-grid-3" style={{ marginTop: 12 }}>
+        <BloombergPanel title="Narrative Analysis" value={narrative.lifecycle ?? "n/a"} dense>
+          <div className="macro-list">
+            <div><strong>Growth velocity</strong><span>{display(narrative.growth_velocity)}</span></div>
+            <div><strong>Saturation</strong><span>{display(narrative.saturation)}</span></div>
+            <div><strong>Most exposed</strong><span>{(narrative.most_exposed_assets ?? []).join(", ") || "n/a"}</span></div>
+          </div>
+          <p>{narrative.interpretation ?? "Narrative interpretation is pending."}</p>
+        </BloombergPanel>
+        <BloombergPanel title="Historical Similarity" value={historical.status ?? "memory"} dense>
+          <div className="macro-list">
+            <div><strong>20D average</strong><span>{display(historical.average_forward_return_20d)}%</span></div>
+            <div><strong>Success rate</strong><span>{display(historical.success_rate)}</span></div>
+            <div><strong>Drawdown</strong><span>{display(historical.average_drawdown)}%</span></div>
+          </div>
+          <p>{historical.explanation ?? "No similar historical setup is available yet."}</p>
+        </BloombergPanel>
+        <BloombergPanel title="Conviction Reducers" value={conviction.label ?? "n/a"} dense>
+          <ThesisList items={thesis.conviction_reducers ?? conviction.reducers} empty="No major conviction reducer was detected." />
+        </BloombergPanel>
+      </section>
+
+      <section className="professional-grid-2" style={{ marginTop: 12 }}>
+        <BloombergPanel title="What The Market May Be Missing" value="Blind spots">
+          <ThesisList items={thesis.what_the_market_may_be_missing} empty="No clear market blind spot is visible." />
+        </BloombergPanel>
+        <BloombergPanel title="Risks and Invalidation" value="Governance">
+          <h3>Risks</h3>
+          <ThesisList items={thesis.risks} empty="Risk evidence is still forming." />
+          <h3>Invalidation conditions</h3>
+          <ThesisList items={thesis.invalidation_conditions} empty="Invalidation conditions are not available yet." />
+        </BloombergPanel>
+      </section>
+
+      <section className="professional-grid-2" style={{ marginTop: 12 }}>
+        <BloombergPanel title="Final Blum View" value="Research stance">
+          <p>{thesis.final_blum_view ?? "Final view pending."}</p>
+          <h3>Intellectual honesty</h3>
+          <ThesisList items={thesis.intellectual_honesty} empty="No specific limitation was recorded." />
+        </BloombergPanel>
+        <BloombergPanel title="Conviction Components" value={display(thesis.conviction_score)}>
+          <div className="macro-list">
+            {components.map(([key, value]) => (
+              <div key={key}>
+                <strong>{key.replaceAll("_", " ")}</strong>
+                <span>{display(value)}</span>
+              </div>
+            ))}
+          </div>
+        </BloombergPanel>
+      </section>
+    </section>
+  );
+}
+
+function ThesisList({ items, empty }: { items: any; empty: string }) {
+  const rows = thesisItems(items);
+  if (!rows.length) return <div className="empty-state">{empty}</div>;
+  return (
+    <ul>
+      {rows.map((item, index) => (
+        <li key={`${item}-${index}`}>{item}</li>
+      ))}
+    </ul>
+  );
+}
+
+function thesisItems(items: any): string[] {
+  if (!items) return [];
+  const rows = Array.isArray(items) ? items : [items];
+  return rows
+    .map((item) => {
+      if (item === null || item === undefined) return "";
+      if (typeof item === "string") return item;
+      if (typeof item === "number" || typeof item === "boolean") return String(item);
+      return item.explanation ?? item.reason ?? item.summary ?? JSON.stringify(item);
+    })
+    .filter(Boolean);
 }
 
 function AssetIntelligenceReportPanel({ report }: { report: any }) {

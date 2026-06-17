@@ -343,6 +343,7 @@ def evaluate_signal_horizon(signal: SignalSnapshot, asset: Asset, prices: pd.Dat
     signal_date = as_date(signal.created_at)
     target_date = signal_date + timedelta(days=horizon_days)
     expected_direction = expected_direction_for(signal)
+    initial_thesis = thesis_snapshot(signal)
     news_evidence = {
         "news_count_7d": value_from_dict(signal.narrative_summary, "news_count_7d"),
         "news_count_30d": value_from_dict(signal.narrative_summary, "news_count_30d"),
@@ -354,9 +355,12 @@ def evaluate_signal_horizon(signal: SignalSnapshot, asset: Asset, prices: pd.Dat
         "target_date": target_date.isoformat(),
         "observed_data": {"price_source": "stored_price_history", "price_rows": int(len(prices))},
         "inference": {"expected_direction": expected_direction, "signal_type": signal.classification},
-        "hypothesis": "A positive watch signal should show price resilience or follow-through after the chosen horizon.",
+        "hypothesis": initial_thesis.get("executive_thesis")
+        or "A positive watch signal should show price resilience or follow-through after the chosen horizon.",
+        "initial_thesis": initial_thesis,
     }
     if prices.empty:
+        reason = "No stored OHLCV rows were available for evaluation."
         return {
             **base_payload,
             "news_evidence": news_evidence,
@@ -369,7 +373,8 @@ def evaluate_signal_horizon(signal: SignalSnapshot, asset: Asset, prices: pd.Dat
             "outcome": "inconclusive",
             "explanation_quality_score": explanation_quality(signal),
             "data_quality_score": data_quality(signal, asset, prices, news_evidence),
-            "reason": "No stored OHLCV rows were available for evaluation.",
+            "reason": reason,
+            "thesis_learning": thesis_learning(signal, "inconclusive", None, expected_direction, horizon_days, initial_thesis, reason),
         }
 
     frame = prices.copy()
@@ -377,6 +382,7 @@ def evaluate_signal_horizon(signal: SignalSnapshot, asset: Asset, prices: pd.Dat
     entry = latest_row_on_or_before(frame, signal_date)
     target = earliest_row_on_or_after(frame, target_date)
     if entry is None or target is None or date.today() < target_date:
+        reason = "The requested horizon has not matured or the future price row is not stored yet."
         return {
             **base_payload,
             "news_evidence": news_evidence,
@@ -389,7 +395,8 @@ def evaluate_signal_horizon(signal: SignalSnapshot, asset: Asset, prices: pd.Dat
             "outcome": "inconclusive",
             "explanation_quality_score": explanation_quality(signal),
             "data_quality_score": data_quality(signal, asset, prices, news_evidence),
-            "reason": "The requested horizon has not matured or the future price row is not stored yet.",
+            "reason": reason,
+            "thesis_learning": thesis_learning(signal, "inconclusive", None, expected_direction, horizon_days, initial_thesis, reason),
         }
 
     entry_price = float(entry["close"])
@@ -400,6 +407,7 @@ def evaluate_signal_horizon(signal: SignalSnapshot, asset: Asset, prices: pd.Dat
     upside = pct(entry_price, float(window["high"].astype(float).max())) if not window.empty else None
     volatility = realized_volatility(window)
     outcome = classify_outcome(realized, expected_direction)
+    reason = outcome_reason(outcome, realized, expected_direction, horizon_days)
     return {
         **base_payload,
         "news_evidence": news_evidence,
@@ -412,7 +420,8 @@ def evaluate_signal_horizon(signal: SignalSnapshot, asset: Asset, prices: pd.Dat
         "outcome": outcome,
         "explanation_quality_score": explanation_quality(signal),
         "data_quality_score": data_quality(signal, asset, prices, news_evidence),
-        "reason": outcome_reason(outcome, realized, expected_direction, horizon_days),
+        "reason": reason,
+        "thesis_learning": thesis_learning(signal, outcome, realized, expected_direction, horizon_days, initial_thesis, reason),
     }
 
 
@@ -441,6 +450,8 @@ def apply_evaluation(evaluation: SignalEvaluation, signal: SignalSnapshot, asset
         "observed_data": result.get("observed_data", {}),
         "inference": result.get("inference", {}),
         "hypothesis": result.get("hypothesis", ""),
+        "initial_thesis": result.get("initial_thesis", {}),
+        "thesis_learning": result.get("thesis_learning", {}),
         "reason": result.get("reason", ""),
         "target_date": result.get("target_date"),
     }
@@ -479,6 +490,8 @@ def update_signal_outcome(db: Session, signal: SignalSnapshot, asset: Asset) -> 
     outcome.average_realized_return = round(mean(returns), 3) if returns else None
     outcome.outcome_payload = {
         "evaluations": [serialize_evaluation(row) for row in evaluations],
+        "initial_thesis": thesis_snapshot(signal),
+        "reasoning_learning": aggregate_thesis_learning(evaluations),
         "initial_features": {
             "score": signal.blum_score,
             "confidence": signal.confidence_score,
@@ -950,6 +963,147 @@ def outcome_reason(outcome: str, realized_return: float, expected_direction: str
     if outcome == "wrong":
         return f"The {horizon}D realized return of {realized_return:.2f}% contradicted the expected {expected_direction} thesis."
     return f"The {horizon}D realized return of {realized_return:.2f}% was not decisive enough to classify the signal as correct or wrong."
+
+
+def thesis_snapshot(signal: SignalSnapshot) -> dict:
+    thesis = ((signal.narrative_summary or {}).get("thesis") or {}) if isinstance(signal.narrative_summary, dict) else {}
+    return {
+        "executive_thesis": thesis.get("executive_thesis") or signal.explanation,
+        "supporting_evidence": thesis.get("supporting_evidence", []),
+        "contradicting_evidence": thesis.get("contradicting_evidence", []),
+        "confirmation_conditions": thesis.get("confirmation_conditions", []),
+        "invalidation_conditions": thesis.get("invalidation_conditions", []),
+        "conviction_score": thesis.get("conviction_score", value_from_dict(signal.narrative_summary, "conviction_score")),
+        "conviction_reducers": thesis.get("conviction_reducers", []),
+        "causal_reasoning": thesis.get("causal_reasoning", {}),
+        "narrative_analysis": thesis.get("narrative_analysis", {}),
+        "market_context": thesis.get("market_context", {}),
+        "what_the_market_may_be_missing": thesis.get("what_the_market_may_be_missing", []),
+        "final_blum_view": thesis.get("final_blum_view", ""),
+    }
+
+
+def thesis_learning(
+    signal: SignalSnapshot,
+    outcome: str,
+    realized_return: float | None,
+    expected_direction: str,
+    horizon_days: int,
+    initial_thesis: dict,
+    reason: str,
+) -> dict:
+    contradiction_count = len(initial_thesis.get("contradicting_evidence") or [])
+    support_count = len(initial_thesis.get("supporting_evidence") or [])
+    conviction = float(initial_thesis.get("conviction_score") or 0.0)
+    momentum = value_from_dict(signal.score_breakdown, "momentum_score")
+    sentiment = value_from_dict(signal.narrative_summary, "sentiment_7d")
+    news_count = value_from_dict(signal.narrative_summary, "news_count_7d")
+    risk_level = signal.risk_level or "Unknown"
+    hypothesis_result = {
+        "correct": "initial thesis supported by realized price behavior",
+        "wrong": "initial thesis contradicted by realized price behavior",
+        "neutral": "initial thesis not decisively supported or contradicted",
+        "inconclusive": "initial thesis cannot be evaluated yet",
+    }.get(outcome, "initial thesis unresolved")
+
+    underestimated = []
+    overestimated = []
+    reasoning_errors = []
+    if outcome == "wrong":
+        if contradiction_count:
+            underestimated.append("Contradicting evidence should receive more weight in similar future setups.")
+        if risk_level == "High":
+            underestimated.append("High risk classification may have been underweighted versus upside evidence.")
+        if sentiment < 0 and momentum >= 60:
+            underestimated.append("Negative sentiment was weaker than momentum in the initial thesis but may have mattered more.")
+        if momentum >= 68:
+            overestimated.append("Momentum strength may have been over-extrapolated.")
+        if news_count < 2:
+            overestimated.append("The system may have inferred too much from thin news evidence.")
+        if conviction >= 65:
+            reasoning_errors.append("High conviction was not justified by the realized horizon outcome.")
+    elif outcome == "correct":
+        if support_count:
+            underestimated.append("Supporting evidence appears useful and should remain visible in similar cases.")
+        if conviction < 50:
+            reasoning_errors.append("Conviction may have been too cautious relative to follow-through.")
+    elif outcome == "neutral":
+        overestimated.append("The initial thesis may have expected clearer follow-through than the market delivered.")
+        if news_count >= 3 and abs(sentiment) > 0.12:
+            reasoning_errors.append("Narrative evidence did not translate into decisive price behavior over this horizon.")
+    else:
+        reasoning_errors.append("No conclusion until the horizon matures and stored OHLCV rows are available.")
+
+    return {
+        "horizon_days": horizon_days,
+        "expected_direction": expected_direction,
+        "realized_return": realized_return,
+        "hypothesis_result": hypothesis_result,
+        "thesis_was_supported": outcome == "correct",
+        "thesis_was_contradicted": outcome == "wrong",
+        "evidence_underestimated": underestimated or ["No specific underestimated evidence can be isolated from this evaluation."],
+        "factors_potentially_overestimated": overestimated or ["No specific overestimated factor can be isolated from this evaluation."],
+        "possible_reasoning_errors": reasoning_errors or ["No repeating reasoning error detected from this horizon alone."],
+        "future_adjustment_hint": future_adjustment_hint(outcome, conviction, contradiction_count, momentum, sentiment, news_count, risk_level),
+        "reason": reason,
+    }
+
+
+def future_adjustment_hint(
+    outcome: str,
+    conviction: float,
+    contradiction_count: int,
+    momentum: float,
+    sentiment: float,
+    news_count: float,
+    risk_level: str,
+) -> str:
+    if outcome == "wrong" and contradiction_count:
+        return "Lower future conviction when contradictions are present unless independent confirmations are stronger."
+    if outcome == "wrong" and momentum >= 68 and news_count < 2:
+        return "Do not let price momentum alone dominate a thesis when narrative evidence is thin."
+    if outcome == "wrong" and risk_level == "High":
+        return "Increase the risk penalty for high-volatility setups with weak confirmation."
+    if outcome == "correct" and conviction < 50:
+        return "Similar aligned setups may deserve a higher baseline conviction once evidence quality is sufficient."
+    if outcome == "neutral" and abs(sentiment) > 0.12:
+        return "Narrative strength should be treated as context, not as confirmation without price follow-through."
+    if outcome == "inconclusive":
+        return "Wait for real matured price rows before changing weights or confidence."
+    return "No automatic weight change should be inferred from one horizon; aggregate with similar matured cases."
+
+
+def aggregate_thesis_learning(evaluations: list[SignalEvaluation]) -> dict:
+    payloads = [row.evaluation_payload or {} for row in evaluations]
+    learnings = [payload.get("thesis_learning", {}) for payload in payloads if payload.get("thesis_learning")]
+    if not learnings:
+        return {
+            "status": "pending",
+            "summary": "No thesis-learning payloads are available yet for this signal.",
+            "repeating_reasoning_errors": [],
+        }
+    supported = sum(1 for item in learnings if item.get("thesis_was_supported"))
+    contradicted = sum(1 for item in learnings if item.get("thesis_was_contradicted"))
+    unresolved = len(learnings) - supported - contradicted
+    errors: dict[str, int] = defaultdict(int)
+    for item in learnings:
+        for error in item.get("possible_reasoning_errors", []):
+            errors[error] += 1
+    repeated = sorted(errors.items(), key=lambda item: item[1], reverse=True)[:5]
+    if contradicted > supported:
+        summary = "The initial thesis is currently more contradicted than supported across matured horizons."
+    elif supported > contradicted:
+        summary = "The initial thesis is currently supported by more matured horizons than it is contradicted by."
+    else:
+        summary = "The initial thesis remains mixed or unresolved across matured horizons."
+    return {
+        "status": "evaluated" if supported or contradicted else "pending",
+        "summary": summary,
+        "supported_horizons": supported,
+        "contradicted_horizons": contradicted,
+        "unresolved_horizons": unresolved,
+        "repeating_reasoning_errors": [{"error": error, "count": count} for error, count in repeated],
+    }
 
 
 def explanation_quality(signal: SignalSnapshot) -> float:

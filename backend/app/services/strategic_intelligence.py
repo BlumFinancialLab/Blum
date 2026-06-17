@@ -17,6 +17,7 @@ from app.services.live import live_news, market_sentiment
 from app.services.macro import macro_overview
 from app.services.market_data import market_snapshot_for_asset
 from app.services.stock import stock_radar
+from app.services.thesis_engine import build_asset_thesis, enrich_theme_lifecycle
 from app.signals.engine import load_prices
 
 
@@ -137,8 +138,17 @@ def market_narrative(db: Session) -> dict:
     stocks = stock_radar(db, limit=80)
     sectors = stocks.get("sector_leaders", [])
     themes = sentiment.get("themes", [])
-    dominant = themes[0] if themes else {"theme": "Market Structure", "headline_count": 0, "avg_sentiment": 0}
     beneficiaries = [item["sector"] for item in sectors[:5]]
+    linked_assets = [row["ticker"] for row in stocks.get("rows", [])[:10]]
+    enriched_themes = [
+        enrich_theme_lifecycle(theme, linked_assets=linked_assets, sectors=beneficiaries)
+        for theme in themes
+    ]
+    dominant = enriched_themes[0] if enriched_themes else enrich_theme_lifecycle(
+        {"theme": "Market Structure", "headline_count": 0, "avg_sentiment": 0},
+        linked_assets=linked_assets,
+        sectors=beneficiaries,
+    )
     contrary = [
         row["ticker"]
         for row in stocks.get("rows", [])
@@ -151,14 +161,15 @@ def market_narrative(db: Session) -> dict:
     )
     return {
         "dominant_theme": dominant,
-        "emerging_subthemes": themes[1:7],
+        "emerging_subthemes": enriched_themes[1:7],
         "beneficiary_sectors": beneficiaries,
-        "linked_assets": [row["ticker"] for row in stocks.get("rows", [])[:10]],
+        "linked_assets": linked_assets,
         "macro_risks": risk_labels,
         "contrary_signals": contrary,
         "market_mood": mood_label(sentiment.get("average_sentiment", 0), risk_labels),
         "operating_summary": summary,
         "synthesis": build_narrative_synthesis(dominant, beneficiaries, risk_labels, contrary),
+        "narrative_lifecycle_map": enriched_themes[:10],
         "data_mode": "real_public_data" if sentiment.get("article_count", 0) else "limited_news_evidence",
         "disclaimer": DISCLAIMER,
     }
@@ -172,13 +183,43 @@ def asset_intelligence_report(db: Session, asset: Asset, persist: bool = True) -
     backtest = similar_cases_backtest(db, asset)
     technical = (signal.technical_summary or {}) if signal else {}
     narrative = (signal.narrative_summary or {}) if signal else {}
+    signal_dict = signal_report_payload(signal, asset) if signal else {
+        "classification": "Insufficient Evidence",
+        "blum_score": 0,
+        "risk_level": "Not Rated",
+        "time_horizon": "Not Rated",
+        "score_breakdown": {},
+        "confidence_score": accuracy.get("blum_confidence_score", 0),
+        "asset": asset_dict(asset),
+    }
+    thesis = build_asset_thesis(
+        asset=asset,
+        signal=signal_dict,
+        technical=technical,
+        narrative=narrative,
+        related_news=news,
+        market_context={},
+        historical_similarity=backtest,
+        accuracy=accuracy,
+    )
     report = {
         "ticker": asset.ticker,
         "title": f"{asset.ticker} Asset Intelligence Report",
         "generated_at": datetime.utcnow().isoformat(),
         "data_mode": "real_public_data" if signal else "limited_real_data",
         "overview": asset.description,
-        "why_in_radar": signal.explanation if signal else "The asset is in the universe but does not have a confirmed signal snapshot yet.",
+        "why_in_radar": thesis["executive_thesis"],
+        "thesis": thesis,
+        "executive_thesis": thesis["executive_thesis"],
+        "supporting_evidence": thesis["supporting_evidence"],
+        "contradicting_evidence": thesis["contradicting_evidence"],
+        "market_context": thesis["market_context"],
+        "historical_similarity": thesis["historical_similarity"],
+        "narrative_analysis": thesis["narrative_analysis"],
+        "what_the_market_may_be_missing": thesis["what_the_market_may_be_missing"],
+        "invalidation_conditions": thesis["invalidation_conditions"],
+        "conviction": thesis["conviction"],
+        "final_blum_view": thesis["final_blum_view"],
         "technical_snapshot": technical,
         "sentiment_snapshot": narrative,
         "recent_news": news,
@@ -193,7 +234,7 @@ def asset_intelligence_report(db: Session, asset: Asset, persist: bool = True) -
             "sma200": technical.get("sma200"),
         },
         "similar_signal_history": backtest,
-        "ai_conclusion": ai_conclusion(asset, signal, accuracy, backtest),
+        "ai_conclusion": thesis["final_blum_view"],
         "disclaimer": DISCLAIMER,
     }
     if persist:
@@ -523,6 +564,39 @@ def ai_conclusion(asset: Asset, signal: SignalSnapshot | None, accuracy: dict, b
         f"Blum score is {signal.blum_score:.1f}, evidence confidence is {accuracy.get('blum_confidence_score', 0):.1f}, "
         f"and similar-case testing is {backtest.get('data_mode')}."
     )
+
+
+def asset_dict(asset: Asset) -> dict:
+    return {
+        "ticker": asset.ticker,
+        "name": asset.name,
+        "category": asset.category,
+        "sector": asset.sector,
+        "industry": asset.industry,
+        "country": asset.country,
+        "asset_type": asset.asset_type,
+        "currency": asset.currency,
+        "exchange": asset.exchange,
+        "description": asset.description,
+    }
+
+
+def signal_report_payload(signal: SignalSnapshot, asset: Asset) -> dict:
+    return {
+        "ticker": signal.ticker,
+        "classification": signal.classification,
+        "blum_score": signal.blum_score,
+        "risk_level": signal.risk_level,
+        "time_horizon": signal.time_horizon,
+        "score_version": signal.score_version,
+        "confidence_score": signal.confidence_score,
+        "lifecycle_state": signal.lifecycle_state,
+        "score_breakdown": signal.score_breakdown,
+        "explanation": signal.explanation,
+        "watch_points": signal.watch_points,
+        "created_at": signal.created_at.isoformat() if signal.created_at else None,
+        "asset": asset_dict(asset),
+    }
 
 
 def linked_news_for_asset(db: Session, asset: Asset, limit: int) -> list[dict]:

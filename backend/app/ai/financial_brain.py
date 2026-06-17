@@ -84,7 +84,8 @@ def build_financial_brain_prompt(packet: dict) -> str:
         "You are Blum Financial Brain, an open-source financial intelligence reasoning model. "
         "Use only the JSON evidence below. Do not invent facts, prices, targets, listing dates, valuations, future returns, "
         "or investment recommendations. Produce strict JSON only with keys: thesis, regime_interpretation, "
-        "opportunity_hypotheses, risk_hypotheses, contradictions_to_resolve, monitoring_plan, confidence, limitations.\n"
+        "causal_map, opportunity_hypotheses, risk_hypotheses, opposing_case, what_market_may_be_missing, "
+        "contradictions_to_resolve, monitoring_plan, confidence, intellectual_honesty, limitations.\n"
         "Each hypothesis must include evidence_refs from the supplied JSON.\n"
         f"EVIDENCE_JSON:\n{evidence}\nJSON_OUTPUT:"
     )
@@ -142,6 +143,9 @@ def deterministic_financial_brain(packet: dict) -> dict:
         },
         "opportunity_hypotheses": opportunity_hypotheses(top_stock, top_etf, top_ipo, themes),
         "risk_hypotheses": risk_hypotheses(risks, contradictions),
+        "causal_map": market_causal_map(packet, top_stock, top_etf, themes),
+        "opposing_case": market_opposing_case(packet, risks, contradictions),
+        "what_market_may_be_missing": market_missing(packet, top_stock, top_etf, themes),
         "contradictions_to_resolve": [
             {
                 "title": item.get("title"),
@@ -152,6 +156,11 @@ def deterministic_financial_brain(packet: dict) -> dict:
         ],
         "monitoring_plan": monitoring_plan(packet, top_stock, top_etf, top_ipo),
         "confidence": confidence_from_packet(packet),
+        "intellectual_honesty": [
+            "Regime classification is contextual, not a forecast.",
+            "Opportunity hypotheses require confirmation from fresh price, volume and news evidence.",
+            "Contradictions are treated as thesis reducers, not noise to ignore.",
+        ],
         "limitations": [
             "This is research triage, not investment advice.",
             "The model cannot infer unavailable prices, private-company listing dates or valuations.",
@@ -232,6 +241,112 @@ def risk_hypotheses(risks: list[dict], contradictions: list[dict]) -> list[dict]
             }
         )
     return output
+
+
+def market_causal_map(packet: dict, top_stock: dict | None, top_etf: dict | None, themes: list[dict]) -> dict:
+    sentiment = numeric(packet.get("market_now", {}).get("average_sentiment"))
+    news_count = numeric(packet.get("market_now", {}).get("news_count_48h"))
+    theme = themes[0].get("theme") if themes else "no dominant theme"
+    return {
+        "observed_facts": [
+            f"Regime is {packet.get('regime')}.",
+            f"Average sentiment is {sentiment:.2f} across {int(news_count)} recent articles.",
+            f"Dominant theme is {theme}.",
+        ],
+        "possible_causes": [
+            "News flow may be driving price attention if top signals and theme sentiment are aligned.",
+            "Price action may be driving narrative attention if high-scoring stocks lack clear source catalysts.",
+            "A macro or sector rotation event may explain both price and sentiment when ETF confirmation is elevated.",
+        ],
+        "correlations_not_causality": [
+            "High sentiment and strong prices are treated as alignment, not proof that one caused the other.",
+            "ETF confirmation indicates breadth, but does not prove fundamentals have changed.",
+        ],
+        "probable_causality": probable_market_causality(packet, top_stock, top_etf, themes),
+        "evidence_refs": ["market_now", "top_stocks", "top_etfs", "forward_scenarios"],
+    }
+
+
+def market_opposing_case(packet: dict, risks: list[dict], contradictions: list[dict]) -> list[dict]:
+    output = [
+        {
+            "title": "The opportunity stack may be price-led rather than fundamentally confirmed.",
+            "why_it_matters": "Momentum without durable news, earnings or ETF breadth can reverse quickly.",
+            "evidence_refs": ["top_stocks", "risk_alerts"],
+        },
+        {
+            "title": "Signal confidence may be overstated if data coverage is thin.",
+            "why_it_matters": "Missing or stale OHLCV/news evidence should reduce thesis strength.",
+            "evidence_refs": ["evidence_ledger"],
+        },
+    ]
+    if contradictions:
+        output.insert(
+            0,
+            {
+                "title": "Contradictions directly challenge the market thesis.",
+                "why_it_matters": "A strong thesis should survive price/sentiment/risk cross-checks.",
+                "evidence_refs": ["contradictions"],
+            },
+        )
+    if risks:
+        output.append(
+            {
+                "title": "Risk alerts may dominate opportunity selection.",
+                "why_it_matters": risks[0].get("detail") or "Risk cluster requires tighter monitoring.",
+                "evidence_refs": ["risk_alerts[0]"],
+            }
+        )
+    return output[:6]
+
+
+def market_missing(packet: dict, top_stock: dict | None, top_etf: dict | None, themes: list[dict]) -> list[dict]:
+    output = []
+    if top_stock and top_etf:
+        output.append(
+            {
+                "title": "Sector breadth may be more important than the individual top stock.",
+                "why_it_matters": "ETF confirmation can reveal a sector rotation that single-name scoring understates.",
+                "evidence_refs": ["top_stocks[0]", "top_etfs[0]"],
+            }
+        )
+    if themes:
+        output.append(
+            {
+                "title": f"{themes[0].get('theme')} may be earlier or later than headline counts imply.",
+                "why_it_matters": "Narrative lifecycle depends on velocity, saturation and crowding, not headline count alone.",
+                "evidence_refs": ["market_now.top_themes[0]"],
+            }
+        )
+    if numeric(packet.get("market_now", {}).get("signal_count")) == 0:
+        output.append(
+            {
+                "title": "The market may be unscored because data coverage is incomplete.",
+                "why_it_matters": "No score should be interpreted as no opportunity when evidence hydration is still incomplete.",
+                "evidence_refs": ["evidence_ledger"],
+            }
+        )
+    return output or [
+        {
+            "title": "No clear market blind spot is visible.",
+            "why_it_matters": "Blum should prefer intellectual honesty when evidence does not show a differentiated read.",
+            "evidence_refs": ["evidence_ledger"],
+        }
+    ]
+
+
+def probable_market_causality(packet: dict, top_stock: dict | None, top_etf: dict | None, themes: list[dict]) -> str:
+    sentiment = numeric(packet.get("market_now", {}).get("average_sentiment"))
+    news_count = numeric(packet.get("market_now", {}).get("news_count_48h"))
+    etf_score = numeric(top_etf.get("confirmation_score")) if top_etf else 0
+    stock_score = numeric(top_stock.get("score")) if top_stock else 0
+    if news_count >= 20 and sentiment > 0.12 and stock_score >= 65:
+        return "Narrative and price are likely reinforcing each other, but direct causality is not proven."
+    if etf_score >= 62 and stock_score >= 60:
+        return "Sector rotation may be a common driver behind single-name and ETF strength."
+    if stock_score >= 65 and sentiment <= 0:
+        return "Price action may be leading sentiment or reflecting technical/positioning factors."
+    return "The supplied evidence does not isolate one dominant causal driver."
 
 
 def monitoring_plan(packet: dict, top_stock: dict | None, top_etf: dict | None, top_ipo: dict | None) -> list[dict]:

@@ -15,6 +15,7 @@ from app.services.etf import list_etf_trends
 from app.services.ipo import ipo_radar
 from app.services.live import live_news, market_sentiment
 from app.services.stock import stock_radar
+from app.services.thesis_engine import classify_market_regime, enrich_theme_lifecycle
 
 
 def build_market_brain(db: Session, persist: bool = True) -> dict:
@@ -51,7 +52,7 @@ def build_market_brain(db: Session, persist: bool = True) -> dict:
             "signal_count": overview["market_pulse"]["signal_count"],
             "asset_count": overview["market_pulse"]["asset_count"],
             "classification_mix": overview["market_pulse"]["classification_mix"],
-            "top_themes": sentiment["themes"][:8],
+            "top_themes": [enrich_theme_lifecycle(theme) for theme in sentiment["themes"][:8]],
             "top_live_news": news[:10],
         },
         "opportunity_stack": opportunity_stack,
@@ -138,7 +139,7 @@ def latest_distinct_signals(db: Session, limit: int = 80) -> list[SignalSnapshot
 
 def infer_regime(signals: list[SignalSnapshot], sentiment: dict, stocks: dict, etfs: list[dict]) -> str:
     if not signals:
-        return "Evidence Formation"
+        return "Sideways"
     scores = [float(signal.blum_score) for signal in signals]
     avg_score = mean(scores)
     sentiment_score = float(sentiment.get("average_sentiment") or 0)
@@ -147,17 +148,15 @@ def infer_regime(signals: list[SignalSnapshot], sentiment: dict, stocks: dict, e
     quality_count = len(stocks.get("sections", {}).get("quality_momentum", []))
     divergence_count = len(stocks.get("sections", {}).get("sentiment_divergence", []))
 
-    if sentiment_score <= -0.16 and avg_score < 56:
-        return "Defensive / Risk-Off"
-    if high_risk >= 0.36 and avg_score >= 62:
-        return "High-Beta Momentum With Fragile Risk"
-    if divergence_count >= 3:
-        return "Price Narrative Divergence"
-    if sentiment_score >= 0.14 and avg_score >= 68 and etf_confirmation >= 58:
-        return "Risk-On Narrative Momentum"
-    if quality_count >= 4 or etf_confirmation >= 62:
-        return "Selective Rotation"
-    return "Mixed Cross-Currents"
+    return classify_market_regime(
+        avg_score=avg_score,
+        sentiment_score=sentiment_score,
+        high_risk_ratio=high_risk,
+        etf_confirmation=etf_confirmation,
+        quality_count=quality_count,
+        divergence_count=divergence_count,
+        signal_count=len(signals),
+    )
 
 
 def compute_brain_score(signals: list[SignalSnapshot], sentiment: dict, overview: dict, ipo: dict) -> float:

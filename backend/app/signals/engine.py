@@ -7,10 +7,11 @@ from sqlalchemy.orm import Session
 
 from app.ai.orchestrator import AIOrchestrator
 from app.models import Asset, NewsAssetLink, PriceHistory, SentimentAnalysis, SignalSnapshot, TechnicalIndicator
+from app.services.thesis_engine import build_signal_thesis_payload
 from app.signals.indicators import compute_indicators
 
 
-SCORE_VERSION = "blum-score-v0.4"
+SCORE_VERSION = "blum-thesis-score-v0.6"
 
 
 class SignalEngine:
@@ -35,8 +36,16 @@ class SignalEngine:
             score = build_score(indicators, narrative, ts, asset)
             previous = latest_signal_for_asset(db, asset.id)
             confidence = confidence_score(frame, indicators, narrative, ts)
+            score["confidence_score"] = confidence
             lifecycle = lifecycle_state(previous, score, confidence)
-            explanation_stub = build_rule_explanation(asset, score, indicators, narrative, ts)
+            thesis = build_signal_thesis_payload(asset, score, indicators, narrative, ts)
+            narrative = {
+                **narrative,
+                "thesis": thesis,
+                "narrative_lifecycle": thesis.get("narrative_analysis", {}),
+                "conviction_score": thesis.get("conviction_score", 0),
+            }
+            explanation_stub = thesis.get("executive_thesis") or build_rule_explanation(asset, score, indicators, narrative, ts)
             snapshot = SignalSnapshot(
                 asset_id=asset.id,
                 ticker=asset.ticker,
@@ -51,7 +60,7 @@ class SignalEngine:
                 technical_summary={**indicators, "time_series": ts},
                 narrative_summary=narrative,
                 explanation=explanation_stub,
-                watch_points={"items": watch_points(indicators, narrative, score)},
+                watch_points={"items": thesis_watch_points(thesis, indicators, narrative, score)},
             )
             db.add(snapshot)
             db.execute(delete(TechnicalIndicator).where(TechnicalIndicator.asset_id == asset.id, TechnicalIndicator.date == frame["date"].iloc[-1]))
@@ -220,6 +229,18 @@ def watch_points(indicators: dict, narrative: dict, score: dict) -> list[str]:
     if score.get("classification") == "Sentiment Divergence":
         points.append("Narrative and price are diverging; monitor for reversal or catch-up.")
     return points
+
+
+def thesis_watch_points(thesis: dict, indicators: dict, narrative: dict, score: dict) -> list[str]:
+    points = []
+    points.extend(thesis.get("confirmation_conditions", [])[:2])
+    points.extend(thesis.get("invalidation_conditions", [])[:2])
+    points.extend(watch_points(indicators, narrative, score))
+    deduped = []
+    for point in points:
+        if point and point not in deduped:
+            deduped.append(point)
+    return deduped[:8]
 
 
 def build_rule_explanation(asset: Asset, score: dict, indicators: dict, narrative: dict, ts: dict) -> str:
