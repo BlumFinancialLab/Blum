@@ -5,7 +5,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 
-revision = "0009_autonomous_dataset_intelligence"
+revision = "0009_auto_dataset_intel"
 down_revision = "0008_blum_financial_model"
 branch_labels = None
 depends_on = None
