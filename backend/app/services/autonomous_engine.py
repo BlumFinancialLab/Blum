@@ -21,6 +21,7 @@ from app.models import (
 )
 from app.services.accuracy import run_accuracy_audit
 from app.services.blum_financial_model import run_model_learning_cycle
+from app.services.data_continuity import repair_data_gaps
 from app.services.etf import update_etf_trends
 from app.services.fundamentals import update_fundamentals
 from app.services.huggingface_datasets import dataset_catalog_status, refresh_huggingface_dataset_catalog
@@ -37,6 +38,9 @@ settings = get_settings()
 class AutonomousResearchEngine:
     """Runs Blum's server-side intelligence cycle in a strict, auditable sequence."""
 
+    def __init__(self, progress_callback=None):
+        self.progress_callback = progress_callback
+
     def run_cycle(self, db: Session, trigger: str = "scheduled") -> dict:
         run_id = f"auto-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:8]}"
         stage_results: dict[str, dict] = {}
@@ -44,6 +48,7 @@ class AutonomousResearchEngine:
 
         def stage(name: str, work) -> dict:
             stage_started = datetime.utcnow()
+            self._progress(name, "running", stage_started, None, stage_results)
             try:
                 result = work()
                 payload = {
@@ -61,12 +66,14 @@ class AutonomousResearchEngine:
                     "traceback": traceback.format_exc(limit=4),
                 }
             stage_results[name] = payload
+            self._progress(name, payload["status"], stage_started, datetime.utcnow(), stage_results)
             return payload
 
         stage("hf_dataset_catalog", lambda: self.refresh_dataset_catalog_if_needed(db))
         stage("macro_context", lambda: update_macro_snapshots(db))
         stage("fundamentals", lambda: update_fundamentals(db, limit=min(settings.max_update_assets, 32)))
-        stage("historical_prices", lambda: MarketDataService().update_prices(db, period=self.price_period(trigger), limit=settings.max_update_assets))
+        stage("historical_memory_repair", lambda: repair_data_gaps(db, limit=settings.max_update_assets))
+        stage("incremental_price_refresh", lambda: MarketDataService().update_prices(db, period=self.price_period(db, trigger), limit=settings.max_update_assets))
         stage("news_sentiment", lambda: NewsIngestor().update_news(db, lookback_hours=96, limit_per_feed=45))
         stage("signals", lambda: SignalEngine().run(db, limit=settings.max_update_assets))
         stage("etf_intelligence", lambda: update_etf_trends(db))
@@ -106,6 +113,20 @@ class AutonomousResearchEngine:
         db.commit()
         return {"run_id": run_id, "trigger": trigger, "status": status, "readiness": readiness, "stage_results": stage_results}
 
+    def _progress(self, stage_name: str, status: str, started_at: datetime, completed_at: datetime | None, stage_results: dict) -> None:
+        if not self.progress_callback:
+            return
+        self.progress_callback(
+            {
+                "stage": stage_name,
+                "status": status,
+                "stage_started_at": started_at.isoformat(),
+                "stage_completed_at": completed_at.isoformat() if completed_at else None,
+                "completed_stages": [name for name, result in stage_results.items() if result.get("status") in {"ok", "error"}],
+                "stage_results": stage_results,
+            }
+        )
+
     def refresh_dataset_catalog_if_needed(self, db: Session) -> dict:
         if not settings.enable_hf_dataset_catalog:
             return {"status": "disabled"}
@@ -114,8 +135,12 @@ class AutonomousResearchEngine:
             return {"status": "fresh", "catalog": dataset_catalog_status(db, limit=settings.hf_dataset_max_sources)}
         return refresh_huggingface_dataset_catalog(db, validate=True)
 
-    def price_period(self, trigger: str) -> str:
-        if trigger in {"startup", "manual"}:
+    def price_period(self, db: Session, trigger: str) -> str:
+        active_assets = int(db.scalar(select(func.count(Asset.id)).where(Asset.is_active.is_(True))) or 0)
+        priced_assets = int(db.scalar(select(func.count(func.distinct(PriceHistory.asset_id)))) or 0)
+        price_rows = int(db.scalar(select(func.count(PriceHistory.id))) or 0)
+        has_usable_history = active_assets > 0 and priced_assets / active_assets >= 0.65 and price_rows >= active_assets * settings.minimum_history_rows
+        if trigger in {"startup", "manual"} and not has_usable_history:
             return settings.historical_price_period
         return settings.refresh_price_period
 

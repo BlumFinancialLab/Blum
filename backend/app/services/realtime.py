@@ -35,6 +35,11 @@ _state = {
     "last_status": "idle",
     "last_error": "",
     "last_result": {},
+    "current_stage": None,
+    "stage_started_at": None,
+    "stage_completed_at": None,
+    "completed_stages": [],
+    "stage_results": {},
 }
 
 
@@ -80,7 +85,10 @@ def realtime_status() -> dict:
 
 def run_startup_pipeline() -> None:
     if settings.enable_autonomous_engine:
-        _run_job("autonomous_startup", lambda db: AutonomousResearchEngine().run_cycle(db, trigger="startup"))
+        _run_job(
+            "autonomous_startup",
+            lambda db: AutonomousResearchEngine(progress_callback=_update_stage_progress).run_cycle(db, trigger="startup"),
+        )
         return
 
     def work(db):
@@ -140,7 +148,19 @@ def run_blum_model_cycle_job() -> None:
 
 
 def run_autonomous_engine_job() -> None:
-    _run_job("autonomous_research_engine", lambda db: AutonomousResearchEngine().run_cycle(db, trigger="scheduled"))
+    _run_job(
+        "autonomous_research_engine",
+        lambda db: AutonomousResearchEngine(progress_callback=_update_stage_progress).run_cycle(db, trigger="scheduled"),
+    )
+
+
+def _update_stage_progress(progress: dict) -> None:
+    with _state_lock:
+        _state["current_stage"] = progress.get("stage")
+        _state["stage_started_at"] = progress.get("stage_started_at")
+        _state["stage_completed_at"] = progress.get("stage_completed_at")
+        _state["completed_stages"] = progress.get("completed_stages", [])
+        _state["stage_results"] = progress.get("stage_results", {})
 
 
 def _run_job(job_name: str, work):
@@ -152,6 +172,11 @@ def _run_job(job_name: str, work):
         _state["last_job"] = job_name
         _state["last_status"] = "running"
         _state["last_error"] = ""
+        _state["current_stage"] = None
+        _state["stage_started_at"] = None
+        _state["stage_completed_at"] = None
+        _state["completed_stages"] = []
+        _state["stage_results"] = {}
     try:
         with SessionLocal() as db:
             result = work(db)

@@ -225,16 +225,17 @@ The autonomous cycle executes in this strict order:
 1. Refresh Hugging Face financial dataset catalog.
 2. Update macro context.
 3. Update SEC companyfacts fundamentals.
-4. Hydrate historical and recent OHLCV prices from public providers.
-5. Ingest public news and sentiment.
-6. Generate signal snapshots.
-7. Update ETF intelligence.
-8. Update IPO radar.
-9. Run accuracy audit.
-10. Run Blum Financial Model reasoning and outcome learning.
-11. Persist embedded PostgreSQL backup when configured.
+4. Repair historical market-memory gaps for missing, short or stale OHLCV assets.
+5. Run an incremental price refresh. Deep `max` backfill is used only when the stored memory is not sufficiently hydrated.
+6. Ingest public news and sentiment.
+7. Generate signal snapshots.
+8. Update ETF intelligence.
+9. Update IPO radar.
+10. Run accuracy audit.
+11. Run Blum Financial Model reasoning and outcome learning.
+12. Persist embedded PostgreSQL backup when configured.
 
-Every cycle creates an `autonomous_engine_runs` row and a `learning_events` audit entry. If a provider fails, the run is marked `degraded` with the failing stage and traceback, rather than hiding the issue.
+Every cycle creates an `autonomous_engine_runs` row and a `learning_events` audit entry. `/pipeline/status` exposes the current stage, completed stages and stage diagnostics while the worker is running. If a provider fails, the run is marked `degraded` with the failing stage and traceback, rather than hiding the issue.
 
 New APIs:
 
