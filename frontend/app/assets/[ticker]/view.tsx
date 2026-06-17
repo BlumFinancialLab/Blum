@@ -7,7 +7,8 @@ import { LoadingState } from "@/components/LoadingState";
 import { BlumMemoryPanel } from "@/components/BlumMemoryPanel";
 import { BreakdownBars } from "@/components/BreakdownBars";
 import { ChartAnalystPanel } from "@/components/ChartAnalystPanel";
-import { formatPercent, formatPrice, formatVolume, MarketSnapshotStrip } from "@/components/MarketSnapshotStrip";
+import { AssetDetailPanel, BloombergPanel, MetricCard, RiskIndicator, ScoreBadge, SignalCard, TerminalHeader } from "@/components/FinancialTerminal";
+import { formatPercent, formatPrice, formatVolume } from "@/components/MarketSnapshotStrip";
 import { PlotPanel } from "@/components/PlotPanel";
 import { StatusBadge } from "@/components/StatusBadge";
 
@@ -66,38 +67,49 @@ export function AssetDetailClient({ ticker }: { ticker: string }) {
   const signal = data.latest_signal;
   const prices = data.prices ?? [];
   const snapshot = data.market_snapshot ?? signal?.market_snapshot ?? data.asset?.market_snapshot;
+  const narrative = insight?.reason ?? signal?.explanation ?? report?.why_in_radar;
   return (
     <>
-      <div className="page-header">
-        <div>
-          <div className="kicker">Asset Detail</div>
-          <h1>{data.asset.ticker} <span style={{ color: "var(--muted)" }}>{data.asset.name}</span></h1>
-          <p>{data.asset.description}</p>
-        </div>
-        <button className="button primary" onClick={explain} disabled={insightLoading}>{insightLoading ? "Building evidence..." : "Refresh AI explanation"}</button>
-      </div>
+      <TerminalHeader
+        eyebrow="Asset Intelligence Report"
+        title="Security research cockpit."
+        subtitle="Price action, sentiment, technical evidence, news quality, Blum memory and AI explanation for a single stock or ETF."
+        statusItems={[
+          { label: "Ticker", value: data.asset.ticker, tone: "attention" },
+          { label: "Exchange", value: data.asset.exchange ?? "n/a" },
+          { label: "Provider", value: snapshot?.provider ?? "pending" },
+          { label: "Updated", value: snapshot?.date ?? "no price date", tone: snapshot?.price ? "positive" : "attention" }
+        ]}
+        actions={<button className="button primary" onClick={explain} disabled={insightLoading}>{insightLoading ? "Building evidence..." : "Refresh AI explanation"}</button>}
+      />
 
-      <section className="instrument-card">
-        <div>
-          <span>Instrument</span>
-          <strong>{data.asset.asset_type} | {data.asset.sector}</strong>
-          <p>{data.asset.category} | {data.asset.industry} | {data.asset.exchange} | {data.asset.country}</p>
-        </div>
-        <MarketSnapshotStrip snapshot={snapshot} />
+      <AssetDetailPanel
+        ticker={data.asset.ticker}
+        name={data.asset.name}
+        description={data.asset.description}
+        sector={data.asset.sector}
+        exchange={data.asset.exchange}
+        assetType={data.asset.asset_type}
+        price={snapshot?.price}
+        currency={snapshot?.currency}
+        changePercent={snapshot?.perf_1d}
+        blumScore={signal?.blum_score}
+        confidence={signal?.confidence_score ?? accuracy?.blum_confidence_score}
+        narrative={narrative}
+      />
+
+      <section className="terminal-command-grid" style={{ marginTop: 12 }}>
+        <MetricCard label="Last Price" value={formatPrice(snapshot?.price, snapshot?.currency)} subvalue={snapshot?.date ?? "price date pending"} />
+        <MetricCard label="1D / 5D" value={`${formatPercent(snapshot?.perf_1d)} / ${formatPercent(snapshot?.perf_5d)}`} subvalue={`${formatPercent(snapshot?.perf_1m)} 1M`} tone={(snapshot?.perf_1d ?? 0) >= 0 ? "positive" : "negative"} />
+        <MetricCard label="Volume" value={formatVolume(snapshot?.volume)} subvalue="Latest stored market volume" />
+        <MetricCard label="Blum Score" value={signal?.blum_score?.toFixed(1) ?? "n/a"} subvalue={signal?.classification ?? "No active signal"} tone="attention" />
+        <MetricCard label="Sentiment" value={metric(signal, "sentiment_score")} subvalue="News-linked score" />
+        <MetricCard label="Momentum" value={metric(signal, "momentum_score")} subvalue="Price factor" />
+        <MetricCard label="Volatility" value={metric(signal, "volatility_score")} subvalue="Risk component" />
+        <MetricCard label="AI Confidence" value={signal?.confidence_score?.toFixed(0) ?? accuracy?.blum_confidence_score?.toFixed(0) ?? "Pending"} subvalue={accuracy?.confidence_label ?? "Evidence layer"} />
       </section>
 
-      <section className="grid-4" style={{ marginTop: 12 }}>
-        <div className="metric-card"><span>Last Price</span><strong>{formatPrice(snapshot?.price, snapshot?.currency)}</strong></div>
-        <div className="metric-card"><span>1D / 5D</span><strong>{formatPercent(snapshot?.perf_1d)} / {formatPercent(snapshot?.perf_5d)}</strong></div>
-        <div className="metric-card"><span>Volume</span><strong>{formatVolume(snapshot?.volume)}</strong></div>
-        <div className="metric-card"><span>Data Source</span><strong>{snapshot?.provider ?? "n/a"}</strong></div>
-      </section>
-
-      <section className="grid-3" style={{ marginTop: 12 }}>
-        <div className="metric-card"><span>Classification</span><strong>{signal ? <StatusBadge label={signal.classification} /> : "No signal"}</strong></div>
-        <div className="metric-card"><span>Blum Score</span><strong>{signal?.blum_score?.toFixed(1) ?? "n/a"}</strong></div>
-        <div className="metric-card"><span>Risk Level</span><strong>{signal?.risk_level ?? "n/a"}</strong></div>
-      </section>
+      {signal && <section style={{ marginTop: 12 }}><SignalCard signal={signal} /></section>}
 
       <section className="grid-2" style={{ marginTop: 12 }}>
         <EvidenceConfidencePanel accuracy={accuracy} />
@@ -122,25 +134,41 @@ export function AssetDetailClient({ ticker }: { ticker: string }) {
       </section>
 
       <section className="grid-2" style={{ marginTop: 12 }}>
-        <div className="panel">
-          <div className="panel-head"><span>Score Breakdown</span></div>
+        <BloombergPanel title="Score Breakdown" value={signal?.score_version ?? "Blum score"}>
           <BreakdownBars breakdown={signal?.score_breakdown ?? {}} />
-        </div>
-        <div className="panel">
-          <div className="panel-head">
-            <span>AI Explanation</span>
-            {insight?.evidence_status && <strong>{String(insight.evidence_status).replaceAll("_", " ")}</strong>}
-          </div>
+        </BloombergPanel>
+        <BloombergPanel title="Why This Asset Matters Now" value={insight?.evidence_status ? String(insight.evidence_status).replaceAll("_", " ") : "Evidence"}>
           {insightLoading && <div className="loading-state"><div />Building explanation from real market and news evidence.</div>}
           {insightError && <div className="empty-state">{insightError}</div>}
           <p>{insight?.reason ?? signal?.explanation ?? "The backend is collecting verified evidence for this asset."}</p>
           <ul>{(insight?.watch_points ?? signal?.watch_points?.items ?? []).map((item: string) => <li key={item}>{item}</li>)}</ul>
           {insight?.data_diagnostics && <Diagnostics diagnostics={insight.data_diagnostics} />}
-        </div>
+        </BloombergPanel>
       </section>
 
-      <section className="panel" style={{ marginTop: 12 }}>
-        <div className="panel-head"><span>Related News</span></div>
+      <section className="professional-grid-2" style={{ marginTop: 12 }}>
+        <BloombergPanel title="Decision Box" value="Monitor, do not advise">
+          <div className="professional-grid-2">
+            <MetricCard label="Primary Trigger" value={primaryTrigger(signal)} subvalue="Condition that would increase attention" />
+            <MetricCard label="Invalidation" value={invalidation(signal)} subvalue="Condition that weakens the setup" tone="negative" />
+            <MetricCard label="Main Risk" value={signal?.risk_level ?? "Evidence pending"} subvalue={report?.risk_review?.[0] ?? "Risk review pending"} />
+            <MetricCard label="Confidence" value={signal?.confidence_score?.toFixed(0) ?? accuracy?.blum_confidence_score?.toFixed(0) ?? "Pending"} subvalue="Adaptive confidence layer" />
+          </div>
+          <div className="issue-list">
+            {(insight?.watch_points ?? signal?.watch_points?.items ?? report?.risk_review ?? []).slice(0, 5).map((item: string) => <span key={item}>{item}</span>)}
+          </div>
+        </BloombergPanel>
+        <BloombergPanel title="Risk and Signal State" value={signal ? <RiskIndicator risk={signal.risk_level} score={metricNumber(signal, "volatility_score")} /> : "No signal"}>
+          <div className="professional-grid-2">
+            <MetricCard label="Classification" value={signal ? <StatusBadge label={signal.classification} /> : "No signal"} />
+            <MetricCard label="Time Horizon" value={signal?.time_horizon ?? "n/a"} />
+            <MetricCard label="Lifecycle" value={signal?.lifecycle_state ?? "n/a"} />
+            <MetricCard label="Evidence" value={<ScoreBadge value={accuracy?.blum_confidence_score} label="Quality" />} />
+          </div>
+        </BloombergPanel>
+      </section>
+
+      <BloombergPanel title="Related News" value={`${data.related_news.length} articles`} subtitle="Sorted by stored relevance and source quality" className="asset-news-panel">
         <div className="news-list">
           {data.related_news.map((item) => (
             <a className="news-item" href={item.url} target="_blank" rel="noreferrer" key={item.id}>
@@ -155,7 +183,7 @@ export function AssetDetailClient({ ticker }: { ticker: string }) {
             </a>
           ))}
         </div>
-      </section>
+      </BloombergPanel>
     </>
   );
 }
@@ -274,6 +302,27 @@ function factValue(value: any): number | null {
 function display(value: any) {
   if (value === undefined || value === null || Number.isNaN(Number(value))) return "n/a";
   return Number(value).toFixed(2);
+}
+
+function metric(signal: Signal | null, key: string) {
+  return signal?.score_breakdown?.[key] === undefined ? "n/a" : Number(signal.score_breakdown[key]).toFixed(0);
+}
+
+function metricNumber(signal: Signal | null, key: string) {
+  return signal?.score_breakdown?.[key] === undefined ? null : Number(signal.score_breakdown[key]);
+}
+
+function primaryTrigger(signal: Signal | null) {
+  if (!signal) return "Signal snapshot pending";
+  if (signal.classification.toLowerCase().includes("breakout")) return "Confirmed breakout with volume expansion";
+  if (signal.classification.toLowerCase().includes("divergence")) return "Sentiment and price alignment";
+  return "Sustained score and evidence improvement";
+}
+
+function invalidation(signal: Signal | null) {
+  if (!signal) return "Missing price, news or signal evidence";
+  if (signal.risk_level.toLowerCase().includes("high")) return "Volatility expands while confidence falls";
+  return "Momentum decay, negative news reversal or support failure";
 }
 
 function Diagnostics({ diagnostics }: { diagnostics: any }) {

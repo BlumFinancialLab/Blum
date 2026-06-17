@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 import { BrainAccuracy, BrainEvaluation, Signal } from "@/lib/types";
+import { BloombergPanel, ConfidenceMeter, MetricCard, SignalCard, TerminalHeader } from "@/components/FinancialTerminal";
 import { LoadingState } from "@/components/LoadingState";
 import { SignalTable } from "@/components/SignalTable";
 
@@ -43,24 +44,42 @@ export default function SignalLabPage() {
   if (!signals) return <LoadingState label="Loading signal lab" />;
   return (
     <>
-      <div className="page-header">
-        <div><div className="kicker">Signal Lab</div><h1>Filter, compare and audit signal logic.</h1></div>
-        <button className="button primary" onClick={runLearning} disabled={busy}>{busy ? "Running learning cycle..." : "Evaluate signals"}</button>
-      </div>
+      <TerminalHeader
+        eyebrow="Signal Lab"
+        title="Analyst-grade signal feed and evidence audit."
+        subtitle="Every signal is treated as a research note with confidence, evidence stack, trigger, invalidation logic and historical learning impact."
+        statusItems={[
+          { label: "Signal feed", value: String(signals.length), tone: signals.length ? "positive" : "attention" },
+          { label: "Filtered", value: String(filtered.length) },
+          { label: "Evaluations", value: String(evaluations.length), tone: evaluations.length ? "info" : "attention" },
+          { label: "Accuracy", value: ratio(brainAccuracy?.historical_accuracy), tone: "attention" }
+        ]}
+        actions={<button className="button primary" onClick={runLearning} disabled={busy}>{busy ? "Running learning cycle..." : "Evaluate signals"}</button>}
+      />
       <LearningAuditSummary accuracy={brainAccuracy} result={result} />
-      <div className="control-row">
-        <select className="input" value={assetType} onChange={(e) => setAssetType(e.target.value)}>
-          <option value="">All asset types</option><option value="Stock">Stock</option><option value="ETF">ETF</option>
-        </select>
-        <select className="input" value={risk} onChange={(e) => setRisk(e.target.value)}>
-          <option value="">All risks</option><option>Low</option><option>Medium</option><option>High</option>
-        </select>
-        <select className="input" value={classification} onChange={(e) => setClassification(e.target.value)}>
-          <option value="">All classifications</option>
-          {Array.from(new Set(signals.map((s) => s.classification))).map((item) => <option key={item}>{item}</option>)}
-        </select>
-      </div>
-      <SignalTable signals={filtered} />
+
+      <BloombergPanel title="Signal Filters" value={`${filtered.length} visible`} subtitle="Filter by asset type, risk and classification">
+        <div className="control-row" style={{ marginBottom: 0 }}>
+          <select className="input" value={assetType} onChange={(e) => setAssetType(e.target.value)}>
+            <option value="">All asset types</option><option value="Stock">Stock</option><option value="ETF">ETF</option>
+          </select>
+          <select className="input" value={risk} onChange={(e) => setRisk(e.target.value)}>
+            <option value="">All risks</option><option>Low</option><option>Medium</option><option>High</option>
+          </select>
+          <select className="input" value={classification} onChange={(e) => setClassification(e.target.value)}>
+            <option value="">All classifications</option>
+            {Array.from(new Set(signals.map((s) => s.classification))).map((item) => <option key={item}>{item}</option>)}
+          </select>
+        </div>
+      </BloombergPanel>
+
+      <section className="professional-grid-3" style={{ marginTop: 12 }}>
+        {filtered.slice(0, 6).map((signal) => <SignalCard signal={signal} key={`${signal.ticker}-${signal.created_at}-card`} />)}
+      </section>
+
+      <BloombergPanel title="Signal Feed" value={`${filtered.length} signals`} subtitle="Sortable table with price, classification, risk, momentum, trend and sentiment" className="radar-core-panel">
+        <SignalTable signals={filtered} />
+      </BloombergPanel>
       <SignalEvaluationTable evaluations={evaluations} />
     </>
   );
@@ -69,17 +88,14 @@ export default function SignalLabPage() {
 function LearningAuditSummary({ accuracy, result }: { accuracy: BrainAccuracy | null; result: any }) {
   const calibration = accuracy?.confidence_calibration ?? {};
   return (
-    <section className="panel" style={{ marginBottom: 12 }}>
-      <div className="panel-head">
-        <span>Financial Brain Learning Audit</span>
-        <strong>{calibration.status ?? "pending"}</strong>
+    <BloombergPanel title="Financial Brain Learning Audit" value={calibration.status ?? "pending"} className="financial-brain-panel">
+      <div className="professional-grid-4">
+        <MetricCard label="Historical Accuracy" value={ratio(accuracy?.historical_accuracy)} />
+        <MetricCard label="7D Success" value={ratio(accuracy?.success_rate_7d)} />
+        <MetricCard label="30D Success" value={ratio(accuracy?.success_rate_30d)} />
+        <MetricCard label="Calibration" value={calibration.score === undefined || calibration.score === null ? "Pending" : `${Number(calibration.score).toFixed(1)}/100`} />
       </div>
-      <div className="brain-status-grid">
-        <AuditMetric label="Historical Accuracy" value={ratio(accuracy?.historical_accuracy)} />
-        <AuditMetric label="7D Success" value={ratio(accuracy?.success_rate_7d)} />
-        <AuditMetric label="30D Success" value={ratio(accuracy?.success_rate_30d)} />
-        <AuditMetric label="Calibration" value={calibration.score === undefined || calibration.score === null ? "Pending" : `${Number(calibration.score).toFixed(1)}/100`} />
-      </div>
+      <div style={{ marginTop: 12 }}><ConfidenceMeter value={calibration.score} label="Confidence calibration" /></div>
       <div className="brain-two-col">
         <div>
           <h3>Best signal types</h3>
@@ -99,7 +115,7 @@ function LearningAuditSummary({ accuracy, result }: { accuracy: BrainAccuracy | 
         </div>
       </div>
       {result && <p>Last learning cycle: {result.status} | mature {result.evaluation?.mature_evaluations ?? 0} | pending {result.evaluation?.inconclusive_evaluations ?? 0} | weights {result.weights?.status ?? "n/a"}</p>}
-    </section>
+    </BloombergPanel>
   );
 }
 
@@ -135,10 +151,6 @@ function SignalEvaluationTable({ evaluations }: { evaluations: BrainEvaluation[]
       </div>
     </section>
   );
-}
-
-function AuditMetric({ label, value }: { label: string; value: number | string }) {
-  return <div className="brain-metric"><span>{label}</span><strong>{value}</strong></div>;
 }
 
 function AuditList({ rows }: { rows: Array<{ key: string; mature_count: number; success_rate: number | null; accuracy_score: number }> }) {

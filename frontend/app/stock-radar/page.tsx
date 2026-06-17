@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 import { StockRadar, StockRadarRow } from "@/lib/types";
 import { assetPath } from "@/lib/routes";
+import { AssetTable, BloombergPanel, MetricCard, TerminalHeader } from "@/components/FinancialTerminal";
 import { LoadingState } from "@/components/LoadingState";
 import { formatPercent, formatPrice, formatVolume, MarketSnapshotStrip } from "@/components/MarketSnapshotStrip";
 import { PlotPanel } from "@/components/PlotPanel";
@@ -80,26 +81,36 @@ export default function StockRadarPage() {
 
   return (
     <>
-      <div className="page-header">
-        <div>
-          <div className="kicker">Stock Radar</div>
-          <h1>Stock intelligence radar.</h1>
-          <p>Equity coverage, live evidence readiness and signal triage from verified public data.</p>
-        </div>
+      <TerminalHeader
+        eyebrow="Stock Radar"
+        title="Equity opportunity radar and signal triage."
+        subtitle="A research desk view for equities, price status, score factors, narrative evidence and risk state."
+        statusItems={[
+          { label: "Stocks", value: String(radar.summary.stock_count) },
+          { label: "Signals", value: String(radar.summary.signal_count), tone: radar.summary.signal_count ? "positive" : "attention" },
+          { label: "Priced", value: String(radar.summary.priced_count), tone: radar.summary.priced_count ? "positive" : "attention" },
+          { label: "Avg score", value: radar.summary.average_score.toFixed(1), tone: "attention" }
+        ]}
+        actions={
         <div className="header-actions">
           <Link className="button" href="/etf-radar">ETF Radar</Link>
           <Link className="button" href="/ipo-radar">IPO Radar</Link>
           <button className="button primary" onClick={runUpdate} disabled={busy}>{busy ? "Updating stock radar..." : "Run Stock Radar"}</button>
         </div>
-      </div>
+        }
+      />
 
       {error && <div className="empty-state" style={{ marginBottom: 12 }}>API error: {error}</div>}
 
-      <section className="grid-4">
-        <Metric label="Stocks" value={radar.summary.stock_count} />
-        <Metric label="Signals" value={radar.summary.signal_count} />
-        <Metric label="Priced" value={radar.summary.priced_count} />
-        <Metric label="Avg Score" value={radar.summary.average_score.toFixed(1)} />
+      <section className="terminal-command-grid">
+        <MetricCard label="Stocks" value={radar.summary.stock_count} subvalue="Equity universe" />
+        <MetricCard label="Signals" value={radar.summary.signal_count} subvalue={`${radar.summary.missing_signal_count} missing`} tone={radar.summary.signal_count ? "positive" : "attention"} />
+        <MetricCard label="Priced" value={radar.summary.priced_count} subvalue="Latest stored price" />
+        <MetricCard label="Avg Score" value={radar.summary.average_score.toFixed(1)} subvalue={`Top ${radar.summary.top_score.toFixed(1)}`} tone="attention" />
+        <MetricCard label="High Risk" value={radar.summary.high_risk_count} subvalue="Risk-heavy momentum" tone={radar.summary.high_risk_count ? "negative" : "neutral"} />
+        <MetricCard label="Positive 1D" value={radar.summary.positive_1d_count} subvalue="Short-term breadth" tone="info" />
+        <MetricCard label="Sectors" value={radar.sector_leaders.length} subvalue="Leadership groups" />
+        <MetricCard label="Status" value={radar.status.replaceAll("_", " ")} subvalue="Radar readiness" />
       </section>
 
       {updateResult && (
@@ -176,8 +187,7 @@ export default function StockRadarPage() {
         />
       </section>
 
-      <section className="panel" style={{ marginTop: 12 }}>
-        <div className="panel-head"><span>Stock radar table</span><strong>{rows.length} names</strong></div>
+      <BloombergPanel title="Stock Radar Table" value={`${rows.length} names`} subtitle="Sortable terminal table for price, sentiment, momentum, confidence, signal and risk" className="radar-core-panel">
         <div className="control-row">
           <input className="input" placeholder="Search ticker, company, sector" value={search} onChange={(event) => setSearch(event.target.value)} />
           <select className="input" value={sector} onChange={(event) => setSector(event.target.value)}>
@@ -189,11 +199,8 @@ export default function StockRadarPage() {
             {priorities.map((item) => <option key={item}>{item}</option>)}
           </select>
         </div>
-        <StockRadarTable
-          rows={rows}
-          emptyMessage={radar.summary.signal_count ? "No stocks match the current radar filters or selected signal category." : "No scored stocks yet. Showing real coverage requires the pipeline to finish price, news and signal hydration."}
-        />
-      </section>
+        <AssetTable rows={toStockAssetRows(rows)} />
+      </BloombergPanel>
     </>
   );
 }
@@ -290,8 +297,40 @@ function Metric({ label, value }: { label: string; value: number | string }) {
   return <div className="metric-card"><span>{label}</span><strong>{value}</strong></div>;
 }
 
+function toStockAssetRows(rows: StockRadarRow[]) {
+  return rows.map((row) => {
+    const score = row.signal?.blum_score ?? 0;
+    const riskLevel = row.signal?.risk_level ?? "Not rated";
+    return {
+      ticker: row.ticker,
+      name: row.asset.name,
+      sector: row.asset.sector,
+      assetType: row.asset.asset_type,
+      price: row.market_snapshot.price,
+      currency: row.market_snapshot.currency,
+      changePercent: row.market_snapshot.perf_1d,
+      volumeRelative: null,
+      sentimentScore: factorNumber(row, "sentiment"),
+      momentumScore: factorNumber(row, "momentum"),
+      trendScore: factorNumber(row, "trend"),
+      newsCount: Number(row.narrative_flags?.news_count_7d ?? 0),
+      newsScore: Number(row.narrative_flags?.narrative_intensity ?? row.narrative_flags?.news_count_7d ?? 0),
+      confidence: row.signal?.confidence_score ?? 0,
+      signalType: row.signal?.classification ?? "Insufficient Evidence",
+      riskScore: factorNumber(row, "volatility"),
+      riskLevel,
+      action: score >= 84 ? "Strong Attention" : score >= 68 ? "Watch" : riskLevel.toLowerCase().includes("high") ? "Avoid" : "Monitor",
+      why: row.why_watch
+    };
+  });
+}
+
 function factor(row: StockRadarRow, key: string) {
   return Number(row.factor_scores?.[key] ?? 0).toFixed(0);
+}
+
+function factorNumber(row: StockRadarRow, key: string) {
+  return Number(row.factor_scores?.[key] ?? 0);
 }
 
 function display(value: unknown) {

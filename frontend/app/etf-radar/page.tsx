@@ -3,6 +3,7 @@
 import type { CSSProperties } from "react";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { BloombergPanel, MetricCard, TerminalHeader } from "@/components/FinancialTerminal";
 import { LoadingState } from "@/components/LoadingState";
 import { formatPrice, MarketSnapshotStrip } from "@/components/MarketSnapshotStrip";
 import { PlotPanel } from "@/components/PlotPanel";
@@ -13,11 +14,20 @@ export default function EtfRadarPage() {
   useEffect(() => { api.etfTrends().then(setRows).catch((err) => setError((err as Error).message)); }, []);
   if (error) return <div className="empty-state">API error: {error}</div>;
   if (!rows) return <LoadingState label="Loading ETF radar" />;
+  const avgConfirmation = rows.length ? rows.reduce((sum, row) => sum + Number(row.confirmation_score ?? 0), 0) / rows.length : 0;
   return (
     <>
-      <div className="page-header">
-        <div><div className="kicker">ETF Radar</div><h1>ETF rotation and sector confirmation.</h1></div>
-      </div>
+      <TerminalHeader
+        eyebrow="ETF Radar"
+        title="ETF rotation and sector confirmation."
+        subtitle="ETF intelligence monitors thematic breadth, sector confirmation and rotation leaders behind stock-level signals."
+        statusItems={[
+          { label: "ETF rows", value: String(rows.length), tone: rows.length ? "positive" : "attention" },
+          { label: "Avg confirm", value: avgConfirmation.toFixed(1), tone: "attention" },
+          { label: "Top ETF", value: rows[0]?.ticker ?? "pending" },
+          { label: "Mode", value: "Evidence only" }
+        ]}
+      />
       {!rows.length && (
         <section className="panel readiness-panel" style={{ marginBottom: 12 }}>
           <div className="panel-head"><span>ETF readiness</span><strong>No ETF trends yet</strong></div>
@@ -27,6 +37,12 @@ export default function EtfRadarPage() {
           </p>
         </section>
       )}
+      <section className="terminal-command-grid">
+        <MetricCard label="ETF Count" value={rows.length} subvalue="Rotation universe" />
+        <MetricCard label="Average Confirmation" value={avgConfirmation.toFixed(1)} subvalue="ETF trend support" tone="attention" />
+        <MetricCard label="Top Momentum" value={rows[0]?.momentum_score ?? "n/a"} subvalue={rows[0]?.ticker ?? "pending"} />
+        <MetricCard label="Top Theme" value={rows[0]?.thematic_score ?? "n/a"} subvalue={rows[0]?.category ?? "category pending"} />
+      </section>
       <section className="grid-3" style={{ marginBottom: 12 }}>
         {rows.slice(0, 6).map((row) => (
           <article className="score-card" key={`etf-card-${row.ticker}-${row.created_at}`}>
@@ -63,8 +79,7 @@ export default function EtfRadarPage() {
           emptyMessage="Momentum/theme scatter requires real ETF trend rows."
         />
       </section>
-      <section className="panel" style={{ marginTop: 12 }}>
-        <div className="panel-head"><span>ETF rotation leaders</span></div>
+      <BloombergPanel title="ETF Rotation Leaders" value={`${rows.length} ETFs`} subtitle="Confirmation layer for sector and thematic narratives" className="radar-core-panel">
         {rows.length ? <div className="table-shell">
           <table className="intel-table">
             <thead><tr><th>ETF</th><th>Price</th><th>Category</th><th>Momentum</th><th>Theme</th><th>Confirmation</th><th>Read-through</th></tr></thead>
@@ -90,7 +105,7 @@ export default function EtfRadarPage() {
             </tbody>
           </table>
         </div> : <div className="empty-state">No ETF trend rows are available yet. Run the full pipeline from the dashboard.</div>}
-      </section>
+      </BloombergPanel>
     </>
   );
 }

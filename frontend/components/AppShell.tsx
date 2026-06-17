@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { BarChart3, Brain, Cpu, Database, Gauge, LineChart, Network, Radar, Search, ShieldAlert, type LucideIcon } from "lucide-react";
+import { Activity, Brain, Cpu, Database, Gauge, LineChart, Network, Radar, Search, ShieldAlert, type LucideIcon } from "lucide-react";
 import clsx from "clsx";
 import { api } from "@/lib/api";
 import { SystemStatus } from "@/lib/types";
@@ -16,13 +16,12 @@ type NavItem = {
 };
 
 const nav: NavItem[] = [
-  { href: "/", label: "Dashboard", icon: Gauge, aliases: ["/dashboard"] },
-  { href: "/market-brain", label: "Market Brain", icon: Cpu },
+  { href: "/", label: "Command", icon: Gauge, aliases: ["/dashboard"] },
   { href: "/stock-radar", label: "Radar", icon: Radar, aliases: ["/etf-radar", "/ipo-radar", "/assets"] },
-  { href: "/chart-analyst", label: "Chart Analyst", icon: LineChart },
-  { href: "/themes", label: "Themes", icon: Network },
-  { href: "/signal-lab", label: "Signal Lab", icon: Search },
-  { href: "/methodology", label: "Methodology", icon: Brain }
+  { href: "/signal-lab", label: "Signals", icon: Search },
+  { href: "/market-brain", label: "Brain", icon: Cpu },
+  { href: "/themes", label: "Narratives", icon: Network },
+  { href: "/chart-analyst", label: "Charts", icon: LineChart }
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -40,7 +39,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="brand-mark">B</div>
           <div>
             <strong>Blum</strong>
-            <span>AI Financial Intelligence</span>
+            <span>Market Intelligence Officer</span>
+          </div>
+        </div>
+        <div className="sidebar-market-state">
+          <Activity size={15} />
+          <div>
+            <strong>{systemStatus?.database_counts?.signals ?? 0} signals</strong>
+            <span>{systemStatus?.database_counts?.news_articles ?? 0} news articles indexed</span>
           </div>
         </div>
         <nav>
@@ -56,10 +62,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           })}
         </nav>
         <div className="system-card">
-          <div><Database size={15} /> Build v{systemStatus?.app_version ?? "loading"}</div>
-          <div><BarChart3 size={15} /> {systemStatus?.database_counts?.news_articles ?? 0} news | {systemStatus?.database_counts?.signals ?? 0} signals</div>
-          <div><Cpu size={15} /> {systemStatus?.runtime_flags.financial_brain_model_enabled ? "Finance LLM active" : "Evidence brain fallback"}</div>
+          <div><Database size={15} /> v{systemStatus?.app_version ?? "loading"} | {systemStatus?.feature_set ?? "loading"}</div>
+          <div><Cpu size={15} /> {systemStatus?.runtime_flags.financial_brain_model_enabled ? "Finance LLM active" : "Evidence fallback"}</div>
+          <div><Brain size={15} /> {systemStatus?.active_models?.financial_brain_configured ?? "model pending"}</div>
           <div><ShieldAlert size={15} /> Research only</div>
+          <Link href="/methodology">Methodology and governance</Link>
         </div>
       </aside>
       <main className="workspace">{children}</main>

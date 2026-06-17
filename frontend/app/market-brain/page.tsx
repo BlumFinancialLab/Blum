@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { assetPath } from "@/lib/routes";
 import { MarketBrain, MarketBrainHistoryRow } from "@/lib/types";
+import { BloombergPanel, ConfidenceMeter, MarketRegimeBadge, MetricCard, TerminalHeader } from "@/components/FinancialTerminal";
 import { LoadingState } from "@/components/LoadingState";
 import { PlotPanel } from "@/components/PlotPanel";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -52,21 +53,28 @@ export default function MarketBrainPage() {
 
   return (
     <>
-      <div className="page-header">
-        <div>
-          <div className="kicker">Market Brain</div>
-          <h1>Evidence-bound AI market reasoning engine.</h1>
-        </div>
+      <TerminalHeader
+        eyebrow="Market Brain"
+        title="System intelligence and reasoning layer."
+        subtitle="A task-routed AI engine that separates market data, sentiment, technical evidence, memory, confidence and explanations."
+        statusItems={[
+          { label: "Regime", value: brain.regime, tone: "attention" },
+          { label: "Brain score", value: brain.brain_score.toFixed(1), tone: "positive" },
+          { label: "Mode", value: brain.data_mode },
+          { label: "Snapshot", value: formatTime(brain.created_at), tone: "info" }
+        ]}
+        actions={
         <div className="control-row" style={{ marginBottom: 0 }}>
           <button className="button" disabled={busy} onClick={() => runBrain(false)}>{busy ? "Running..." : "Run brain"}</button>
           <button className="button primary" disabled={busy} onClick={() => runBrain(true)}>{busy ? "Refreshing..." : "Full data refresh"}</button>
         </div>
-      </div>
+        }
+      />
 
       <section className="brain-hero">
         <div>
           <span>Current regime</span>
-          <h2>{brain.regime}</h2>
+          <h2><MarketRegimeBadge regime={brain.regime} /></h2>
           <p>{brain.summary}</p>
           <div className="tag-row">
             <span>{brain.data_mode}</span>
@@ -79,6 +87,16 @@ export default function MarketBrainPage() {
           <strong>{brain.brain_score.toFixed(1)}</strong>
           <p>Composite evidence score derived from signals, sentiment, coverage, news intensity and IPO/pre-listing evidence.</p>
         </div>
+      </section>
+
+      <section className="market-brain-system-grid" style={{ marginTop: 12 }}>
+        <BloombergPanel title="AI Reasoning Layer" value={brain.financial_brain?.model_status ?? "configured"} subtitle={brain.financial_brain?.configured_model ?? "Financial model"}>
+          <p>{brain.financial_brain?.thesis ?? "Financial Brain analysis is waiting for a Market Brain packet."}</p>
+          <ConfidenceMeter value={brain.financial_brain?.confidence?.score} label={brain.financial_brain?.confidence?.label ?? "Reasoning confidence"} />
+        </BloombergPanel>
+        <MetricCard label="Evidence Coverage" value={brain.evidence_ledger.price_rows ?? "n/a"} subvalue="Stored OHLCV rows" />
+        <MetricCard label="News Coverage" value={brain.market_now.news_count_48h} subvalue="48h public evidence" />
+        <MetricCard label="Fallback Mode" value={brain.financial_brain?.model_status?.includes("fallback") ? "Active" : "Standby"} subvalue={brain.financial_brain?.evidence_policy ?? "Evidence-bound generation"} tone={brain.financial_brain?.model_status?.includes("fallback") ? "attention" : "positive"} />
       </section>
 
       <section className="grid-4" style={{ marginTop: 12 }}>
