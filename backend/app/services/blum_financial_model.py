@@ -33,6 +33,7 @@ from app.models import (
     SignalSnapshot,
 )
 from app.services.thesis_engine import build_asset_thesis
+from app.services.persistence import backup_embedded_postgres_if_configured
 
 
 HORIZONS = (1, 3, 7, 14, 30)
@@ -101,6 +102,7 @@ def run_model_learning_cycle(db: Session, limit: int = 120) -> dict:
     )
     db.add(event)
     db.commit()
+    backup_result = backup_embedded_postgres_if_configured(reason="blum_model_autonomous_cycle")
     return {
         "status": "ok",
         "signals_seen": len(signals),
@@ -109,6 +111,7 @@ def run_model_learning_cycle(db: Session, limit: int = 120) -> dict:
         "outcomes": outcome_result,
         "dataset": dataset_result,
         "learning_event_id": event.id,
+        "persistence_backup": backup_result,
         "disclaimer": DISCLAIMER,
     }
 

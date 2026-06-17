@@ -485,6 +485,7 @@ The UI exposes `/system/status` in the sidebar and dashboard. If the GUI looks u
 - `app_version` must show the latest deployed version.
 - `feature_set` must show the expected feature bundle.
 - `persistence.mode` must be `external_postgres` for strict no-reset durability, or `embedded_postgres` with a populated backup file plus persistent `/data` storage for demo durability.
+- `POST /system/persistence/backup` can force an immediate embedded PostgreSQL backup after a learning cycle or manual operations.
 - `Financial Brain` shows `fallback mode` unless `BLUM_ENABLE_FINANCIAL_BRAIN_MODEL=true`.
 - Hugging Face serves the previous Docker image until the new build finishes successfully.
 - Existing Market Brain snapshots should be regenerated with `Run brain` after a deployment.

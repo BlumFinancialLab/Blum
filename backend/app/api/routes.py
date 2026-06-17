@@ -98,6 +98,7 @@ from app.services.live import live_news, market_sentiment
 from app.services.macro import macro_overview, update_macro_snapshots
 from app.services.market_brain import build_market_brain, latest_market_brain, market_brain_history
 from app.services.market_data import MarketDataService, market_snapshot_for_asset
+from app.services.persistence import backup_embedded_postgres_if_configured, database_persistence_status
 from app.services.pipeline import PipelineService
 from app.services.realtime import realtime_status
 from app.services.semantic import SemanticService
@@ -237,26 +238,9 @@ def system_status(db: Session = Depends(get_db)) -> dict:
     }
 
 
-def database_persistence_status() -> dict:
-    backup_file = os.getenv("BLUM_EMBEDDED_POSTGRES_BACKUP_FILE")
-    backup_exists = bool(backup_file and os.path.exists(backup_file))
-    backup_size = os.path.getsize(backup_file) if backup_exists and backup_file else 0
-    uses_external_database = bool(os.getenv("DATABASE_URL")) and not backup_file
-    mode = "external_postgres" if uses_external_database else "embedded_postgres"
-    return {
-        "mode": mode,
-        "external_database_configured": uses_external_database,
-        "embedded_backup_file": backup_file,
-        "embedded_backup_exists": backup_exists,
-        "embedded_backup_size_bytes": backup_size,
-        "embedded_backup_interval_seconds": int(os.getenv("BLUM_DB_BACKUP_SECONDS", "300")),
-        "persistent_dir": os.getenv("BLUM_PERSIST_DIR", "/data/blum"),
-        "strict_no_reset_mode": uses_external_database,
-        "durability_note": (
-            "External DATABASE_URL is the strict no-reset mode. Embedded PostgreSQL backup can recover learning state only "
-            "when Hugging Face persistent storage is enabled for the /data mount."
-        ),
-    }
+@router.post("/system/persistence/backup")
+def trigger_database_backup() -> dict:
+    return backup_embedded_postgres_if_configured(reason="manual_api_trigger")
 
 
 @router.get("/brain/status")
