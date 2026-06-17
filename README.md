@@ -191,6 +191,7 @@ The reasoning model APIs are backend-only:
 - `POST /model/capture/{ticker}`
 - `POST /model/capture-all`
 - `POST /model/evaluate-outcomes`
+- `POST /model/run-learning-cycle`
 - `GET /model/knowledge`
 - `GET /model/knowledge/{record_id}`
 - `GET /model/memory/search?q=...`
@@ -207,6 +208,8 @@ The reasoning model APIs are backend-only:
 Training export uses JSONL and targets future Hugging Face training workflows for Qwen, Llama or Mistral with LoRA, full fine-tuning, DPO or preference learning. The Space only creates dataset and job-plan records; it does not launch fine-tuning automatically.
 
 The objective is not to predict stock prices. The objective is to learn how Blum reasons: explain, contextualize, compare, critique, calibrate confidence and improve future thesis quality.
+
+The autonomous Blum Financial Model cycle is server-side and evidence-bound. When `BLUM_ENABLE_LEARNING_LOOP=true`, it runs on startup, during market refresh and on its own interval controlled by `BLUM_MODEL_CYCLE_MINUTES` and `BLUM_MODEL_CYCLE_LIMIT`. Each cycle captures recent signal reasoning, evaluates matured thesis outcomes, refreshes training examples and logs a `blum_model_autonomous_cycle` learning event. It updates database memory only; it does not self-modify source code and it does not execute trades.
 
 ## Chart Vision Technical Analyst
 
@@ -439,9 +442,11 @@ Optional self-learning cadence:
 ```bash
 export BLUM_ENABLE_LEARNING_LOOP=true
 export BLUM_LEARNING_LOOP_MINUTES=360
+export BLUM_MODEL_CYCLE_MINUTES=5
+export BLUM_MODEL_CYCLE_LIMIT=120
 ```
 
-The learning loop only updates database memory, confidence adjustments and reversible scoring-weight versions.
+The learning loops only update database memory, confidence adjustments, proprietary reasoning examples and reversible scoring-weight versions.
 
 ## Docker
 
@@ -458,6 +463,8 @@ docker run --rm -p 7860:7860 \
   -e DATABASE_URL=postgresql+psycopg2://user:password@host:5432/blum \
   blum-ai-financial-intelligence
 ```
+
+For Hugging Face Docker demos without an external database, the startup script writes periodic embedded PostgreSQL backups to `/data/blum/embedded_postgres_blum.sql` and restores them on startup when the public schema is empty. This protects the learning memory only when Hugging Face persistent storage is enabled for the `/data` mount. The strict no-reset configuration is still an external `DATABASE_URL`.
 
 ## Hugging Face Spaces Deployment
 
@@ -477,6 +484,7 @@ The UI exposes `/system/status` in the sidebar and dashboard. If the GUI looks u
 
 - `app_version` must show the latest deployed version.
 - `feature_set` must show the expected feature bundle.
+- `persistence.mode` must be `external_postgres` for strict no-reset durability, or `embedded_postgres` with a populated backup file plus persistent `/data` storage for demo durability.
 - `Financial Brain` shows `fallback mode` unless `BLUM_ENABLE_FINANCIAL_BRAIN_MODEL=true`.
 - Hugging Face serves the previous Docker image until the new build finishes successfully.
 - Existing Market Brain snapshots should be regenerated with `Run brain` after a deployment.

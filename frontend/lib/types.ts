@@ -144,8 +144,23 @@ export type SystemStatus = {
     startup_accuracy_seed_enabled?: boolean;
     data_gap_repair_minutes?: number;
     accuracy_audit_minutes?: number;
+    learning_loop_enabled?: boolean;
+    learning_loop_minutes?: number;
+    blum_model_cycle_minutes?: number;
+    blum_model_cycle_limit?: number;
     fundamentals_refresh_minutes?: number;
     macro_refresh_minutes?: number;
+  };
+  persistence?: {
+    mode: string;
+    external_database_configured: boolean;
+    embedded_backup_file?: string | null;
+    embedded_backup_exists: boolean;
+    embedded_backup_size_bytes: number;
+    embedded_backup_interval_seconds: number;
+    persistent_dir: string;
+    strict_no_reset_mode: boolean;
+    durability_note: string;
   };
   active_models: {
     finbert: string;

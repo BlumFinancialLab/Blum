@@ -72,6 +72,47 @@ def model_status(db: Session) -> dict:
     }
 
 
+def run_model_learning_cycle(db: Session, limit: int = 120) -> dict:
+    signals = db.scalars(select(SignalSnapshot).order_by(desc(SignalSnapshot.created_at)).limit(limit)).all()
+    skipped = 0
+    before_count = count(db, BlumKnowledgeRecord.id)
+    for signal in signals:
+        asset = signal.asset or db.get(Asset, signal.asset_id)
+        if asset is None:
+            skipped += 1
+            continue
+        capture_signal_reasoning(db, signal, asset)
+    db.flush()
+    captured = max(0, count(db, BlumKnowledgeRecord.id) - before_count)
+    outcome_result = evaluate_thesis_outcomes(db, limit=limit)
+    dataset_result = build_training_dataset(db, limit=limit, min_quality=55.0)
+    event = LearningEvent(
+        event_type="blum_model_autonomous_cycle",
+        severity="Info",
+        title="Blum Financial Model autonomous cycle completed",
+        description="Captured latest reasoning, evaluated matured thesis outcomes and refreshed proprietary training examples.",
+        payload={
+            "signals_seen": len(signals),
+            "knowledge_records_created": captured,
+            "signals_skipped": skipped,
+            "outcomes": outcome_result,
+            "dataset": dataset_result,
+        },
+    )
+    db.add(event)
+    db.commit()
+    return {
+        "status": "ok",
+        "signals_seen": len(signals),
+        "knowledge_records_created": captured,
+        "signals_skipped": skipped,
+        "outcomes": outcome_result,
+        "dataset": dataset_result,
+        "learning_event_id": event.id,
+        "disclaimer": DISCLAIMER,
+    }
+
+
 def capture_latest_asset_reasoning(db: Session, asset: Asset, source_type: str = "manual_capture") -> dict:
     signal = db.scalar(
         select(SignalSnapshot)

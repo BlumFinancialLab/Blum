@@ -71,6 +71,7 @@ from app.services.blum_financial_model import (
     narrative_memory,
     quality_overview,
     regime_memory,
+    run_model_learning_cycle,
     self_critique_for_record,
     semantic_reasoning_search,
     training_manifest,
@@ -132,7 +133,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
     return {
         "service": "blum-ai-financial-intelligence",
         "app_version": settings.app_version,
-        "feature_set": "proprietary-blum-financial-model-v0.7.0",
+        "feature_set": "persistent-autonomous-blum-financial-model-v0.7.1",
         "environment": settings.environment,
         "generated_at": datetime.utcnow().isoformat(),
         "hugging_face": {
@@ -153,11 +154,14 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "accuracy_audit_minutes": settings.accuracy_audit_minutes,
             "learning_loop_enabled": settings.enable_learning_loop,
             "learning_loop_minutes": settings.learning_loop_minutes,
+            "blum_model_cycle_minutes": settings.blum_model_cycle_minutes,
+            "blum_model_cycle_limit": settings.blum_model_cycle_limit,
             "chart_vision_mode": settings.chart_vision_mode,
             "chart_vision_min_confidence": settings.chart_vision_min_confidence,
             "fundamentals_refresh_minutes": settings.fundamentals_refresh_minutes,
             "macro_refresh_minutes": settings.macro_refresh_minutes,
         },
+        "persistence": database_persistence_status(),
         "active_models": {
             "finbert": settings.finbert_model,
             "embeddings": settings.embedding_model,
@@ -228,8 +232,30 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "Hugging Face serves the previous image until the Docker build finishes successfully.",
             "The finance-domain 7B model is disabled by default unless BLUM_ENABLE_FINANCIAL_BRAIN_MODEL=true.",
             "Existing snapshots must be regenerated with Run brain or full pipeline after a new deployment.",
-            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.7.0.",
+            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.7.1.",
         ],
+    }
+
+
+def database_persistence_status() -> dict:
+    backup_file = os.getenv("BLUM_EMBEDDED_POSTGRES_BACKUP_FILE")
+    backup_exists = bool(backup_file and os.path.exists(backup_file))
+    backup_size = os.path.getsize(backup_file) if backup_exists and backup_file else 0
+    uses_external_database = bool(os.getenv("DATABASE_URL")) and not backup_file
+    mode = "external_postgres" if uses_external_database else "embedded_postgres"
+    return {
+        "mode": mode,
+        "external_database_configured": uses_external_database,
+        "embedded_backup_file": backup_file,
+        "embedded_backup_exists": backup_exists,
+        "embedded_backup_size_bytes": backup_size,
+        "embedded_backup_interval_seconds": int(os.getenv("BLUM_DB_BACKUP_SECONDS", "300")),
+        "persistent_dir": os.getenv("BLUM_PERSIST_DIR", "/data/blum"),
+        "strict_no_reset_mode": uses_external_database,
+        "durability_note": (
+            "External DATABASE_URL is the strict no-reset mode. Embedded PostgreSQL backup can recover learning state only "
+            "when Hugging Face persistent storage is enabled for the /data mount."
+        ),
     }
 
 
@@ -307,6 +333,11 @@ def blum_model_capture_all(limit: int = Query(default=80, ge=1, le=500), db: Ses
 @router.post("/model/evaluate-outcomes")
 def blum_model_evaluate_outcomes(limit: int = Query(default=250, ge=1, le=2000), db: Session = Depends(get_db)) -> dict:
     return evaluate_thesis_outcomes(db, limit=limit)
+
+
+@router.post("/model/run-learning-cycle")
+def blum_model_run_learning_cycle(limit: int = Query(default=120, ge=1, le=2000), db: Session = Depends(get_db)) -> dict:
+    return run_model_learning_cycle(db, limit=limit)
 
 
 @router.get("/model/knowledge")

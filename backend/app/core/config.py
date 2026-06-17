@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     app_name: str = "Blum AI Financial Intelligence"
-    app_version: str = "0.7.0"
+    app_version: str = "0.7.1"
     environment: str = Field(default="demo", alias="ENVIRONMENT")
     database_url: str = Field(
         default="postgresql+psycopg2://postgres:postgres@127.0.0.1:5432/blum",
@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     accuracy_audit_minutes: int = Field(default=240, alias="BLUM_ACCURACY_AUDIT_MINUTES")
     enable_learning_loop: bool = Field(default=True, alias="BLUM_ENABLE_LEARNING_LOOP")
     learning_loop_minutes: int = Field(default=360, alias="BLUM_LEARNING_LOOP_MINUTES")
+    blum_model_cycle_minutes: int = Field(default=5, alias="BLUM_MODEL_CYCLE_MINUTES")
+    blum_model_cycle_limit: int = Field(default=120, alias="BLUM_MODEL_CYCLE_LIMIT")
     fundamentals_refresh_minutes: int = Field(default=720, alias="BLUM_FUNDAMENTALS_REFRESH_MINUTES")
     macro_refresh_minutes: int = Field(default=240, alias="BLUM_MACRO_REFRESH_MINUTES")
     stale_price_max_age_days: int = Field(default=7, alias="BLUM_STALE_PRICE_MAX_AGE_DAYS")

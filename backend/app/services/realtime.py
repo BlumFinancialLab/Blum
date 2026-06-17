@@ -10,6 +10,7 @@ from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.ingestion.news_ingestor import NewsIngestor
 from app.services.accuracy import run_accuracy_audit
+from app.services.blum_financial_model import run_model_learning_cycle
 from app.services.data_continuity import repair_data_gaps
 from app.services.etf import update_etf_trends
 from app.services.fundamentals import update_fundamentals
@@ -52,6 +53,7 @@ def start_realtime_services() -> None:
     _scheduler.add_job(run_ipo_refresh, "interval", minutes=settings.ipo_refresh_minutes, id="ipo_refresh", replace_existing=True, max_instances=1)
     if settings.enable_learning_loop:
         _scheduler.add_job(run_learning_cycle_job, "interval", minutes=settings.learning_loop_minutes, id="financial_brain_learning", replace_existing=True, max_instances=1)
+        _scheduler.add_job(run_blum_model_cycle_job, "interval", minutes=settings.blum_model_cycle_minutes, id="blum_financial_model_cycle", replace_existing=True, max_instances=1)
     _scheduler.start()
     with _state_lock:
         _state["started"] = True
@@ -73,7 +75,8 @@ def run_startup_pipeline() -> None:
     def work(db):
         pipeline = PipelineService().run(db, limit=settings.startup_pipeline_limit, period=settings.historical_price_period)
         learning = run_learning_cycle(db, limit=settings.max_update_assets * 6) if settings.enable_learning_loop else {}
-        return {"pipeline": pipeline, "financial_brain_learning": learning}
+        model_learning = run_model_learning_cycle(db, limit=settings.blum_model_cycle_limit) if settings.enable_learning_loop else {}
+        return {"pipeline": pipeline, "financial_brain_learning": learning, "blum_financial_model": model_learning}
 
     _run_job("startup_pipeline", work)
 
@@ -88,7 +91,8 @@ def run_market_refresh() -> None:
         signals = SignalEngine().run(db, limit=settings.max_update_assets)
         etf = update_etf_trends(db)
         learning = run_learning_cycle(db, limit=settings.max_update_assets * 6) if settings.enable_learning_loop else {}
-        return {"market_update": market, "signal_run": signals, "etf_update": etf, "financial_brain_learning": learning}
+        model_learning = run_model_learning_cycle(db, limit=settings.blum_model_cycle_limit) if settings.enable_learning_loop else {}
+        return {"market_update": market, "signal_run": signals, "etf_update": etf, "financial_brain_learning": learning, "blum_financial_model": model_learning}
 
     _run_job("market_refresh", work)
 
@@ -118,6 +122,10 @@ def run_ipo_refresh() -> None:
 
 def run_learning_cycle_job() -> None:
     _run_job("financial_brain_learning", lambda db: run_learning_cycle(db, limit=settings.max_update_assets * 6))
+
+
+def run_blum_model_cycle_job() -> None:
+    _run_job("blum_financial_model_cycle", lambda db: run_model_learning_cycle(db, limit=settings.blum_model_cycle_limit))
 
 
 def _run_job(job_name: str, work):
