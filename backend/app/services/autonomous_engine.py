@@ -73,7 +73,7 @@ class AutonomousResearchEngine:
         stage("macro_context", lambda: update_macro_snapshots(db))
         stage("fundamentals", lambda: update_fundamentals(db, limit=min(settings.max_update_assets, 32)))
         stage("historical_memory_repair", lambda: repair_data_gaps(db, limit=min(settings.max_update_assets, settings.autonomous_repair_limit)))
-        stage("incremental_price_refresh", lambda: MarketDataService().update_prices(db, period=self.price_period(db, trigger), limit=settings.max_update_assets))
+        stage("incremental_price_refresh", lambda: MarketDataService().update_prices(db, period=settings.refresh_price_period, limit=settings.max_update_assets))
         stage("news_sentiment", lambda: NewsIngestor().update_news(db, lookback_hours=96, limit_per_feed=45))
         stage("signals", lambda: SignalEngine().run(db, limit=settings.max_update_assets))
         stage("etf_intelligence", lambda: update_etf_trends(db))
