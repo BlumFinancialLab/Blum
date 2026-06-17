@@ -156,6 +156,58 @@ The UI exposes:
 
 Governance rules are enforced in product language and API output: no absolute certainty, no direct financial advice, no autonomous trading, no self-modifying code and clear separation between observed data, inference and hypothesis.
 
+## Blum Financial Model
+
+Blum now includes the foundation for a proprietary reasoning model called **Blum Financial Model**. This is not another chatbot layer and it does not train automatically inside the Space. It is the infrastructure that preserves, evaluates and exports Blum's accumulated financial reasoning so a future **Blum Analyst** model can be trained from Blum's own thesis history.
+
+The model layer captures every persisted asset thesis into a proprietary knowledge record with:
+
+- market context: timestamp, market regime, volatility regime, sector context, macro placeholders, breadth context and risk sentiment;
+- asset context: ticker, sector, industry, price action, volume profile, technical indicators, sentiment indicators and news indicators;
+- Blum reasoning: executive thesis, why now, supporting evidence, contradicting evidence, risks, invalidation conditions, narrative analysis, confidence and conviction score;
+- prediction horizons: 1D, 3D, 7D, 14D and 30D outcome-evaluation slots;
+- thesis quality: reasoning depth, consistency, contradiction handling, confidence calibration, historical alignment, narrative quality and explainability quality;
+- self critique: analyst view, skeptic view, historical view and balanced final view;
+- training sample: JSON-ready input/output and chat messages for future supervised fine-tuning or preference learning.
+
+New persistence tables include:
+
+- `blum_knowledge_records`
+- `blum_thesis_outcomes`
+- `blum_reasoning_memory`
+- `blum_training_examples`
+- `blum_thesis_quality_scores`
+- `blum_self_critiques`
+- `blum_narrative_memory`
+- `blum_regime_memory`
+- `blum_knowledge_graph_nodes`
+- `blum_knowledge_graph_edges`
+- `blum_dataset_exports`
+- `blum_model_training_jobs`
+
+The reasoning model APIs are backend-only:
+
+- `GET /model/status`
+- `POST /model/capture/{ticker}`
+- `POST /model/capture-all`
+- `POST /model/evaluate-outcomes`
+- `GET /model/knowledge`
+- `GET /model/knowledge/{record_id}`
+- `GET /model/memory/search?q=...`
+- `POST /model/dataset/build`
+- `POST /model/training/export`
+- `GET /model/training/manifest`
+- `POST /model/training/jobs`
+- `GET /model/quality`
+- `GET /model/self-critique/{record_id}`
+- `GET /model/narratives`
+- `GET /model/regimes`
+- `GET /model/graph`
+
+Training export uses JSONL and targets future Hugging Face training workflows for Qwen, Llama or Mistral with LoRA, full fine-tuning, DPO or preference learning. The Space only creates dataset and job-plan records; it does not launch fine-tuning automatically.
+
+The objective is not to predict stock prices. The objective is to learn how Blum reasons: explain, contextualize, compare, critique, calibrate confidence and improve future thesis quality.
+
 ## Chart Vision Technical Analyst
 
 Blum includes a dedicated technical chart intelligence module. It is designed to read financial chart images when a vision model is configured, but it never relies only on visual interpretation.

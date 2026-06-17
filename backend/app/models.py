@@ -704,3 +704,254 @@ class MarketBrainSnapshot(Base):
     summary: Mapped[str] = mapped_column(Text, default="")
     structured_output: Mapped[dict] = mapped_column(JsonType, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class BlumKnowledgeRecord(Base):
+    __tablename__ = "blum_knowledge_records"
+    __table_args__ = (
+        UniqueConstraint("reasoning_hash", name="uq_blum_knowledge_reasoning_hash"),
+        Index("ix_blum_knowledge_ticker_created", "ticker", "created_at"),
+        Index("ix_blum_knowledge_regime_created", "market_regime", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    asset_id: Mapped[int | None] = mapped_column(ForeignKey("assets.id", ondelete="SET NULL"), index=True)
+    signal_id: Mapped[int | None] = mapped_column(ForeignKey("signal_snapshots.id", ondelete="SET NULL"), index=True)
+    ai_insight_id: Mapped[int | None] = mapped_column(ForeignKey("ai_insights.id", ondelete="SET NULL"), index=True)
+    ticker: Mapped[str] = mapped_column(String(32), index=True)
+    sector: Mapped[str] = mapped_column(String(120), default="", index=True)
+    industry: Mapped[str] = mapped_column(String(160), default="")
+    source_type: Mapped[str] = mapped_column(String(80), default="signal_snapshot", index=True)
+    reasoning_hash: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    market_regime: Mapped[str] = mapped_column(String(120), default="Sideways", index=True)
+    volatility_regime: Mapped[str] = mapped_column(String(80), default="Unknown", index=True)
+    risk_sentiment: Mapped[str] = mapped_column(String(80), default="Unknown", index=True)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    conviction_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    market_context: Mapped[dict] = mapped_column(JsonType, default=dict)
+    asset_context: Mapped[dict] = mapped_column(JsonType, default=dict)
+    blum_reasoning: Mapped[dict] = mapped_column(JsonType, default=dict)
+    prediction_horizons: Mapped[dict] = mapped_column(JsonType, default=dict)
+    quality_scores: Mapped[dict] = mapped_column(JsonType, default=dict)
+    self_critique: Mapped[dict] = mapped_column(JsonType, default=dict)
+    training_sample: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+    asset = relationship("Asset")
+    signal = relationship("SignalSnapshot")
+    ai_insight = relationship("AIInsight")
+
+
+class BlumThesisOutcome(Base):
+    __tablename__ = "blum_thesis_outcomes"
+    __table_args__ = (
+        UniqueConstraint("knowledge_record_id", "horizon_days", name="uq_blum_thesis_outcome_record_horizon"),
+        Index("ix_blum_thesis_outcomes_ticker_horizon", "ticker", "horizon_days"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    knowledge_record_id: Mapped[int] = mapped_column(ForeignKey("blum_knowledge_records.id", ondelete="CASCADE"), index=True)
+    asset_id: Mapped[int | None] = mapped_column(ForeignKey("assets.id", ondelete="SET NULL"), index=True)
+    ticker: Mapped[str] = mapped_column(String(32), index=True)
+    horizon_days: Mapped[int] = mapped_column(Integer, index=True)
+    expected_direction: Mapped[str] = mapped_column(String(80), default="up_or_resilient", index=True)
+    price_at_thesis: Mapped[float | None] = mapped_column(Float)
+    price_after_horizon: Mapped[float | None] = mapped_column(Float)
+    realized_return: Mapped[float | None] = mapped_column(Float, index=True)
+    max_drawdown: Mapped[float | None] = mapped_column(Float)
+    max_upside: Mapped[float | None] = mapped_column(Float)
+    realized_volatility: Mapped[float | None] = mapped_column(Float)
+    outcome: Mapped[str] = mapped_column(String(40), default="inconclusive", index=True)
+    success: Mapped[bool | None] = mapped_column(Boolean, index=True)
+    outcome_payload: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+    knowledge_record = relationship("BlumKnowledgeRecord")
+    asset = relationship("Asset")
+
+
+class BlumReasoningMemory(Base):
+    __tablename__ = "blum_reasoning_memory"
+    __table_args__ = (Index("ix_blum_reasoning_memory_ticker_type_created", "ticker", "memory_type", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    knowledge_record_id: Mapped[int | None] = mapped_column(ForeignKey("blum_knowledge_records.id", ondelete="CASCADE"), index=True)
+    asset_id: Mapped[int | None] = mapped_column(ForeignKey("assets.id", ondelete="SET NULL"), index=True)
+    ticker: Mapped[str | None] = mapped_column(String(32), index=True)
+    memory_type: Mapped[str] = mapped_column(String(80), default="asset_thesis", index=True)
+    embedding_model: Mapped[str] = mapped_column(String(160), default="", index=True)
+    embedding: Mapped[dict] = mapped_column(JsonType, default=dict)
+    memory_text: Mapped[str] = mapped_column(Text, default="")
+    metadata_payload: Mapped[dict] = mapped_column(JsonType, default=dict)
+    outcome_label: Mapped[str] = mapped_column(String(80), default="pending", index=True)
+    quality_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    knowledge_record = relationship("BlumKnowledgeRecord")
+    asset = relationship("Asset")
+
+
+class BlumTrainingExample(Base):
+    __tablename__ = "blum_training_examples"
+    __table_args__ = (
+        UniqueConstraint("knowledge_record_id", "task_type", name="uq_blum_training_record_task"),
+        Index("ix_blum_training_examples_ready_created", "export_ready", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    knowledge_record_id: Mapped[int | None] = mapped_column(ForeignKey("blum_knowledge_records.id", ondelete="CASCADE"), index=True)
+    task_type: Mapped[str] = mapped_column(String(100), default="financial_thesis_generation", index=True)
+    dataset_split: Mapped[str] = mapped_column(String(40), default="train", index=True)
+    base_model_family: Mapped[str] = mapped_column(String(80), default="qwen_llama_mistral", index=True)
+    input_payload: Mapped[dict] = mapped_column(JsonType, default=dict)
+    output_payload: Mapped[dict] = mapped_column(JsonType, default=dict)
+    messages: Mapped[dict] = mapped_column(JsonType, default=dict)
+    quality_scores: Mapped[dict] = mapped_column(JsonType, default=dict)
+    preference_payload: Mapped[dict] = mapped_column(JsonType, default=dict)
+    export_ready: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    exported_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+    knowledge_record = relationship("BlumKnowledgeRecord")
+
+
+class BlumThesisQualityScore(Base):
+    __tablename__ = "blum_thesis_quality_scores"
+    __table_args__ = (UniqueConstraint("knowledge_record_id", name="uq_blum_quality_record"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    knowledge_record_id: Mapped[int] = mapped_column(ForeignKey("blum_knowledge_records.id", ondelete="CASCADE"), index=True)
+    reasoning_depth: Mapped[float] = mapped_column(Float, default=0.0)
+    consistency: Mapped[float] = mapped_column(Float, default=0.0)
+    contradiction_handling: Mapped[float] = mapped_column(Float, default=0.0)
+    confidence_calibration: Mapped[float] = mapped_column(Float, default=0.0)
+    historical_alignment: Mapped[float] = mapped_column(Float, default=0.0)
+    narrative_quality: Mapped[float] = mapped_column(Float, default=0.0)
+    explainability_quality: Mapped[float] = mapped_column(Float, default=0.0)
+    overall_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    evaluator_version: Mapped[str] = mapped_column(String(80), default="blum-quality-v0.1", index=True)
+    quality_payload: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    knowledge_record = relationship("BlumKnowledgeRecord")
+
+
+class BlumSelfCritique(Base):
+    __tablename__ = "blum_self_critiques"
+    __table_args__ = (UniqueConstraint("knowledge_record_id", name="uq_blum_self_critique_record"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    knowledge_record_id: Mapped[int] = mapped_column(ForeignKey("blum_knowledge_records.id", ondelete="CASCADE"), index=True)
+    analyst_view: Mapped[dict] = mapped_column(JsonType, default=dict)
+    skeptic_view: Mapped[dict] = mapped_column(JsonType, default=dict)
+    historical_view: Mapped[dict] = mapped_column(JsonType, default=dict)
+    final_view: Mapped[dict] = mapped_column(JsonType, default=dict)
+    critique_payload: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    knowledge_record = relationship("BlumKnowledgeRecord")
+
+
+class BlumNarrativeMemory(Base):
+    __tablename__ = "blum_narrative_memory"
+    __table_args__ = (Index("ix_blum_narrative_stage_updated", "lifecycle_stage", "updated_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    narrative: Mapped[str] = mapped_column(String(160), index=True)
+    lifecycle_stage: Mapped[str] = mapped_column(String(80), default="Emerging", index=True)
+    intensity: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    velocity: Mapped[float] = mapped_column(Float, default=0.0)
+    saturation: Mapped[float] = mapped_column(Float, default=0.0)
+    crowding: Mapped[float] = mapped_column(Float, default=0.0)
+    linked_assets: Mapped[dict] = mapped_column(JsonType, default=dict)
+    sectors: Mapped[dict] = mapped_column(JsonType, default=dict)
+    outcome_summary: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
+class BlumRegimeMemory(Base):
+    __tablename__ = "blum_regime_memory"
+    __table_args__ = (Index("ix_blum_regime_memory_regime_updated", "market_regime", "updated_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    market_regime: Mapped[str] = mapped_column(String(120), index=True)
+    volatility_regime: Mapped[str] = mapped_column(String(80), default="Unknown", index=True)
+    liquidity_regime: Mapped[str] = mapped_column(String(80), default="Unknown", index=True)
+    macro_context: Mapped[dict] = mapped_column(JsonType, default=dict)
+    reasoning_patterns: Mapped[dict] = mapped_column(JsonType, default=dict)
+    outcome_summary: Mapped[dict] = mapped_column(JsonType, default=dict)
+    sample_count: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
+class BlumKnowledgeGraphNode(Base):
+    __tablename__ = "blum_knowledge_graph_nodes"
+    __table_args__ = (UniqueConstraint("canonical_key", name="uq_blum_graph_node_key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    node_type: Mapped[str] = mapped_column(String(80), index=True)
+    label: Mapped[str] = mapped_column(String(220), index=True)
+    canonical_key: Mapped[str] = mapped_column(String(260), unique=True, index=True)
+    properties: Mapped[dict] = mapped_column(JsonType, default=dict)
+    embedding: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
+class BlumKnowledgeGraphEdge(Base):
+    __tablename__ = "blum_knowledge_graph_edges"
+    __table_args__ = (
+        UniqueConstraint("source_node_id", "target_node_id", "relation_type", name="uq_blum_graph_edge"),
+        Index("ix_blum_graph_edges_relation_created", "relation_type", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_node_id: Mapped[int] = mapped_column(ForeignKey("blum_knowledge_graph_nodes.id", ondelete="CASCADE"), index=True)
+    target_node_id: Mapped[int] = mapped_column(ForeignKey("blum_knowledge_graph_nodes.id", ondelete="CASCADE"), index=True)
+    relation_type: Mapped[str] = mapped_column(String(100), index=True)
+    weight: Mapped[float] = mapped_column(Float, default=1.0, index=True)
+    evidence: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+    source_node = relationship("BlumKnowledgeGraphNode", foreign_keys=[source_node_id])
+    target_node = relationship("BlumKnowledgeGraphNode", foreign_keys=[target_node_id])
+
+
+class BlumDatasetExport(Base):
+    __tablename__ = "blum_dataset_exports"
+    __table_args__ = (Index("ix_blum_dataset_exports_status_created", "status", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    export_name: Mapped[str] = mapped_column(String(180), index=True)
+    format: Mapped[str] = mapped_column(String(40), default="jsonl", index=True)
+    record_count: Mapped[int] = mapped_column(Integer, default=0)
+    file_path: Mapped[str] = mapped_column(Text, default="")
+    filters: Mapped[dict] = mapped_column(JsonType, default=dict)
+    status: Mapped[str] = mapped_column(String(80), default="created", index=True)
+    payload_summary: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class BlumModelTrainingJob(Base):
+    __tablename__ = "blum_model_training_jobs"
+    __table_args__ = (Index("ix_blum_training_jobs_status_created", "status", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_name: Mapped[str] = mapped_column(String(180), index=True)
+    model_family: Mapped[str] = mapped_column(String(80), index=True)
+    base_model: Mapped[str] = mapped_column(String(180), index=True)
+    method: Mapped[str] = mapped_column(String(80), index=True)
+    dataset_export_id: Mapped[int | None] = mapped_column(ForeignKey("blum_dataset_exports.id", ondelete="SET NULL"), index=True)
+    status: Mapped[str] = mapped_column(String(80), default="planned", index=True)
+    training_config: Mapped[dict] = mapped_column(JsonType, default=dict)
+    metrics: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+    dataset_export = relationship("BlumDatasetExport")

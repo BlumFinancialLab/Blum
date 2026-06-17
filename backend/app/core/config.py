@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     app_name: str = "Blum AI Financial Intelligence"
-    app_version: str = "0.6.0"
+    app_version: str = "0.7.0"
     environment: str = Field(default="demo", alias="ENVIRONMENT")
     database_url: str = Field(
         default="postgresql+psycopg2://postgres:postgres@127.0.0.1:5432/blum",
@@ -50,6 +50,8 @@ class Settings(BaseSettings):
     historical_price_period: str = Field(default="max", alias="BLUM_HISTORICAL_PRICE_PERIOD")
     refresh_price_period: str = Field(default="6mo", alias="BLUM_REFRESH_PRICE_PERIOD")
     sec_user_agent: str = Field(default="Blum-AI-Financial-Intelligence research demo", alias="BLUM_SEC_USER_AGENT")
+    blum_model_repository: str = Field(default="Italianhype/Blum", alias="BLUM_MODEL_REPOSITORY")
+    training_export_dir: str = Field(default="/tmp/blum_training_exports", alias="BLUM_TRAINING_EXPORT_DIR")
 
     class Config:
         env_file = ".env"

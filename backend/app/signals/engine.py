@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.ai.orchestrator import AIOrchestrator
 from app.models import Asset, NewsAssetLink, PriceHistory, SentimentAnalysis, SignalSnapshot, TechnicalIndicator
+from app.services.blum_financial_model import capture_signal_reasoning
 from app.services.thesis_engine import build_signal_thesis_payload
 from app.signals.indicators import compute_indicators
 
@@ -65,6 +66,8 @@ class SignalEngine:
             db.add(snapshot)
             db.execute(delete(TechnicalIndicator).where(TechnicalIndicator.asset_id == asset.id, TechnicalIndicator.date == frame["date"].iloc[-1]))
             db.add(TechnicalIndicator(asset_id=asset.id, date=frame["date"].iloc[-1], indicators=indicators))
+            db.flush()
+            capture_signal_reasoning(db, snapshot, asset)
             created += 1
         db.commit()
         return {"signals_created": created, "assets_evaluated": len(assets)}

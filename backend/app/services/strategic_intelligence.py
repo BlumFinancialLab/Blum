@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.models import Asset, IntelligenceReport, PortfolioScenario, SignalSnapshot, WatchlistItem
 from app.scoring.factor_engine import compute_opportunity_score
 from app.services.accuracy import asset_accuracy_profile
+from app.services.blum_financial_model import capture_asset_reasoning
 from app.services.etf import list_etf_trends
 from app.services.financial_brain_learning import active_model_weights
 from app.services.live import live_news, market_sentiment
@@ -238,17 +239,18 @@ def asset_intelligence_report(db: Session, asset: Asset, persist: bool = True) -
         "disclaimer": DISCLAIMER,
     }
     if persist:
-        db.add(
-            IntelligenceReport(
-                asset_id=asset.id,
-                ticker=asset.ticker,
-                report_type="asset_intelligence",
-                title=report["title"],
-                summary=report["ai_conclusion"],
-                structured_output=report,
-                data_mode=report["data_mode"],
-            )
+        report_model = IntelligenceReport(
+            asset_id=asset.id,
+            ticker=asset.ticker,
+            report_type="asset_intelligence",
+            title=report["title"],
+            summary=report["ai_conclusion"],
+            structured_output=report,
+            data_mode=report["data_mode"],
         )
+        db.add(report_model)
+        db.flush()
+        capture_asset_reasoning(db, asset=asset, signal=signal, source_type="asset_intelligence_report")
         db.commit()
     return report
 

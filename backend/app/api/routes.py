@@ -17,6 +17,18 @@ from app.models import (
     AIInsight,
     AccuracySnapshot,
     Asset,
+    BlumDatasetExport,
+    BlumKnowledgeGraphEdge,
+    BlumKnowledgeGraphNode,
+    BlumKnowledgeRecord,
+    BlumModelTrainingJob,
+    BlumNarrativeMemory,
+    BlumReasoningMemory,
+    BlumRegimeMemory,
+    BlumSelfCritique,
+    BlumThesisOutcome,
+    BlumThesisQualityScore,
+    BlumTrainingExample,
     ChartAnalysis,
     ChartPatternMemory,
     ConfidenceAdjustment,
@@ -45,6 +57,24 @@ from app.models import (
 )
 from app.schemas import AssetOut, MarketUpdateRequest, NewsOut, NewsUpdateRequest, SemanticSearchRequest, SignalRunRequest
 from app.services.accuracy import asset_accuracy_profile, latest_accuracy_snapshot, market_accuracy_overview, run_accuracy_audit, signal_validation_report
+from app.services.blum_financial_model import (
+    build_training_dataset,
+    capture_ai_insight_reasoning,
+    capture_latest_asset_reasoning,
+    create_training_job_plan,
+    evaluate_thesis_outcomes,
+    export_training_jsonl,
+    get_knowledge_record,
+    graph_snapshot,
+    list_knowledge_records,
+    model_status,
+    narrative_memory,
+    quality_overview,
+    regime_memory,
+    self_critique_for_record,
+    semantic_reasoning_search,
+    training_manifest,
+)
 from app.services.dashboard import dashboard_overview, signal_payload
 from app.services.data_continuity import data_coverage_report, repair_data_gaps
 from app.services.etf import list_etf_trends, update_etf_trends
@@ -102,7 +132,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
     return {
         "service": "blum-ai-financial-intelligence",
         "app_version": settings.app_version,
-        "feature_set": "thesis-reasoning-engine-v0.6.0",
+        "feature_set": "proprietary-blum-financial-model-v0.7.0",
         "environment": settings.environment,
         "generated_at": datetime.utcnow().isoformat(),
         "hugging_face": {
@@ -149,6 +179,9 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "strategic_intelligence_layer": True,
             "self_learning_financial_brain": True,
             "chart_vision_technical_analyst": True,
+            "proprietary_blum_financial_model": True,
+            "reasoning_dataset_export": True,
+            "financial_knowledge_graph": True,
             "portfolio_scenario": True,
             "watchlist": True,
         },
@@ -177,13 +210,25 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "technical_levels": int(db.scalar(select(func.count(TechnicalLevel.id))) or 0),
             "technical_signals": int(db.scalar(select(func.count(TechnicalSignal.id))) or 0),
             "chart_pattern_memory": int(db.scalar(select(func.count(ChartPatternMemory.id))) or 0),
+            "blum_knowledge_records": int(db.scalar(select(func.count(BlumKnowledgeRecord.id))) or 0),
+            "blum_thesis_outcomes": int(db.scalar(select(func.count(BlumThesisOutcome.id))) or 0),
+            "blum_reasoning_memory": int(db.scalar(select(func.count(BlumReasoningMemory.id))) or 0),
+            "blum_training_examples": int(db.scalar(select(func.count(BlumTrainingExample.id))) or 0),
+            "blum_quality_scores": int(db.scalar(select(func.count(BlumThesisQualityScore.id))) or 0),
+            "blum_self_critiques": int(db.scalar(select(func.count(BlumSelfCritique.id))) or 0),
+            "blum_narrative_memory": int(db.scalar(select(func.count(BlumNarrativeMemory.id))) or 0),
+            "blum_regime_memory": int(db.scalar(select(func.count(BlumRegimeMemory.id))) or 0),
+            "blum_graph_nodes": int(db.scalar(select(func.count(BlumKnowledgeGraphNode.id))) or 0),
+            "blum_graph_edges": int(db.scalar(select(func.count(BlumKnowledgeGraphEdge.id))) or 0),
+            "blum_dataset_exports": int(db.scalar(select(func.count(BlumDatasetExport.id))) or 0),
+            "blum_training_jobs": int(db.scalar(select(func.count(BlumModelTrainingJob.id))) or 0),
         },
         "latest_news_created_at": latest_brain,
         "why_gui_can_look_unchanged": [
             "Hugging Face serves the previous image until the Docker build finishes successfully.",
             "The finance-domain 7B model is disabled by default unless BLUM_ENABLE_FINANCIAL_BRAIN_MODEL=true.",
             "Existing snapshots must be regenerated with Run brain or full pipeline after a new deployment.",
-            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.6.0.",
+            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.7.0.",
         ],
     }
 
@@ -237,6 +282,128 @@ def financial_brain_recalculate_weights(db: Session = Depends(get_db)) -> dict:
 @router.post("/brain/run-learning-cycle")
 def financial_brain_run_learning_cycle(limit: int = Query(default=240, ge=1, le=1000), db: Session = Depends(get_db)) -> dict:
     return run_learning_cycle(db, limit=limit)
+
+
+@router.get("/model/status")
+def blum_model_status(db: Session = Depends(get_db)) -> dict:
+    return model_status(db)
+
+
+@router.post("/model/capture/{ticker}")
+def blum_model_capture_asset(ticker: str, db: Session = Depends(get_db)) -> dict:
+    asset = require_asset(db, ticker)
+    return capture_latest_asset_reasoning(db, asset, source_type="manual_model_capture")
+
+
+@router.post("/model/capture-all")
+def blum_model_capture_all(limit: int = Query(default=80, ge=1, le=500), db: Session = Depends(get_db)) -> dict:
+    assets = db.scalars(select(Asset).where(Asset.is_active.is_(True)).order_by(Asset.ticker).limit(limit)).all()
+    records = []
+    for asset in assets:
+        records.append(capture_latest_asset_reasoning(db, asset, source_type="manual_model_capture_all"))
+    return {"status": "ok", "assets_seen": len(assets), "records": records}
+
+
+@router.post("/model/evaluate-outcomes")
+def blum_model_evaluate_outcomes(limit: int = Query(default=250, ge=1, le=2000), db: Session = Depends(get_db)) -> dict:
+    return evaluate_thesis_outcomes(db, limit=limit)
+
+
+@router.get("/model/knowledge")
+def blum_model_knowledge_records(
+    ticker: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    return list_knowledge_records(db, ticker=ticker, limit=limit)
+
+
+@router.get("/model/knowledge/{record_id}")
+def blum_model_knowledge_record(record_id: int, db: Session = Depends(get_db)) -> dict:
+    record = get_knowledge_record(db, record_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Unknown Blum knowledge record: {record_id}")
+    return record
+
+
+@router.get("/model/memory/search")
+def blum_model_memory_search(
+    q: str = Query(..., min_length=2),
+    limit: int = Query(default=12, ge=1, le=50),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    return semantic_reasoning_search(db, q, limit=limit)
+
+
+@router.post("/model/dataset/build")
+def blum_model_dataset_build(
+    limit: int = Query(default=500, ge=1, le=5000),
+    min_quality: float = Query(default=55.0, ge=0, le=100),
+    db: Session = Depends(get_db),
+) -> dict:
+    return build_training_dataset(db, limit=limit, min_quality=min_quality)
+
+
+@router.post("/model/training/export")
+def blum_model_training_export(
+    limit: int = Query(default=1000, ge=1, le=10000),
+    min_quality: float = Query(default=60.0, ge=0, le=100),
+    export_name: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> dict:
+    return export_training_jsonl(db, limit=limit, min_quality=min_quality, export_name=export_name)
+
+
+@router.get("/model/training/manifest")
+def blum_model_training_manifest() -> dict:
+    return training_manifest()
+
+
+@router.post("/model/training/jobs")
+def blum_model_training_job_plan(
+    job_name: str = Query(default="blum-analyst-lora-plan"),
+    model_family: str = Query(default="qwen"),
+    base_model: str = Query(default="Qwen/Qwen2.5-0.5B-Instruct"),
+    method: str = Query(default="lora"),
+    dataset_export_id: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> dict:
+    return create_training_job_plan(
+        db,
+        job_name=job_name,
+        model_family=model_family,
+        base_model=base_model,
+        method=method,
+        dataset_export_id=dataset_export_id,
+    )
+
+
+@router.get("/model/quality")
+def blum_model_quality(limit: int = Query(default=80, ge=1, le=500), db: Session = Depends(get_db)) -> dict:
+    return quality_overview(db, limit=limit)
+
+
+@router.get("/model/self-critique/{record_id}")
+def blum_model_self_critique(record_id: int, db: Session = Depends(get_db)) -> dict:
+    critique = self_critique_for_record(db, record_id)
+    if critique is None:
+        raise HTTPException(status_code=404, detail=f"No self-critique for Blum knowledge record: {record_id}")
+    return critique
+
+
+@router.get("/model/narratives")
+def blum_model_narratives(limit: int = Query(default=80, ge=1, le=500), db: Session = Depends(get_db)) -> list[dict]:
+    return narrative_memory(db, limit=limit)
+
+
+@router.get("/model/regimes")
+def blum_model_regimes(limit: int = Query(default=80, ge=1, le=500), db: Session = Depends(get_db)) -> list[dict]:
+    return regime_memory(db, limit=limit)
+
+
+@router.get("/model/graph")
+def blum_model_graph(limit: int = Query(default=160, ge=10, le=1000), db: Session = Depends(get_db)) -> dict:
+    return graph_snapshot(db, limit=limit)
 
 
 @router.post("/chart/analyze-image")
@@ -691,15 +858,16 @@ def ai_explain(ticker: str, db: Session = Depends(get_db)):
     news = related_news_for_asset(db, asset.id, limit=8)
     if not signal:
         insight = insufficient_evidence_insight(db, asset, news, hydration)
-        db.add(
-            AIInsight(
-                asset_id=asset.id,
-                model_name=insight["models_used"]["reasoning"],
-                insight_type="asset_explanation_incomplete",
-                structured_output=insight,
-                explanation=insight["reason"],
-            )
+        insight_model = AIInsight(
+            asset_id=asset.id,
+            model_name=insight["models_used"]["reasoning"],
+            insight_type="asset_explanation_incomplete",
+            structured_output=insight,
+            explanation=insight["reason"],
         )
+        db.add(insight_model)
+        db.flush()
+        capture_ai_insight_reasoning(db, asset, insight_model, signal=None)
         db.commit()
         return insight
     historical = similar_cases_backtest(db, asset)
@@ -726,7 +894,10 @@ def ai_explain(ticker: str, db: Session = Depends(get_db)):
     )
     insight["evidence_status"] = "ready"
     insight["auto_hydration"] = hydration
-    db.add(AIInsight(asset_id=asset.id, model_name=insight["models_used"]["reasoning"], structured_output=insight, explanation=insight["reason"]))
+    insight_model = AIInsight(asset_id=asset.id, model_name=insight["models_used"]["reasoning"], structured_output=insight, explanation=insight["reason"])
+    db.add(insight_model)
+    db.flush()
+    capture_ai_insight_reasoning(db, asset, insight_model, signal=signal)
     db.commit()
     return insight
 
