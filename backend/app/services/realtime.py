@@ -160,7 +160,7 @@ def _update_stage_progress(progress: dict) -> None:
         _state["stage_started_at"] = progress.get("stage_started_at")
         _state["stage_completed_at"] = progress.get("stage_completed_at")
         _state["completed_stages"] = progress.get("completed_stages", [])
-        _state["stage_results"] = progress.get("stage_results", {})
+        _state["stage_results"] = _compact_payload(progress.get("stage_results", {}))
 
 
 def _run_job(job_name: str, work):
@@ -183,7 +183,7 @@ def _run_job(job_name: str, work):
         with _state_lock:
             _state["last_completed_at"] = datetime.utcnow().isoformat()
             _state["last_status"] = "ok"
-            _state["last_result"] = result or {}
+            _state["last_result"] = _compact_payload(result or {})
     except Exception as exc:
         with _state_lock:
             _state["last_completed_at"] = datetime.utcnow().isoformat()
@@ -193,3 +193,59 @@ def _run_job(job_name: str, work):
     finally:
         with _state_lock:
             _state["running"] = False
+
+
+def _compact_payload(value, depth: int = 0):
+    if depth > 5:
+        return "<truncated>"
+    if isinstance(value, dict):
+        compact = {}
+        for key, item in value.items():
+            if key in {"sources", "source_diagnostics", "diagnostics"} and isinstance(item, list):
+                compact[key] = {
+                    "count": len(item),
+                    "sample": [_compact_payload(row, depth + 1) for row in item[:8]],
+                }
+                continue
+            if key in {"viewer_status", "parquet_files", "size_summary"} and isinstance(item, dict):
+                compact[key] = _compact_dataset_metadata(item)
+                continue
+            compact[key] = _compact_payload(item, depth + 1)
+        return compact
+    if isinstance(value, list):
+        if len(value) > 12:
+            return {"count": len(value), "sample": [_compact_payload(item, depth + 1) for item in value[:12]]}
+        return [_compact_payload(item, depth + 1) for item in value]
+    if isinstance(value, str) and len(value) > 600:
+        return f"{value[:600]}..."
+    return value
+
+
+def _compact_dataset_metadata(value: dict) -> dict:
+    output = {}
+    if "status" in value:
+        output["status"] = value.get("status")
+    if "file_count" in value:
+        output["file_count"] = value.get("file_count")
+    if "sample_files" in value and isinstance(value["sample_files"], list):
+        output["sample_files"] = [
+            {
+                "dataset": item.get("dataset"),
+                "config": item.get("config"),
+                "split": item.get("split"),
+                "filename": item.get("filename"),
+                "size": item.get("size"),
+            }
+            for item in value["sample_files"][:3]
+            if isinstance(item, dict)
+        ]
+    if "size" in value and isinstance(value["size"], dict):
+        dataset = value["size"].get("dataset", {})
+        if isinstance(dataset, dict):
+            output["dataset_size"] = {
+                "num_rows": dataset.get("num_rows"),
+                "num_bytes_parquet_files": dataset.get("num_bytes_parquet_files"),
+            }
+    if not output:
+        output = _compact_payload({k: v for k, v in value.items() if k != "detail"}, depth=1)
+    return output

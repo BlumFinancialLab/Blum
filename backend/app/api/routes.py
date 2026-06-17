@@ -153,6 +153,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "live_startup_enabled": settings.enable_live_startup,
             "autonomous_engine_enabled": settings.enable_autonomous_engine,
             "autonomous_cycle_minutes": settings.autonomous_cycle_minutes,
+            "autonomous_repair_limit": settings.autonomous_repair_limit,
             "yfinance_fallback_enabled": settings.enable_yfinance_fallback,
             "historical_price_seed_enabled": settings.seed_historical_prices_on_startup,
             "startup_signal_seed_enabled": settings.seed_signals_on_startup,

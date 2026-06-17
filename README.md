@@ -218,6 +218,7 @@ Blum now runs a server-side autonomous research cycle by default. Manual refresh
 ```bash
 export BLUM_ENABLE_AUTONOMOUS_ENGINE=true
 export BLUM_AUTONOMOUS_CYCLE_MINUTES=20
+export BLUM_AUTONOMOUS_REPAIR_LIMIT=20
 ```
 
 The autonomous cycle executes in this strict order:
@@ -235,7 +236,7 @@ The autonomous cycle executes in this strict order:
 11. Run Blum Financial Model reasoning and outcome learning.
 12. Persist embedded PostgreSQL backup when configured.
 
-Every cycle creates an `autonomous_engine_runs` row and a `learning_events` audit entry. `/pipeline/status` exposes the current stage, completed stages and stage diagnostics while the worker is running. If a provider fails, the run is marked `degraded` with the failing stage and traceback, rather than hiding the issue.
+Every cycle creates an `autonomous_engine_runs` row and a `learning_events` audit entry. `/pipeline/status` exposes the current stage, completed stages and compact stage diagnostics while the worker is running. Deep historical backfill is processed in batches so startup remains observable and the engine keeps cycling. If a provider fails, the run is marked `degraded` with the failing stage and traceback, rather than hiding the issue.
 
 New APIs:
 

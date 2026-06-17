@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     enable_live_startup: bool = Field(default=True, alias="BLUM_ENABLE_LIVE_STARTUP")
     enable_autonomous_engine: bool = Field(default=True, alias="BLUM_ENABLE_AUTONOMOUS_ENGINE")
     autonomous_cycle_minutes: int = Field(default=20, alias="BLUM_AUTONOMOUS_CYCLE_MINUTES")
+    autonomous_repair_limit: int = Field(default=20, alias="BLUM_AUTONOMOUS_REPAIR_LIMIT")
     seed_historical_prices_on_startup: bool = Field(default=True, alias="BLUM_SEED_HISTORICAL_PRICES_ON_STARTUP")
     seed_signals_on_startup: bool = Field(default=True, alias="BLUM_SEED_SIGNALS_ON_STARTUP")
     seed_accuracy_on_startup: bool = Field(default=True, alias="BLUM_SEED_ACCURACY_ON_STARTUP")
