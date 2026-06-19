@@ -20,7 +20,7 @@ const nav: NavItem[] = [
   { href: "/stock-radar", label: "Radar", icon: Radar, aliases: ["/etf-radar", "/ipo-radar", "/assets"] },
   { href: "/signal-lab", label: "Signals", icon: Search },
   { href: "/market-brain", label: "Brain", icon: Cpu },
-  { href: "/themes", label: "Narratives", icon: Network },
+  { href: "/narratives", label: "Narratives", icon: Network, aliases: ["/themes"] },
   { href: "/chart-analyst", label: "Charts", icon: LineChart },
   { href: "/chat", label: "Chat", icon: MessageSquare, aliases: ["/chatbot"] }
 ];
