@@ -1038,3 +1038,196 @@ class AutonomousEngineRun(Base):
     warning_count: Mapped[int] = mapped_column(Integer, default=0)
     error_payload: Mapped[dict] = mapped_column(JsonType, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class LearningRun(Base):
+    __tablename__ = "learning_runs"
+    __table_args__ = (
+        UniqueConstraint("run_id", name="uq_learning_run_id"),
+        Index("ix_learning_runs_status_started", "status", "started_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    trigger: Mapped[str] = mapped_column(String(80), default="scheduled", index=True)
+    status: Mapped[str] = mapped_column(String(80), default="running", index=True)
+    evaluation_mode: Mapped[str] = mapped_column(String(80), default="walk_forward", index=True)
+    asset_universe: Mapped[str] = mapped_column(String(120), default="stocks,etfs", index=True)
+    batch_size: Mapped[int] = mapped_column(Integer, default=0)
+    predictions_created: Mapped[int] = mapped_column(Integer, default=0)
+    outcomes_evaluated: Mapped[int] = mapped_column(Integer, default=0)
+    mistakes_found: Mapped[int] = mapped_column(Integer, default=0)
+    memory_updates: Mapped[int] = mapped_column(Integer, default=0)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    summary: Mapped[dict] = mapped_column(JsonType, default=dict)
+    anti_overfitting_report: Mapped[dict] = mapped_column(JsonType, default=dict)
+    error_payload: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class HistoricalPrediction(Base):
+    __tablename__ = "historical_predictions"
+    __table_args__ = (
+        Index("ix_historical_predictions_ticker_date", "ticker", "analysis_date"),
+        Index("ix_historical_predictions_run_created", "learning_run_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    learning_run_id: Mapped[int | None] = mapped_column(ForeignKey("learning_runs.id", ondelete="SET NULL"), index=True)
+    asset_id: Mapped[int | None] = mapped_column(ForeignKey("assets.id", ondelete="SET NULL"), index=True)
+    ticker: Mapped[str] = mapped_column(String(32), index=True)
+    asset_type: Mapped[str] = mapped_column(String(40), default="", index=True)
+    sector: Mapped[str] = mapped_column(String(120), default="", index=True)
+    market: Mapped[str] = mapped_column(String(80), default="", index=True)
+    market_regime: Mapped[str] = mapped_column(String(120), default="Unknown", index=True)
+    volatility_regime: Mapped[str] = mapped_column(String(80), default="Unknown", index=True)
+    analysis_date: Mapped[datetime] = mapped_column(Date, index=True)
+    initial_price: Mapped[float | None] = mapped_column(Float)
+    prediction_payload: Mapped[dict] = mapped_column(JsonType, default=dict)
+    point_in_time_context: Mapped[dict] = mapped_column(JsonType, default=dict)
+    expected_direction: Mapped[str] = mapped_column(String(40), default="neutral", index=True)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    model_version: Mapped[str] = mapped_column(String(80), default="blum-learning-loop-v1", index=True)
+    data_quality_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    learning_run = relationship("LearningRun")
+    asset = relationship("Asset")
+
+
+class PredictionOutcome(Base):
+    __tablename__ = "prediction_outcomes"
+    __table_args__ = (
+        UniqueConstraint("prediction_id", "timeframe", name="uq_prediction_outcome_prediction_timeframe"),
+        Index("ix_prediction_outcomes_ticker_timeframe", "ticker", "timeframe"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    prediction_id: Mapped[int] = mapped_column(ForeignKey("historical_predictions.id", ondelete="CASCADE"), index=True)
+    ticker: Mapped[str] = mapped_column(String(32), index=True)
+    timeframe: Mapped[str] = mapped_column(String(40), index=True)
+    horizon_days: Mapped[int] = mapped_column(Integer, index=True)
+    evaluation_date: Mapped[datetime | None] = mapped_column(Date, index=True)
+    price_at_evaluation: Mapped[float | None] = mapped_column(Float)
+    realized_return: Mapped[float | None] = mapped_column(Float, index=True)
+    max_favorable_excursion: Mapped[float | None] = mapped_column(Float)
+    max_adverse_excursion: Mapped[float | None] = mapped_column(Float)
+    drawdown: Mapped[float | None] = mapped_column(Float)
+    time_to_target: Mapped[int | None] = mapped_column(Integer)
+    time_to_invalidation: Mapped[int | None] = mapped_column(Integer)
+    target_hit: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    invalidation_hit: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    direction_correct: Mapped[bool | None] = mapped_column(Boolean, index=True)
+    false_positive: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    false_negative: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    missed_opportunity: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    outcome_label: Mapped[str] = mapped_column(String(40), default="inconclusive", index=True)
+    confidence_calibration_error: Mapped[float | None] = mapped_column(Float)
+    metrics_payload: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    prediction = relationship("HistoricalPrediction")
+
+
+class MistakeAnalysis(Base):
+    __tablename__ = "mistake_analysis"
+    __table_args__ = (Index("ix_mistake_analysis_error_created", "error_type", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    prediction_id: Mapped[int | None] = mapped_column(ForeignKey("historical_predictions.id", ondelete="CASCADE"), index=True)
+    outcome_id: Mapped[int | None] = mapped_column(ForeignKey("prediction_outcomes.id", ondelete="CASCADE"), index=True)
+    ticker: Mapped[str] = mapped_column(String(32), index=True)
+    timeframe: Mapped[str] = mapped_column(String(40), index=True)
+    error_type: Mapped[str] = mapped_column(String(100), index=True)
+    severity: Mapped[str] = mapped_column(String(40), default="Info", index=True)
+    predicted: Mapped[dict] = mapped_column(JsonType, default=dict)
+    actual: Mapped[dict] = mapped_column(JsonType, default=dict)
+    misleading_signal: Mapped[str] = mapped_column(Text, default="")
+    signal_to_weight_more: Mapped[str] = mapped_column(Text, default="")
+    rule_adjustment: Mapped[str] = mapped_column(Text, default="")
+    future_impact: Mapped[str] = mapped_column(Text, default="")
+    explanation: Mapped[str] = mapped_column(Text, default="")
+    payload: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    prediction = relationship("HistoricalPrediction")
+    outcome = relationship("PredictionOutcome")
+
+
+class SignalPerformance(Base):
+    __tablename__ = "signal_performance"
+    __table_args__ = (
+        UniqueConstraint("signal_name", "timeframe", "market_regime", name="uq_signal_performance_signal_timeframe_regime"),
+        Index("ix_signal_performance_reliability", "reliability_score"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    signal_name: Mapped[str] = mapped_column(String(120), index=True)
+    timeframe: Mapped[str] = mapped_column(String(40), index=True)
+    market_regime: Mapped[str] = mapped_column(String(120), default="All", index=True)
+    sample_count: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    correct_count: Mapped[int] = mapped_column(Integer, default=0)
+    false_positive_count: Mapped[int] = mapped_column(Integer, default=0)
+    false_negative_count: Mapped[int] = mapped_column(Integer, default=0)
+    average_return: Mapped[float | None] = mapped_column(Float)
+    average_drawdown: Mapped[float | None] = mapped_column(Float)
+    profit_factor: Mapped[float | None] = mapped_column(Float)
+    reliability_score: Mapped[float] = mapped_column(Float, default=50.0, index=True)
+    weight_adjustment: Mapped[float] = mapped_column(Float, default=0.0)
+    evidence: Mapped[dict] = mapped_column(JsonType, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class StrategyMemory(Base):
+    __tablename__ = "strategy_memory"
+    __table_args__ = (
+        UniqueConstraint("memory_key", name="uq_strategy_memory_key"),
+        Index("ix_strategy_memory_category_reliability", "category", "reliability_score"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    memory_key: Mapped[str] = mapped_column(String(180), unique=True, index=True)
+    category: Mapped[str] = mapped_column(String(100), index=True)
+    lesson: Mapped[str] = mapped_column(Text, default="")
+    conditions: Mapped[dict] = mapped_column(JsonType, default=dict)
+    reliability_score: Mapped[float] = mapped_column(Float, default=50.0, index=True)
+    sample_count: Mapped[int] = mapped_column(Integer, default=0)
+    positive_count: Mapped[int] = mapped_column(Integer, default=0)
+    negative_count: Mapped[int] = mapped_column(Integer, default=0)
+    evidence: Mapped[dict] = mapped_column(JsonType, default=dict)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
+class ModelVersion(Base):
+    __tablename__ = "model_versions"
+    __table_args__ = (Index("ix_model_versions_active_created", "is_active", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    version: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    model_name: Mapped[str] = mapped_column(String(160), default="BLUM Learning Loop", index=True)
+    weights: Mapped[dict] = mapped_column(JsonType, default=dict)
+    previous_weights: Mapped[dict] = mapped_column(JsonType, default=dict)
+    training_window: Mapped[dict] = mapped_column(JsonType, default=dict)
+    validation_metrics: Mapped[dict] = mapped_column(JsonType, default=dict)
+    anti_overfitting_report: Mapped[dict] = mapped_column(JsonType, default=dict)
+    change_log: Mapped[str] = mapped_column(Text, default="")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class LearningMetric(Base):
+    __tablename__ = "learning_metrics"
+    __table_args__ = (Index("ix_learning_metrics_name_timeframe_created", "metric_name", "timeframe", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    metric_name: Mapped[str] = mapped_column(String(120), index=True)
+    timeframe: Mapped[str] = mapped_column(String(40), default="all", index=True)
+    market_regime: Mapped[str] = mapped_column(String(120), default="all", index=True)
+    metric_value: Mapped[float | None] = mapped_column(Float)
+    sample_count: Mapped[int] = mapped_column(Integer, default=0)
+    payload: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)

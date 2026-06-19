@@ -26,6 +26,7 @@ from app.services.etf import update_etf_trends
 from app.services.fundamentals import update_fundamentals
 from app.services.huggingface_datasets import dataset_catalog_status, refresh_huggingface_dataset_catalog
 from app.services.ipo import update_ipo_radar
+from app.services.learning_loop import LearningLoopService
 from app.services.macro import update_macro_snapshots
 from app.services.market_data import MarketDataService
 from app.services.persistence import backup_embedded_postgres_if_configured
@@ -81,6 +82,7 @@ class AutonomousResearchEngine:
         stage("accuracy_audit", lambda: run_accuracy_audit(db, limit=settings.max_update_assets))
         if settings.enable_learning_loop:
             stage("blum_financial_model", lambda: run_model_learning_cycle(db, limit=settings.blum_model_cycle_limit))
+            stage("blum_learning_loop", lambda: LearningLoopService().run_batch(db, batch_size=settings.learning_batch_size, trigger="autonomous_engine"))
         stage("persistence_backup", lambda: backup_embedded_postgres_if_configured(reason="autonomous_engine_cycle"))
 
         readiness = self.readiness(db, stage_results)
@@ -151,6 +153,7 @@ class AutonomousResearchEngine:
         news_count = int(db.scalar(select(func.count(NewsArticle.id))) or 0)
         reasoning_records = int(db.scalar(select(func.count(BlumKnowledgeRecord.id))) or 0)
         dataset_sources = int(db.scalar(select(func.count(ExternalDatasetSource.id))) or 0)
+        learning_stage = stage_results.get("blum_learning_loop", {}).get("result", {})
         coverage = (priced_assets / active_assets * 100) if active_assets else 0.0
         evidence_components = [
             min(100.0, coverage),
@@ -172,6 +175,7 @@ class AutonomousResearchEngine:
             "data_coverage_score": round(coverage, 2),
             "readiness_score": round(sum(evidence_components) / len(evidence_components), 2),
             "reasoning_memory_created": int(model_stage.get("knowledge_records_created", 0) or 0),
+            "learning_reports_created": int(learning_stage.get("reports_created", 0) or 0),
             "warning_count": warnings,
             "errors": errors,
             "policy": "Autonomous research improves evidence quality and calibration; it does not guarantee market outperformance or execute trades.",

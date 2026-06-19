@@ -16,6 +16,7 @@ from app.models import Asset, ChatMessage, ChatSession, NewsArticle, NewsAssetLi
 from app.services.blum_training_memory import BlumTrainingMemoryService
 from app.services.fundamentals import fundamentals_for_asset
 from app.services.live import market_sentiment
+from app.services.learning_loop import LearningDashboardService
 from app.services.market_data import market_snapshot_for_asset
 from app.services.semantic import SemanticService
 from app.services.strategic_intelligence import community_sentiment, market_narrative, opportunity_radar
@@ -183,6 +184,7 @@ def financial_chat_response(
     community = community_sentiment(db)
     sentiment = market_sentiment(db, hours=48)
     memory_hits = BlumTrainingMemoryService().semantic_memory(db, message, limit=6)
+    learning_loop_context = LearningDashboardService().chat_memory(db, message, assets[:5], limit=8)
     semantic_hits = SemanticService().search(db, message, limit=8) if include_semantic_search else []
     asset_packets = [asset_context(db, asset) for asset in assets[:12]]
     candidates = rank_candidates(opportunities.get("rows", []), asset_packets)
@@ -196,6 +198,7 @@ def financial_chat_response(
         community=community,
         sentiment=sentiment,
         memory_hits=memory_hits,
+        learning_loop_context=learning_loop_context,
         horizon=horizon,
         risk_profile=risk_profile,
     )
@@ -216,9 +219,10 @@ def financial_chat_response(
         },
         "semantic_evidence": semantic_hits,
         "training_memory": memory_hits,
+        "learning_loop_context": learning_loop_context,
         "rag_pipeline": rag_pipeline(detected_language, intent),
-        "sources_used": sources_used(asset_packets, semantic_hits, memory_hits, narrative, sentiment),
-        "context_coverage": context_coverage(asset_packets, semantic_hits, memory_hits),
+        "sources_used": sources_used(asset_packets, semantic_hits, memory_hits, narrative, sentiment, learning_loop_context),
+        "context_coverage": context_coverage(asset_packets, semantic_hits, memory_hits, learning_loop_context),
         "suggested_followups": suggested_followups(candidates, assets, detected_language),
         "models_used": {
             "sentiment": "ProsusAI/finbert via stored sentiment rows, VADER baseline when available",
@@ -405,6 +409,7 @@ def build_answer(
     community: dict,
     sentiment: dict,
     memory_hits: list[dict],
+    learning_loop_context: dict,
     horizon: str,
     risk_profile: str,
 ) -> dict:
@@ -413,7 +418,7 @@ def build_answer(
     dominant = narrative.get("dominant_theme", {}) if isinstance(narrative, dict) else {}
     market_mood = narrative.get("market_mood", "mixed") if isinstance(narrative, dict) else "mixed"
     thesis = executive_thesis(language, top, market_mood, dominant, intent)
-    support = supporting_evidence(top, asset_packets, narrative, sentiment, memory_hits)
+    support = supporting_evidence(top, asset_packets, narrative, sentiment, memory_hits, learning_loop_context)
     contradictions = contradicting_evidence(top, asset_packets)
     missing = missing_data_points(asset_packets)
     scenarios = scenario_block(language, top)
@@ -421,6 +426,7 @@ def build_answer(
     risks = risk_points(top, community, missing)
     technical = technical_block(top)
     fundamental = fundamental_block(top)
+    learning_points = learning_loop_points(learning_loop_context, language)
     sniper = market_sniper_mode(top, horizon, risk_profile, enabled=intent == "market_sniper")
     sections = [
         {"key": "summary", "title": labels["summary"], "bullets": [thesis]},
@@ -428,6 +434,7 @@ def build_answer(
         {"key": "technical", "title": labels["technical"], "bullets": technical},
         {"key": "fundamental", "title": labels["fundamental"], "bullets": fundamental},
         {"key": "sentiment", "title": labels["sentiment"], "bullets": narrative_sentiment_points(narrative, sentiment, community)},
+        {"key": "learning", "title": "BLUM Learning Loop", "bullets": learning_points},
         {"key": "scenarios", "title": labels["scenarios"], "bullets": scenarios},
         {"key": "levels", "title": labels["levels"], "bullets": levels},
         {"key": "risks", "title": labels["risks"], "bullets": risks},
@@ -447,11 +454,13 @@ def build_answer(
         "bear_case": scenarios[2] if len(scenarios) > 2 else "",
         "risk_reward_view": risk_reward_view(top, risk_profile, horizon, language),
         "what_to_monitor": monitor_points(top, asset_packets, sentiment, community, language),
+        "learning_loop_view": learning_points,
         "research_plan": planning_steps(top, risk_profile, horizon, language),
         "operation_plan": operation_planning_steps(top, horizon, language),
         "market_may_be_missing": market_may_be_missing(top, narrative, sentiment, language),
         "market_sniper_mode": sniper,
-        "data_quality": data_quality(top, asset_packets, memory_hits),
+        "data_quality": data_quality(top, asset_packets, memory_hits, learning_loop_context),
+        "learning_loop_memory": learning_loop_context,
         "answer_to_user": conclusion_points(language, top, risk_profile, horizon, intent)[0],
         "intellectual_honesty": intellectual_honesty(language),
     }
@@ -498,8 +507,10 @@ def compact_chat_payload(payload: dict) -> dict:
             "standard_sections": answer.get("standard_sections", []),
             "market_sniper_mode": answer.get("market_sniper_mode"),
             "data_quality": answer.get("data_quality"),
+            "learning_loop_memory": answer.get("learning_loop_memory"),
             "risk_reward_view": answer.get("risk_reward_view"),
             "what_to_monitor": answer.get("what_to_monitor", []),
+            "learning_loop_view": answer.get("learning_loop_view", []),
         },
         "candidate_opportunities": payload.get("candidate_opportunities", [])[:10],
         "context_coverage": payload.get("context_coverage"),
@@ -770,7 +781,7 @@ def executive_thesis(language: str, top: list[dict], market_mood: str, dominant:
     return f"BLUM frames this as a {market_mood} market research problem. The dominant narrative is {theme}. The current research queue is {tickers}, with conviction controlled by price, volume, news, fundamentals and historical memory."
 
 
-def supporting_evidence(top: list[dict], asset_packets: list[dict], narrative: dict, sentiment: dict, memory_hits: list[dict]) -> list[str]:
+def supporting_evidence(top: list[dict], asset_packets: list[dict], narrative: dict, sentiment: dict, memory_hits: list[dict], learning_loop_context: dict) -> list[str]:
     rows = []
     for item in top[:6]:
         rows.append(
@@ -782,6 +793,14 @@ def supporting_evidence(top: list[dict], asset_packets: list[dict], narrative: d
         rows.append(f"Market sentiment window contains {sentiment.get('article_count')} articles.")
     if memory_hits:
         rows.append(f"Reasoning memory retrieved {len(memory_hits)} historical Blum memory records relevant to the query.")
+    strategy_memory = learning_loop_context.get("strategy_memory", []) if isinstance(learning_loop_context, dict) else []
+    signal_reliability = learning_loop_context.get("signal_reliability", []) if isinstance(learning_loop_context, dict) else []
+    if strategy_memory:
+        top_memory = strategy_memory[0]
+        rows.append(f"Learning Loop memory: {top_memory.get('lesson')} | reliability {top_memory.get('reliability_score')}/100 over {top_memory.get('sample_count')} samples.")
+    if signal_reliability:
+        top_signal = signal_reliability[0]
+        rows.append(f"Most reliable simulated signal factor: {top_signal.get('signal_name')} / {top_signal.get('timeframe')} with reliability {top_signal.get('reliability_score')}/100.")
     return rows or ["No strong evidence stack is available yet."]
 
 
@@ -837,6 +856,34 @@ def narrative_sentiment_points(narrative: dict, sentiment: dict, community: dict
     for item in (community.get("most_discussed_assets") or [])[:3]:
         rows.append(f"{item.get('ticker')}: discussion count {item.get('discussion_count')}, hype-bubble risk {item.get('hype_bubble_risk')}.")
     return rows
+
+
+def learning_loop_points(learning_loop_context: dict, language: str) -> list[str]:
+    if not isinstance(learning_loop_context, dict):
+        return ["BLUM Learning Loop memory is not available in this response context."]
+    memory = learning_loop_context.get("strategy_memory", [])
+    reliability = learning_loop_context.get("signal_reliability", [])
+    predictions = learning_loop_context.get("ticker_recent_predictions", [])
+    rows = []
+    if memory:
+        for item in memory[:3]:
+            if language == "it":
+                rows.append(f"Lezione storica: {item.get('lesson')} | affidabilita {item.get('reliability_score')}/100 su {item.get('sample_count')} campioni.")
+            else:
+                rows.append(f"Historical lesson: {item.get('lesson')} | reliability {item.get('reliability_score')}/100 across {item.get('sample_count')} samples.")
+    if reliability:
+        for item in reliability[:2]:
+            if language == "it":
+                rows.append(f"Fattore simulato: {item.get('signal_name')} ({item.get('timeframe')}) | reliability {item.get('reliability_score')}/100 | false positive {item.get('false_positive_count')}.")
+            else:
+                rows.append(f"Simulated factor: {item.get('signal_name')} ({item.get('timeframe')}) | reliability {item.get('reliability_score')}/100 | false positives {item.get('false_positive_count')}.")
+    if predictions:
+        rows.append(f"Ticker-specific historical predictions retrieved: {len(predictions)}.")
+    return rows or [
+        "BLUM has not accumulated enough point-in-time simulation memory for this query yet; confidence should remain conservative."
+        if language == "en"
+        else "BLUM non ha ancora abbastanza memoria point-in-time per questa domanda; la confidence deve restare prudente."
+    ]
 
 
 def scenario_block(language: str, top: list[dict]) -> list[str]:
@@ -1001,7 +1048,7 @@ def missing_data_points(asset_packets: list[dict]) -> list[str]:
     return rows
 
 
-def data_quality(top: list[dict], asset_packets: list[dict], memory_hits: list[dict]) -> dict:
+def data_quality(top: list[dict], asset_packets: list[dict], memory_hits: list[dict], learning_loop_context: dict) -> dict:
     checks = []
     for packet in asset_packets:
         checks.extend(
@@ -1019,6 +1066,8 @@ def data_quality(top: list[dict], asset_packets: list[dict], memory_hits: list[d
         "label": "High" if score >= 75 else "Medium" if score >= 45 else "Low",
         "asset_contexts": len(asset_packets),
         "memory_hits": len(memory_hits),
+        "learning_memory_hits": len((learning_loop_context or {}).get("strategy_memory", [])),
+        "signal_reliability_rows": len((learning_loop_context or {}).get("signal_reliability", [])),
         "policy": "Missing data is surfaced and lowers conviction. No synthetic market data is created.",
     }
 
@@ -1035,7 +1084,7 @@ def rag_pipeline(language: str, intent: str) -> list[dict]:
     ]
 
 
-def sources_used(asset_packets: list[dict], semantic_hits: list[dict], memory_hits: list[dict], narrative: dict, sentiment: dict) -> list[dict]:
+def sources_used(asset_packets: list[dict], semantic_hits: list[dict], memory_hits: list[dict], narrative: dict, sentiment: dict, learning_loop_context: dict) -> list[dict]:
     sources = [
         {"name": "Blum asset universe", "type": "internal_db", "coverage": len(asset_packets)},
         {"name": "Stored OHLCV market snapshots", "type": "internal_db", "coverage": sum(1 for item in asset_packets if item.get("market_snapshot", {}).get("data_status") == "ready")},
@@ -1045,11 +1094,13 @@ def sources_used(asset_packets: list[dict], semantic_hits: list[dict], memory_hi
         {"name": "Narrative intelligence", "type": "semantic_news", "coverage": len(narrative.get("emerging_subthemes", []) or [])},
         {"name": "Semantic news search", "type": "embeddings", "coverage": len(semantic_hits)},
         {"name": "Blum training memory", "type": "reasoning_memory", "coverage": len(memory_hits)},
+        {"name": "BLUM Learning Loop strategy memory", "type": "point_in_time_simulation_memory", "coverage": len((learning_loop_context or {}).get("strategy_memory", []))},
+        {"name": "BLUM Learning Loop signal reliability", "type": "walk_forward_outcome_memory", "coverage": len((learning_loop_context or {}).get("signal_reliability", []))},
     ]
     return sources
 
 
-def context_coverage(asset_packets: list[dict], semantic_hits: list[dict], memory_hits: list[dict]) -> dict:
+def context_coverage(asset_packets: list[dict], semantic_hits: list[dict], memory_hits: list[dict], learning_loop_context: dict) -> dict:
     return {
         "assets_detected": len(asset_packets),
         "assets_with_price": sum(1 for item in asset_packets if item.get("market_snapshot", {}).get("data_status") == "ready"),
@@ -1058,6 +1109,8 @@ def context_coverage(asset_packets: list[dict], semantic_hits: list[dict], memor
         "assets_with_news": sum(1 for item in asset_packets if item.get("recent_news")),
         "semantic_hits": len(semantic_hits),
         "memory_hits": len(memory_hits),
+        "learning_loop_memory_hits": len((learning_loop_context or {}).get("strategy_memory", [])),
+        "learning_loop_signal_reliability": len((learning_loop_context or {}).get("signal_reliability", [])),
     }
 
 

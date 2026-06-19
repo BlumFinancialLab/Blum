@@ -38,22 +38,30 @@ from app.models import (
     EmbeddingVector,
     ExternalDatasetSource,
     FundamentalSnapshot,
+    HistoricalPrediction,
     HistoricalSimilarityCase,
     IntelligenceReport,
     LearningEvent,
+    LearningMetric,
+    LearningRun,
     MacroSnapshot,
+    MistakeAnalysis,
     ModelWeightVersion,
+    ModelVersion,
     NewsArticle,
     NewsAssetLink,
     PortfolioScenario,
+    PredictionOutcome,
     PriceHistory,
     PriceProviderCheck,
     SectorAccuracyProfile,
     SentimentAnalysis,
     SignalEvaluation,
     SignalOutcome,
+    SignalPerformance,
     SignalSnapshot,
     SourceReliabilityScore,
+    StrategyMemory,
     TechnicalLevel,
     TechnicalSignal,
     TickerAccuracyProfile,
@@ -102,6 +110,7 @@ from app.services.financial_chat import chat_context_overview, chat_history, fin
 from app.services.hybrid_chart_intelligence import HybridChartIntelligence
 from app.services.huggingface_datasets import dataset_catalog_status, refresh_huggingface_dataset_catalog
 from app.services.ipo import ipo_radar, sec_company_submissions, update_ipo_radar
+from app.services.learning_loop import LearningDashboardService, LearningLoopService
 from app.services.live import live_news, market_sentiment
 from app.services.macro import macro_overview, update_macro_snapshots
 from app.services.market_brain import build_market_brain, latest_market_brain, market_brain_history
@@ -142,7 +151,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
     return {
         "service": "blum-ai-financial-intelligence",
         "app_version": settings.app_version,
-        "feature_set": "autonomous-europe-multilingual-financial-chat-v0.8.5",
+        "feature_set": "autonomous-learning-loop-financial-intelligence-v0.9.0",
         "environment": settings.environment,
         "generated_at": datetime.utcnow().isoformat(),
         "hugging_face": {
@@ -166,6 +175,11 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "accuracy_audit_minutes": settings.accuracy_audit_minutes,
             "learning_loop_enabled": settings.enable_learning_loop,
             "learning_loop_minutes": settings.learning_loop_minutes,
+            "learning_batch_size": settings.learning_batch_size,
+            "learning_max_daily_runs": settings.learning_max_daily_runs,
+            "learning_min_history_years": settings.learning_min_history_years,
+            "learning_asset_universe": settings.learning_asset_universe,
+            "learning_evaluation_mode": settings.learning_evaluation_mode,
             "blum_model_cycle_minutes": settings.blum_model_cycle_minutes,
             "blum_model_cycle_limit": settings.blum_model_cycle_limit,
             "chart_vision_mode": settings.chart_vision_mode,
@@ -205,6 +219,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "multilingual_financial_chat": True,
             "autonomous_research_engine": True,
             "huggingface_dataset_catalog": True,
+            "blum_learning_loop": True,
         },
         "database_counts": {
             "assets": int(db.scalar(select(func.count(Asset.id))) or 0),
@@ -221,6 +236,14 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "signal_evaluations": int(db.scalar(select(func.count(SignalEvaluation.id))) or 0),
             "signal_outcomes": int(db.scalar(select(func.count(SignalOutcome.id))) or 0),
             "learning_events": int(db.scalar(select(func.count(LearningEvent.id))) or 0),
+            "learning_runs": int(db.scalar(select(func.count(LearningRun.id))) or 0),
+            "historical_predictions": int(db.scalar(select(func.count(HistoricalPrediction.id))) or 0),
+            "prediction_outcomes": int(db.scalar(select(func.count(PredictionOutcome.id))) or 0),
+            "mistake_analysis": int(db.scalar(select(func.count(MistakeAnalysis.id))) or 0),
+            "signal_performance": int(db.scalar(select(func.count(SignalPerformance.id))) or 0),
+            "strategy_memory": int(db.scalar(select(func.count(StrategyMemory.id))) or 0),
+            "model_versions": int(db.scalar(select(func.count(ModelVersion.id))) or 0),
+            "learning_metrics": int(db.scalar(select(func.count(LearningMetric.id))) or 0),
             "model_weight_versions": int(db.scalar(select(func.count(ModelWeightVersion.id))) or 0),
             "historical_similarity_cases": int(db.scalar(select(func.count(HistoricalSimilarityCase.id))) or 0),
             "confidence_adjustments": int(db.scalar(select(func.count(ConfidenceAdjustment.id))) or 0),
@@ -253,7 +276,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "Hugging Face serves the previous image until the Docker build finishes successfully.",
             "The finance-domain 7B model is disabled by default unless BLUM_ENABLE_FINANCIAL_BRAIN_MODEL=true.",
             "Existing snapshots are refreshed by the autonomous engine after a successful deployment.",
-            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.8.5.",
+            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.9.0.",
         ],
     }
 
@@ -332,6 +355,49 @@ def financial_brain_recalculate_weights(db: Session = Depends(get_db)) -> dict:
 @router.post("/brain/run-learning-cycle")
 def financial_brain_run_learning_cycle(limit: int = Query(default=240, ge=1, le=1000), db: Session = Depends(get_db)) -> dict:
     return run_learning_cycle(db, limit=limit)
+
+
+@router.get("/learning/status")
+def blum_learning_status(db: Session = Depends(get_db)) -> dict:
+    return LearningDashboardService().dashboard(db)
+
+
+@router.get("/learning/dashboard")
+def blum_learning_dashboard(db: Session = Depends(get_db)) -> dict:
+    return LearningDashboardService().dashboard(db)
+
+
+@router.get("/learning/runs")
+def blum_learning_runs(limit: int = Query(default=50, ge=1, le=200), db: Session = Depends(get_db)) -> list[dict]:
+    return LearningDashboardService().runs(db, limit=limit)
+
+
+@router.get("/learning/predictions")
+def blum_learning_predictions(
+    ticker: str | None = Query(default=None),
+    limit: int = Query(default=80, ge=1, le=300),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    return LearningDashboardService().predictions(db, ticker=ticker, limit=limit)
+
+
+@router.get("/learning/memory")
+def blum_learning_memory(limit: int = Query(default=40, ge=1, le=200), db: Session = Depends(get_db)) -> dict:
+    dashboard = LearningDashboardService()
+    return {
+        "strategy_memory": dashboard.strategy_memory(db, limit=limit),
+        "signal_performance": dashboard.signal_performance(db, limit=limit),
+        "mistakes": dashboard.mistake_summary(db),
+        "policy": "Memory is updated from point-in-time historical simulations and never treated as certainty.",
+    }
+
+
+@router.post("/learning/run-cycle")
+def blum_learning_run_cycle(
+    batch_size: int = Query(default=settings.learning_batch_size, ge=1, le=500),
+    db: Session = Depends(get_db),
+) -> dict:
+    return LearningLoopService().run_batch(db, batch_size=batch_size, trigger="manual_api_diagnostic")
 
 
 @router.get("/model/status")

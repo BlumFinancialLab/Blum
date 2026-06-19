@@ -34,6 +34,7 @@ This is not a consumer trading app and not a simple dashboard. The project is a 
 | Semantic layer | sentence-transformers embeddings, semantic search, theme discovery |
 | Reasoning | lightweight Qwen-compatible LLM evidence-only explanation layer |
 | Financial Brain | finance-domain open model adapter, default `AdaptLLM/finance-chat` when enabled |
+| BLUM Learning Loop | point-in-time historical simulation lab, outcome evaluation, mistake taxonomy, adaptive signal reliability and strategy memory |
 | Time-series intelligence | statistical fallback compatible with future Chronos, TimesFM or PatchTST adapters |
 | Deployment | Hugging Face Docker Space |
 
@@ -74,7 +75,10 @@ Blum does not use one generic AI model for everything.
 19. Version scoring weights in the database when real matured outcomes justify recalibration.
 20. Generate professional chart analysis from deterministic OHLCV evidence and optional Qwen3-VL/InternVL3 visual interpretation.
 21. Persist chart analyses, technical levels, technical signals and chart pattern memory.
-22. Produce AI explanations using only retrieved evidence.
+22. Run BLUM Learning Loop point-in-time simulations on random historical asset/date samples.
+23. Hide future prices during prediction generation, then reveal future OHLCV only during outcome evaluation.
+24. Classify mistakes, update strategy memory, recalibrate signal reliability and persist reversible model-weight versions.
+25. Produce AI explanations using only retrieved evidence.
 
 ## Live Runtime
 
@@ -89,6 +93,7 @@ When the FastAPI application starts, APScheduler launches a background intellige
 - `macro_refresh`: FRED public macro context refresh every 240 minutes by default.
 - `fundamentals_refresh`: SEC companyfacts refresh every 720 minutes by default.
 - `financial_brain_learning`: self-learning evaluation, memory refresh and confidence calibration every 360 minutes by default.
+- `blum_point_in_time_learning_loop`: random historical point-in-time simulation, outcome evaluation and strategy-memory refresh every 360 minutes by default.
 
 The dashboard polls live JSON endpoints every 30 seconds and shows worker state, latest public news, sentiment distribution, source/model diagnostics and signal readiness. No generated headlines, generated prices or fabricated sentiment are shown.
 
@@ -200,6 +205,59 @@ The UI exposes:
 
 Governance rules are enforced in product language and API output: no absolute certainty, no direct financial advice, no autonomous trading, no self-modifying code and clear separation between observed data, inference and hypothesis.
 
+## BLUM Learning Loop
+
+BLUM Learning Loop is a separate point-in-time simulation lab. It does not try to create a fake 100% win rate. Its objective is to improve statistical edge, reduce false positives, calibrate confidence and document which reasoning patterns work or fail under different regimes.
+
+Each cycle:
+
+1. Selects a random active stock or ETF with sufficient stored historical OHLCV.
+2. Selects a historical analysis date with enough future data available for later evaluation.
+3. Builds a point-in-time packet using only data known on or before that date.
+4. Generates short, mid and long horizon predictions.
+5. Persists the forecast before outcome evaluation.
+6. Reveals future OHLCV only to evaluate the forecast.
+7. Measures direction correctness, target hit, invalidation hit, max favorable excursion, max adverse excursion, drawdown, realized return, false positives, false negatives, missed opportunities and confidence calibration.
+8. Classifies mistakes such as weak volume confirmation, sentiment overestimation, volatility expansion, support/resistance failure, overconfidence or insufficient data.
+9. Updates strategy memory and signal-factor reliability.
+10. Writes a new model-weight version when enough historical outcomes justify a gradual recalibration.
+
+New persistence tables:
+
+- `learning_runs`
+- `historical_predictions`
+- `prediction_outcomes`
+- `mistake_analysis`
+- `signal_performance`
+- `strategy_memory`
+- `model_versions`
+- `learning_metrics`
+
+Configuration:
+
+```bash
+export LEARNING_LOOP_ENABLED=true
+export LEARNING_BATCH_SIZE=100
+export LEARNING_MAX_DAILY_RUNS=1000
+export LEARNING_RANDOM_SEED=
+export LEARNING_MIN_HISTORY_YEARS=3
+export LEARNING_ASSET_UNIVERSE=stocks,etfs
+export LEARNING_EVALUATION_MODE=walk_forward
+```
+
+The loop includes anti-overfitting controls:
+
+- temporal point-in-time sampling;
+- walk-forward evaluation;
+- sample-size guardrails;
+- multi-ticker, multi-sector and multi-regime coverage metrics;
+- warnings for suspiciously perfect small-sample hit rates;
+- confidence updates that are gradual and reversible;
+- no self-modifying source code;
+- no autonomous trading.
+
+The chatbot reads BLUM Learning Loop memory when answering setup-quality questions such as: “This setup has worked in the past?”, “What is the historical false-positive risk?”, “What has BLUM learned about this pattern?” and “Which factor should reduce confidence?”.
+
 ## Blum Financial Model
 
 Blum now includes the foundation for a proprietary reasoning model called **Blum Financial Model**. This is not another chatbot layer and it does not train automatically inside the Space. It is the infrastructure that preserves, evaluates and exports Blum's accumulated financial reasoning so a future **Blum Analyst** model can be trained from Blum's own thesis history.
@@ -278,7 +336,8 @@ The autonomous cycle executes in this strict order:
 9. Update IPO radar.
 10. Run accuracy audit.
 11. Run Blum Financial Model reasoning and outcome learning.
-12. Persist embedded PostgreSQL backup when configured.
+12. Run BLUM Learning Loop point-in-time historical simulation batch.
+13. Persist embedded PostgreSQL backup when configured.
 
 Every cycle creates an `autonomous_engine_runs` row and a `learning_events` audit entry. `/pipeline/status` exposes the current stage, completed stages and compact stage diagnostics while the worker is running. Deep historical backfill is processed in batches so startup remains observable and the engine keeps cycling. If a provider fails, the run is marked `degraded` with the failing stage and traceback, rather than hiding the issue.
 
@@ -460,6 +519,12 @@ FastAPI exposes clean JSON endpoints:
 - `POST /brain/evaluate-signals`
 - `POST /brain/recalculate-weights`
 - `POST /brain/run-learning-cycle`
+- `GET /learning/status`
+- `GET /learning/dashboard`
+- `GET /learning/runs`
+- `GET /learning/predictions`
+- `GET /learning/memory`
+- `POST /learning/run-cycle`
 - `POST /chart/analyze-image`
 - `POST /chart/analyze-ticker`
 - `GET /chart/technical-report/{ticker}`
@@ -505,6 +570,7 @@ Interactive API docs are available at `/docs`.
 - Asset Intelligence Report
 - AI Portfolio Scenario
 - Market Brain
+- BLUM Learning Loop
 - Chart Analyst
 - BLUM Chat
 - Asset Detail
@@ -548,6 +614,11 @@ Optional self-learning cadence:
 ```bash
 export BLUM_ENABLE_LEARNING_LOOP=true
 export BLUM_LEARNING_LOOP_MINUTES=360
+export LEARNING_BATCH_SIZE=100
+export LEARNING_MAX_DAILY_RUNS=1000
+export LEARNING_MIN_HISTORY_YEARS=3
+export LEARNING_ASSET_UNIVERSE=stocks,etfs
+export LEARNING_EVALUATION_MODE=walk_forward
 export BLUM_MODEL_CYCLE_MINUTES=5
 export BLUM_MODEL_CYCLE_LIMIT=120
 export BLUM_ENABLE_HF_DATASET_CATALOG=true

@@ -118,6 +118,8 @@ export type FinancialChatResponse = {
     research_plan?: string[];
     operation_plan?: string[];
     market_may_be_missing?: string[];
+    learning_loop_view?: string[];
+    learning_loop_memory?: Record<string, any>;
     market_sniper_mode?: Record<string, any>;
     data_quality?: Record<string, any>;
     answer_to_user: string;
@@ -128,6 +130,7 @@ export type FinancialChatResponse = {
   market_context: Record<string, any>;
   semantic_evidence: Array<Record<string, any>>;
   training_memory?: Array<Record<string, any>>;
+  learning_loop_context?: Record<string, any>;
   rag_pipeline?: Array<Record<string, any>>;
   sources_used?: Array<Record<string, any>>;
   context_coverage?: Record<string, any>;
@@ -189,6 +192,11 @@ export type SystemStatus = {
     accuracy_audit_minutes?: number;
     learning_loop_enabled?: boolean;
     learning_loop_minutes?: number;
+    learning_batch_size?: number;
+    learning_max_daily_runs?: number;
+    learning_min_history_years?: number;
+    learning_asset_universe?: string;
+    learning_evaluation_mode?: string;
     blum_model_cycle_minutes?: number;
     blum_model_cycle_limit?: number;
     fundamentals_refresh_minutes?: number;

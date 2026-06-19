@@ -1,11 +1,11 @@
 from functools import lru_cache
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
     app_name: str = "Blum AI Financial Intelligence"
-    app_version: str = "0.8.5"
+    app_version: str = "0.9.0"
     environment: str = Field(default="demo", alias="ENVIRONMENT")
     database_url: str = Field(
         default="postgresql+psycopg2://postgres:postgres@127.0.0.1:5432/blum",
@@ -41,8 +41,14 @@ class Settings(BaseSettings):
     market_refresh_minutes: int = Field(default=45, alias="BLUM_MARKET_REFRESH_MINUTES")
     data_gap_repair_minutes: int = Field(default=180, alias="BLUM_DATA_GAP_REPAIR_MINUTES")
     accuracy_audit_minutes: int = Field(default=240, alias="BLUM_ACCURACY_AUDIT_MINUTES")
-    enable_learning_loop: bool = Field(default=True, alias="BLUM_ENABLE_LEARNING_LOOP")
-    learning_loop_minutes: int = Field(default=360, alias="BLUM_LEARNING_LOOP_MINUTES")
+    enable_learning_loop: bool = Field(default=True, validation_alias=AliasChoices("LEARNING_LOOP_ENABLED", "BLUM_ENABLE_LEARNING_LOOP"))
+    learning_loop_minutes: int = Field(default=360, validation_alias=AliasChoices("LEARNING_LOOP_MINUTES", "BLUM_LEARNING_LOOP_MINUTES"))
+    learning_batch_size: int = Field(default=100, alias="LEARNING_BATCH_SIZE")
+    learning_max_daily_runs: int = Field(default=1000, alias="LEARNING_MAX_DAILY_RUNS")
+    learning_random_seed: str = Field(default="", alias="LEARNING_RANDOM_SEED")
+    learning_min_history_years: int = Field(default=3, alias="LEARNING_MIN_HISTORY_YEARS")
+    learning_asset_universe: str = Field(default="stocks,etfs", alias="LEARNING_ASSET_UNIVERSE")
+    learning_evaluation_mode: str = Field(default="walk_forward", alias="LEARNING_EVALUATION_MODE")
     blum_model_cycle_minutes: int = Field(default=5, alias="BLUM_MODEL_CYCLE_MINUTES")
     blum_model_cycle_limit: int = Field(default=160, alias="BLUM_MODEL_CYCLE_LIMIT")
     fundamentals_refresh_minutes: int = Field(default=720, alias="BLUM_FUNDAMENTALS_REFRESH_MINUTES")
