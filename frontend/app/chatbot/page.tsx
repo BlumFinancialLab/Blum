@@ -308,6 +308,11 @@ function RichAnswer({ text }: { text: string }) {
 }
 
 function ResponseEvidence({ response }: { response: FinancialChatResponse }) {
+  const style = response.answer.response_style ?? "structured";
+  const lightweight = ["concise_safe", "clarification", "error", "technical", "fundamental"].includes(style);
+  if (lightweight) {
+    return <p className="chat-disclaimer">{response.disclaimer}</p>;
+  }
   return (
     <div className="chat-response-evidence">
       <div className="chat-evidence-columns">
@@ -399,4 +404,3 @@ function SourceBadge({ source }: { source: Record<string, any> }) {
     </div>
   );
 }
-

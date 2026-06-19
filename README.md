@@ -125,7 +125,7 @@ The wording policy explicitly avoids `buy`, `sell`, guaranteed profit or trading
 
 ## BLUM Chat
 
-BLUM Chat is the conversational voice of the Blum analytical engine. It is not a generic chatbot. It is a multilingual financial intelligence assistant that retrieves internal Blum evidence and converts it into structured research dialogue.
+BLUM Chat is the conversational voice of the Blum analytical engine. It is not a generic chatbot and it must not force an answer. It detects the user language, validates the requested entity, retrieves only relevant Blum evidence and speaks in a concise analyst style when data is missing.
 
 Supported languages:
 
@@ -138,12 +138,26 @@ Supported languages:
 The chat pipeline:
 
 1. Detects the user language.
-2. Detects intent: asset analysis, comparison, opportunity search, narrative analysis or selective setup planning.
-3. Extracts tickers, company names, ETFs, sectors and market terms such as FTSE MIB, DAX, S&P 500 and Nasdaq.
-4. Retrieves Blum context: ranking, signals, OHLCV snapshots, deterministic technical analysis, SEC companyfacts fundamentals, news, sentiment, narratives, semantic evidence and reasoning memory.
-5. Builds a structured answer with summary, observed data, technical analysis, fundamental analysis, sentiment/news/narrative, bull/base/bear scenario, relevant levels, risks, informational operating view and missing data.
-6. Runs an anti-hallucination pass by surfacing missing prices, stale data, missing fundamentals, missing news or limited historical memory.
-7. Stores chat sessions and messages in PostgreSQL for future personalization and training-memory workflows.
+2. Detects intent: technical analysis, fundamental analysis, full analysis, comparison, opportunity search, narrative analysis, private-company request, unknown-asset request, educational question, portfolio question or chatbot debug feedback.
+3. Extracts and classifies entities as public stock, ETF, index, crypto, private company, ambiguous company, unknown asset or general market topic.
+4. Validates that the resolved ticker matches the requested entity and that OHLCV exists before producing technical analysis.
+5. Blocks unsupported analysis instead of substituting unrelated tickers. For example, SpaceX and OpenAI are treated as private companies; BLUM can discuss listed proxies but cannot invent direct RSI, MACD or support/resistance levels.
+6. Retrieves Blum context only after validation: ranking, signals, OHLCV snapshots, deterministic technical analysis, SEC companyfacts fundamentals, news, sentiment, narratives, semantic evidence, learning memory and reasoning memory.
+7. Selects a response builder by intent instead of using one universal template. Simple missing-data questions get concise answers; validated public assets get structured analysis.
+8. Runs a quality gate for language match, entity match, duplicate tickers, data availability, impossible technical analysis, repeated sections and disclaimer discipline.
+9. Stores chat sessions and messages in PostgreSQL for future personalization and training-memory workflows.
+
+Response-builder modules include:
+
+- `build_private_company_response()`
+- `build_technical_analysis_response()`
+- `build_fundamental_analysis_response()`
+- `build_full_analysis_response()`
+- `build_comparison_response()`
+- `build_opportunity_search_response()`
+- `build_error_response()`
+
+Debug diagnostics are hidden by default. When `mode=debug`, `mode=developer` or `mode=chatbot_debug_feedback`, the API can return detected language, detected intent, entity resolution, validation result, duplicate count, data freshness and response template used.
 
 BLUM Chat includes an internal **Market Sniper Mode**. This is a selective research mode, not a trading signal. It identifies informational setup zones, confirmation conditions, invalidation, target zones, risk/reward geometry, confidence and what could go wrong. It never presents an order and never guarantees an outcome.
 

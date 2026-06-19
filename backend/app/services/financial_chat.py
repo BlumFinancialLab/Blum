@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 import math
@@ -25,6 +26,64 @@ from app.services.technical_analysis_engine import TechnicalAnalysisEngine
 
 
 DISCLAIMER = "Analisi informativa, non consulenza finanziaria. I livelli sono tecnici e probabilistici, non garanzie."
+EN_DISCLAIMER = "Informational research only, not financial advice. Technical levels are probabilistic, not guarantees."
+
+PRIVATE_COMPANIES = {
+    "SPACEX": {
+        "name": "SpaceX",
+        "theme": "Space Economy",
+        "proxies": ["RKLB", "ASTS", "IRDM", "ARKX", "UFO"],
+        "note": "private launch, satellite and space infrastructure company",
+    },
+    "OPENAI": {
+        "name": "OpenAI",
+        "theme": "Artificial Intelligence",
+        "proxies": ["MSFT", "NVDA", "GOOGL", "META", "AIQ", "BOTZ"],
+        "note": "private AI company with no listed common equity",
+    },
+    "ANTHROPIC": {
+        "name": "Anthropic",
+        "theme": "Artificial Intelligence",
+        "proxies": ["AMZN", "GOOGL", "NVDA", "AIQ", "BOTZ"],
+        "note": "private AI company with no listed common equity",
+    },
+    "XAI": {
+        "name": "xAI",
+        "theme": "Artificial Intelligence",
+        "proxies": ["TSLA", "NVDA", "AIQ", "BOTZ"],
+        "note": "private AI company with no listed common equity",
+    },
+    "BYTEDANCE": {
+        "name": "ByteDance",
+        "theme": "Social Media / AI",
+        "proxies": ["META", "GOOGL", "TCEHY"],
+        "note": "private company with no direct public ticker in the BLUM universe",
+    },
+    "STRIPE": {
+        "name": "Stripe",
+        "theme": "Fintech",
+        "proxies": ["ADYEN.AS", "PYPL", "SQ"],
+        "note": "private fintech company with no direct public ticker",
+    },
+    "REVOLUT": {
+        "name": "Revolut",
+        "theme": "Fintech",
+        "proxies": ["NU", "PYPL", "SQ"],
+        "note": "private fintech company with no direct public ticker",
+    },
+    "SHEIN": {
+        "name": "Shein",
+        "theme": "E-commerce / Fashion",
+        "proxies": ["AMZN", "BABA", "ZAL.DE"],
+        "note": "private company with no direct public ticker",
+    },
+}
+
+AMBIGUOUS_ENTITIES = {
+    "SHELL": ["SHEL", "Shell plc can refer to different listings or legacy symbols."],
+    "TOTAL": ["TTE", "TotalEnergies is usually TTE, but the word total is ambiguous in natural language."],
+    "ARM": ["ARM", "ARM can be a ticker or a common word; BLUM needs confirmation when the query is unclear."],
+}
 
 MARKET_TERM_TICKERS = {
     "FTSE MIB": ["^FTSEMIB", "IMIB.MI", "ENEL.MI", "ENI.MI", "ISP.MI", "UCG.MI", "RACE.MI", "LDO.MI", "PRY.MI"],
@@ -86,11 +145,11 @@ COMPANY_TERM_TICKERS = {
 }
 
 LANGUAGE_HINTS = {
-    "it": [" cosa ", " quali ", " analizza ", " trova ", " comprare", " ingresso", " rischio", " titolo", " azione", " uscita", " monitorare"],
-    "en": [" what ", " which ", " analyze ", " find ", " entry", " risk", " stock", " watch", " compare", " setup"],
-    "de": [" was ", " welche ", " analysiere ", " risiko", " aktie", " einstieg", " beobachten", " vergleich"],
+    "it": [" cosa ", " quali ", " analizza ", " analisi ", " trova ", " comprare", " ingresso", " rischio", " titolo", " azione", " uscita", " monitorare", " tecnica", " fondamentale", " confronto", " spiegami"],
+    "en": [" what ", " which ", " analyze ", " analysis ", " find ", " entry", " risk", " stock", " watch", " compare", " setup", " technical", " fundamental"],
+    "de": [" was ", " welche ", " analysiere ", " analyse ", " risiko", " aktie", " einstieg", " beobachten", " vergleich"],
     "fr": [" que ", " quels ", " analyse ", " risque", " action", " entree", " surveiller", " comparer"],
-    "es": [" que ", " cuales ", " analiza ", " riesgo", " accion", " entrada", " vigilar", " comparar"],
+    "es": [" que ", " cuales ", " analiza ", " analisis ", " riesgo", " accion", " entrada", " vigilar", " comparar"],
 }
 
 LABELS = {
@@ -162,6 +221,28 @@ LABELS = {
 }
 
 
+@dataclass
+class ChatEntity:
+    raw: str
+    normalized: str
+    entity_type: str
+    resolved_ticker: str | None = None
+    confidence: float = 0.0
+    reason: str = ""
+    proxies: list[str] | None = None
+
+    def to_dict(self) -> dict:
+        return {
+            "raw": self.raw,
+            "normalized": self.normalized,
+            "entity_type": self.entity_type,
+            "resolved_ticker": self.resolved_ticker,
+            "confidence": self.confidence,
+            "reason": self.reason,
+            "proxies": self.proxies or [],
+        }
+
+
 def financial_chat_response(
     db: Session,
     message: str,
@@ -178,7 +259,24 @@ def financial_chat_response(
     session = upsert_chat_session(db, session_id, message, detected_language, horizon, risk_profile)
     persist_chat_message(db, session, "user", message, detected_language)
 
-    assets = relevant_assets(db, message, tickers)
+    entities = resolve_entities(db, message, tickers)
+    intent = refine_intent_with_entities(intent, entities)
+    blocked_answer = blocked_entity_response(message, detected_language, intent, entities, mode)
+    if blocked_answer:
+        payload = minimal_chat_payload(
+            session=session,
+            message=message,
+            language=detected_language,
+            intent=intent,
+            answer=blocked_answer,
+            entities=entities,
+            mode=mode,
+        )
+        persist_chat_message(db, session, "assistant", blocked_answer["composed_response"], detected_language, compact_chat_payload(payload))
+        db.commit()
+        return payload
+
+    assets = relevant_assets(db, message, tickers, entities=entities, intent=intent)
     opportunities = opportunity_radar(db, limit=24)
     narrative = market_narrative(db)
     community = community_sentiment(db)
@@ -186,12 +284,31 @@ def financial_chat_response(
     memory_hits = BlumTrainingMemoryService().semantic_memory(db, message, limit=6)
     learning_loop_context = LearningDashboardService().chat_memory(db, message, assets[:5], limit=8)
     semantic_hits = SemanticService().search(db, message, limit=8) if include_semantic_search else []
-    asset_packets = [asset_context(db, asset) for asset in assets[:12]]
-    candidates = rank_candidates(opportunities.get("rows", []), asset_packets)
+    asset_packets = dedupe_context_blocks([asset_context(db, asset) for asset in assets[:12]])
+    validation = validate_asset_contexts(intent, entities, asset_packets, detected_language)
+    if validation.get("blocked"):
+        answer = build_error_response(detected_language, validation["message"], validation.get("suggestions", []))
+        payload = minimal_chat_payload(
+            session=session,
+            message=message,
+            language=detected_language,
+            intent=intent,
+            answer=answer,
+            entities=entities,
+            mode=mode,
+            validation=validation,
+        )
+        persist_chat_message(db, session, "assistant", answer["composed_response"], detected_language, compact_chat_payload(payload))
+        db.commit()
+        return payload
+
+    candidates = dedupe_context_blocks(rank_candidates(opportunities.get("rows", []), asset_packets))
     answer = build_answer(
         message=message,
         language=detected_language,
         intent=intent,
+        entities=entities,
+        validation=validation,
         candidates=candidates,
         asset_packets=asset_packets,
         narrative=narrative,
@@ -210,6 +327,7 @@ def financial_chat_response(
         "intent": intent,
         "question": message,
         "answer": answer,
+        "entity_resolution": [entity.to_dict() for entity in entities],
         "candidate_opportunities": candidates[:10],
         "asset_context": asset_packets,
         "market_context": {
@@ -240,6 +358,9 @@ def financial_chat_response(
         ],
         "disclaimer": LABELS[detected_language]["disclaimer"],
     }
+    quality = quality_gate(payload, entities, validation)
+    if mode in {"debug", "developer", "chatbot_debug_feedback"}:
+        payload["diagnostics"] = quality
     payload = json_safe(payload)
     persist_chat_message(db, session, "assistant", answer["composed_response"], detected_language, compact_chat_payload(payload))
     db.commit()
@@ -294,28 +415,370 @@ def chat_history(db: Session, limit: int = 80) -> list[dict]:
     ]
 
 
-def relevant_assets(db: Session, message: str, tickers: list[str] | None) -> list[Asset]:
+def resolve_entities(db: Session, message: str, tickers: list[str] | None = None) -> list[ChatEntity]:
+    text = f" {strip_accents(message.upper())} "
+    universe = db.scalars(select(Asset).where(Asset.is_active.is_(True))).all()
+    by_ticker = {asset.ticker.upper(): asset for asset in universe}
+    entities: list[ChatEntity] = []
+
+    for raw_ticker in tickers or []:
+        ticker = raw_ticker.upper().strip()
+        if not ticker:
+            continue
+        asset = by_ticker.get(ticker)
+        if asset:
+            entities.append(
+                ChatEntity(
+                    raw=raw_ticker,
+                    normalized=asset.name,
+                    entity_type=asset_kind(asset),
+                    resolved_ticker=asset.ticker,
+                    confidence=0.99,
+                    reason="explicit ticker supplied by the client and found in BLUM universe",
+                )
+            )
+        else:
+            entities.append(ChatEntity(raw=raw_ticker, normalized=ticker, entity_type="unknown_asset", confidence=0.35, reason="explicit ticker was not found in BLUM universe"))
+
+    for term, payload in PRIVATE_COMPANIES.items():
+        if re.search(rf"(?<![A-Z0-9]){re.escape(term)}(?![A-Z0-9])", text):
+            entities.append(
+                ChatEntity(
+                    raw=payload["name"],
+                    normalized=payload["name"],
+                    entity_type="private_company",
+                    confidence=0.99,
+                    reason=payload["note"],
+                    proxies=payload.get("proxies", []),
+                )
+            )
+
+    for term, detail in AMBIGUOUS_ENTITIES.items():
+        if re.search(rf"(?<![A-Z0-9]){re.escape(term)}(?![A-Z0-9])", text):
+            # If the exact ticker was already resolved, keep the public asset instead of asking again.
+            if not any(entity.resolved_ticker == detail[0] for entity in entities):
+                entities.append(ChatEntity(raw=term.title(), normalized=term.title(), entity_type="ambiguous_company", confidence=0.55, reason=detail[1], proxies=[detail[0]]))
+
+    for term, mapped_tickers in COMPANY_TERM_TICKERS.items():
+        if re.search(rf"(?<![A-Z0-9]){re.escape(term)}(?![A-Z0-9])", text):
+            for ticker in mapped_tickers:
+                asset = by_ticker.get(ticker.upper())
+                if asset:
+                    entities.append(
+                        ChatEntity(
+                            raw=term.title(),
+                            normalized=asset.name,
+                            entity_type=asset_kind(asset),
+                            resolved_ticker=asset.ticker,
+                            confidence=0.94,
+                            reason="company name matched a known public asset in BLUM universe",
+                        )
+                    )
+
+    for term, mapped_tickers in MARKET_TERM_TICKERS.items():
+        if term in text:
+            entities.append(ChatEntity(raw=term, normalized=term, entity_type="index" if term.startswith("^") else "general_market_topic", confidence=0.8, reason="market term matched", proxies=mapped_tickers))
+
+    # Exact ticker recognition is useful, but we avoid one-letter symbols unless they were explicit.
+    for ticker, asset in sorted(by_ticker.items(), key=lambda item: len(item[0]), reverse=True):
+        if len(ticker.replace(".", "").replace("^", "")) < 2:
+            continue
+        pattern = rf"(?<![A-Z0-9.]){re.escape(ticker)}(?![A-Z0-9.])"
+        if re.search(pattern, text):
+            entities.append(
+                ChatEntity(
+                    raw=ticker,
+                    normalized=asset.name,
+                    entity_type=asset_kind(asset),
+                    resolved_ticker=asset.ticker,
+                    confidence=0.96,
+                    reason="exact public ticker matched BLUM universe",
+                )
+            )
+
+    for asset in universe:
+        name = strip_accents((asset.name or "").upper())
+        if len(name) >= 5 and name in text:
+            entities.append(
+                ChatEntity(
+                    raw=asset.name,
+                    normalized=asset.name,
+                    entity_type=asset_kind(asset),
+                    resolved_ticker=asset.ticker,
+                    confidence=0.9,
+                    reason="asset name matched BLUM universe",
+                )
+            )
+
+    entities = dedupe_entities(entities)
+    if not entities and looks_like_asset_request(message):
+        candidate = extract_requested_asset_phrase(message)
+        if candidate:
+            entities.append(ChatEntity(raw=candidate, normalized=candidate, entity_type="unknown_asset", confidence=0.4, reason="asset-like request could not be matched to a public BLUM asset"))
+    return entities
+
+
+def asset_kind(asset: Asset) -> str:
+    kind = (asset.asset_type or "").lower()
+    if "etf" in kind:
+        return "ETF"
+    if "crypto" in kind:
+        return "crypto"
+    if asset.ticker.startswith("^"):
+        return "index"
+    return "public_stock"
+
+
+def dedupe_entities(entities: list[ChatEntity]) -> list[ChatEntity]:
+    result: list[ChatEntity] = []
+    seen: set[tuple[str, str | None]] = set()
+    for entity in entities:
+        key = (entity.entity_type, entity.resolved_ticker or entity.normalized.upper())
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(entity)
+    return result
+
+
+def looks_like_asset_request(message: str) -> bool:
+    text = strip_accents(message.lower())
+    return any(
+        term in text
+        for term in [
+            "analisi tecnica",
+            "analisi fondamentale",
+            "analizza",
+            "analyze",
+            "technical analysis",
+            "fundamental analysis",
+            "titolo",
+            "stock",
+            "azione",
+            "ticker",
+        ]
+    )
+
+
+def extract_requested_asset_phrase(message: str) -> str | None:
+    cleaned = re.sub(r"[?!.]+$", "", message.strip())
+    patterns = [
+        r"(?:analisi tecnica|analisi fondamentale|analizza|analyze|technical analysis of|fundamental analysis of)\s+(?:di|of|for|su|on)?\s*([A-Za-z0-9 .&'-]{2,80})",
+        r"(?:di|of|for|su|on)\s+([A-Za-z0-9 .&'-]{2,80})$",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, cleaned, flags=re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+    return None
+
+
+def refine_intent_with_entities(intent: str, entities: list[ChatEntity]) -> str:
+    if any(entity.entity_type == "private_company" for entity in entities):
+        return "private_company_request"
+    if any(entity.entity_type == "unknown_asset" for entity in entities):
+        return "unknown_asset_request"
+    if any(entity.entity_type == "ambiguous_company" for entity in entities):
+        return "ambiguous_company_request"
+    return intent
+
+
+def blocked_entity_response(message: str, language: str, intent: str, entities: list[ChatEntity], mode: str | None = None) -> dict | None:
+    private_entities = [entity for entity in entities if entity.entity_type == "private_company"]
+    if private_entities:
+        return build_private_company_response(language, private_entities[0], technical_requested=is_technical_request(message), fundamental_requested=is_fundamental_request(message))
+    ambiguous = [entity for entity in entities if entity.entity_type == "ambiguous_company"]
+    if ambiguous:
+        return build_ambiguous_company_response(language, ambiguous[0])
+    unknown = [entity for entity in entities if entity.entity_type == "unknown_asset"]
+    if unknown:
+        return build_unknown_asset_response(language, unknown[0])
+    return None
+
+
+def relevant_assets(db: Session, message: str, tickers: list[str] | None, entities: list[ChatEntity] | None = None, intent: str | None = None) -> list[Asset]:
+    entities = entities or resolve_entities(db, message, tickers)
     requested = {item.upper().strip() for item in tickers or [] if item.strip()}
+    requested.update(entity.resolved_ticker for entity in entities if entity.resolved_ticker)
+    for entity in entities:
+        if entity.entity_type in {"index", "general_market_topic"}:
+            requested.update((entity.proxies or [])[:12])
     universe = db.scalars(select(Asset).where(Asset.is_active.is_(True))).all()
     text = f" {message.upper()} "
-    requested.update(expand_market_terms(text))
-    requested.update(expand_company_terms(text))
-    for asset in universe:
-        ticker = asset.ticker.upper()
-        if re.search(rf"(?<![A-Z0-9.]){re.escape(ticker)}(?![A-Z0-9.])", text):
-            requested.add(ticker)
-        elif asset.name and asset.name.upper() in text:
-            requested.add(ticker)
+    if not requested and intent in {"market_summary", "opportunity_search", "narrative_analysis"}:
+        requested.update(expand_market_terms(text))
+        requested.update(expand_company_terms(text))
     if requested:
         rows = db.scalars(select(Asset).where(Asset.ticker.in_(sorted(requested)))).all()
-        return sorted(rows, key=lambda item: item.ticker)
+        return dedupe_assets(sorted(rows, key=lambda item: item.ticker))
+    if looks_like_asset_request(message):
+        return []
     latest = db.execute(
         select(SignalSnapshot, Asset)
         .join(Asset, Asset.id == SignalSnapshot.asset_id)
         .order_by(desc(SignalSnapshot.blum_score), desc(SignalSnapshot.created_at))
         .limit(10)
     ).all()
-    return [asset for _, asset in latest]
+    return dedupe_assets([asset for _, asset in latest])
+
+
+def dedupe_assets(assets: list[Asset]) -> list[Asset]:
+    output: list[Asset] = []
+    seen: set[str] = set()
+    for asset in assets:
+        ticker = asset.ticker.upper()
+        if ticker in seen:
+            continue
+        seen.add(ticker)
+        output.append(asset)
+    return output
+
+
+def dedupe_context_blocks(blocks: list[dict]) -> list[dict]:
+    output: list[dict] = []
+    seen: set[str] = set()
+    for block in blocks:
+        ticker = str(block.get("ticker") or "").upper()
+        key = ticker or str(block)
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(block)
+    return output
+
+
+def dedupe_response_sections(sections: list[dict]) -> list[dict]:
+    output: list[dict] = []
+    seen_sections: set[str] = set()
+    for section in sections:
+        key = str(section.get("key") or section.get("title") or "").lower()
+        if key in seen_sections:
+            continue
+        seen_sections.add(key)
+        bullets = dedupe_warnings([str(item) for item in section.get("bullets", []) if item])
+        output.append({**section, "bullets": bullets})
+    return output
+
+
+def dedupe_warnings(rows: list[str | None]) -> list[str]:
+    output: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        if not row:
+            continue
+        text = str(row).strip()
+        if not text:
+            continue
+        key = re.sub(r"\s+", " ", text.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(text)
+    return output
+
+
+def validate_asset_contexts(intent: str, entities: list[ChatEntity], asset_packets: list[dict], language: str = "en") -> dict:
+    tickers = {packet.get("ticker") for packet in asset_packets if packet.get("ticker")}
+    requested_public = [entity for entity in entities if entity.resolved_ticker]
+    mismatches = [entity for entity in requested_public if entity.resolved_ticker not in tickers]
+    if mismatches:
+        names = ", ".join(entity.raw for entity in mismatches)
+        return {
+            "blocked": True,
+            "reason": "asset_mismatch",
+            "message": (
+                f"Validazione asset fallita per {names}: BLUM non ha recuperato lo stesso ticker pubblico richiesto."
+                if language == "it"
+                else f"Asset validation failed for {names}: BLUM did not retrieve the same public ticker that was requested."
+            ),
+            "suggestions": ["Usa il ticker esatto e riprova." if language == "it" else "Use the exact ticker and retry."],
+        }
+    if intent == "technical_analysis":
+        missing = []
+        for packet in asset_packets:
+            tech = packet.get("technical_analysis") or {}
+            snapshot = packet.get("market_snapshot") or {}
+            if snapshot.get("data_status") != "ready" or tech.get("status") != "ready":
+                missing.append(packet.get("ticker"))
+        if missing:
+            return {
+                "blocked": True,
+                "reason": "missing_ohlcv",
+                "message": (
+                    f"Non riesco a fare analisi tecnica affidabile per {', '.join(missing)}: manca una serie pubblica OHLCV validata."
+                    if language == "it"
+                    else f"I cannot run reliable technical analysis for {', '.join(missing)} because validated public OHLCV data is missing."
+                ),
+                "suggestions": [
+                    "Posso provare prima ad aggiornare i dati pubblici o analizzare un proxy con storico disponibile."
+                    if language == "it"
+                    else "I can first try to refresh public data or analyze a proxy with available history."
+                ],
+            }
+    if not asset_packets and any(entity.entity_type in {"public_stock", "ETF", "index", "crypto"} for entity in entities):
+        return {
+            "blocked": True,
+            "reason": "no_context",
+            "message": (
+                "Non riesco a recuperare dati affidabili per l'asset richiesto in questo momento."
+                if language == "it"
+                else "I cannot retrieve reliable data for the requested asset right now."
+            ),
+            "suggestions": [
+                "Posso spiegare quali dati servirebbero o provare con un proxy valido."
+                if language == "it"
+                else "I can explain which data is needed or try a valid proxy."
+            ],
+        }
+    return {
+        "blocked": False,
+        "requested_tickers": sorted(ticker for ticker in tickers if ticker),
+        "data_freshness": {packet.get("ticker"): (packet.get("history_depth") or {}).get("latest_date") for packet in asset_packets},
+    }
+
+
+def quality_gate(payload: dict, entities: list[ChatEntity], validation: dict) -> dict:
+    answer = payload.get("answer") or {}
+    sections = answer.get("standard_sections") or []
+    tickers = [item.get("ticker") for item in payload.get("candidate_opportunities", []) if item.get("ticker")]
+    duplicate_count = len(tickers) - len(set(tickers))
+    checks = {
+        "language_matches": bool(payload.get("language")),
+        "entity_count": len(entities),
+        "validation_blocked": bool(validation.get("blocked")),
+        "duplicate_tickers": duplicate_count,
+        "has_disclaimer": bool(payload.get("disclaimer")),
+        "section_count": len(sections),
+        "raw_json_exposed": answer.get("composed_response", "").strip().startswith("{"),
+        "response_template_used": answer.get("response_style"),
+    }
+    return checks
+
+
+def is_technical_request(message: str) -> bool:
+    text = strip_accents(message.lower())
+    return any(term in text for term in ["analisi tecnica", "technical analysis", "rsi", "macd", "support", "resisten", "breakout", "livelli"])
+
+
+def is_fundamental_request(message: str) -> bool:
+    text = strip_accents(message.lower())
+    return any(term in text for term in ["analisi fondamentale", "fundamental analysis", "fondamental", "bilancio", "revenue", "eps", "cash flow"])
+
+
+def private_theme(entity: ChatEntity) -> str:
+    payload = PRIVATE_COMPANIES.get(entity.normalized.upper()) or PRIVATE_COMPANIES.get(entity.raw.upper()) or {}
+    return payload.get("theme", "the related market theme")
+
+
+def safe_followups_for_entities(language: str, entities: list[ChatEntity]) -> list[str]:
+    private = next((entity for entity in entities if entity.entity_type == "private_company"), None)
+    if language == "it":
+        if private:
+            return [f"Costruisci una watchlist di proxy quotati per {private.normalized}.", "Quali societa quotate sono esposte a questo tema?"]
+        return ["Mandami il ticker esatto.", "Vuoi che cerchi proxy quotati?"]
+    if private:
+        return [f"Build a listed-proxy watchlist for {private.normalized}.", "Which public companies are exposed to this theme?"]
+    return ["Send the exact ticker.", "Do you want listed proxies?"]
 
 
 def asset_context(db: Session, asset: Asset) -> dict:
@@ -403,6 +866,8 @@ def build_answer(
     message: str,
     language: str,
     intent: str,
+    entities: list[ChatEntity],
+    validation: dict,
     candidates: list[dict],
     asset_packets: list[dict],
     narrative: dict,
@@ -413,6 +878,17 @@ def build_answer(
     horizon: str,
     risk_profile: str,
 ) -> dict:
+    if intent == "technical_analysis" and len(candidates) == 1:
+        return build_technical_analysis_response(language, candidates[0], validation)
+    if intent == "fundamental_analysis" and len(candidates) == 1:
+        return build_fundamental_analysis_response(language, candidates[0], validation)
+    if intent == "full_analysis" and len(candidates) == 1:
+        return build_full_analysis_response(language, candidates[0], narrative, sentiment, learning_loop_context, validation)
+    if intent == "compare_assets":
+        return build_comparison_response(language, candidates[:6], validation)
+    if intent == "opportunity_search":
+        return build_opportunity_search_response(language, candidates[:8], narrative, learning_loop_context, risk_profile, horizon)
+
     labels = LABELS[language]
     top = candidates[:5]
     dominant = narrative.get("dominant_theme", {}) if isinstance(narrative, dict) else {}
@@ -428,7 +904,7 @@ def build_answer(
     fundamental = fundamental_block(top)
     learning_points = learning_loop_points(learning_loop_context, language)
     sniper = market_sniper_mode(top, horizon, risk_profile, enabled=intent == "market_sniper")
-    sections = [
+    sections = dedupe_response_sections([
         {"key": "summary", "title": labels["summary"], "bullets": [thesis]},
         {"key": "observed", "title": labels["observed"], "bullets": observed_data(top, narrative, sentiment)},
         {"key": "technical", "title": labels["technical"], "bullets": technical},
@@ -440,9 +916,10 @@ def build_answer(
         {"key": "risks", "title": labels["risks"], "bullets": risks},
         {"key": "conclusion", "title": labels["conclusion"], "bullets": conclusion_points(language, top, risk_profile, horizon, intent)},
         {"key": "missing", "title": labels["missing"], "bullets": missing or [no_major_missing_data(language)]},
-    ]
+    ])
     composed = render_sections(sections, labels["disclaimer"])
     return {
+        "response_style": "structured",
         "composed_response": composed,
         "standard_sections": sections,
         "executive_view": thesis,
@@ -463,6 +940,299 @@ def build_answer(
         "learning_loop_memory": learning_loop_context,
         "answer_to_user": conclusion_points(language, top, risk_profile, horizon, intent)[0],
         "intellectual_honesty": intellectual_honesty(language),
+    }
+
+
+def build_private_company_response(language: str, entity: ChatEntity, technical_requested: bool = False, fundamental_requested: bool = False) -> dict:
+    labels = LABELS[language]
+    proxies = ", ".join(entity.proxies or [])
+    if language == "it":
+        if technical_requested:
+            summary = f"Qui c'e un problema: {entity.normalized} non e quotata in borsa e non ha un ticker pubblico."
+            data = "Non posso fare una vera analisi tecnica diretta: mancano prezzo pubblico, volumi, RSI, MACD, supporti e resistenze."
+        elif fundamental_requested:
+            summary = f"{entity.normalized} e una societa privata: non esiste un ticker pubblico diretto da analizzare come azione quotata."
+            data = "Posso discutere il business e il tema competitivo solo come analisi qualitativa, ma non posso usare multipli di mercato diretti o bilanci completi da società quotata."
+        else:
+            summary = f"{entity.normalized} e una societa privata, quindi BLUM non puo trattarla come un titolo quotato."
+            data = "Il punto chiave e che non esiste una serie pubblica OHLCV validabile per costruire indicatori o segnali tecnici."
+        alternatives = f"Posso pero analizzare il tema {private_theme(entity)} tramite proxy quotati: {proxies}." if proxies else "Posso cercare proxy quotati se mi indichi il mercato o il settore preferito."
+        ask = "Se vuoi, costruisco una mini-watchlist di proxy quotati e confronto momentum, rischio e narrativa."
+        sections = [
+            {"key": "summary", "title": "Sintesi", "bullets": [summary]},
+            {"key": "missing", "title": "Cosa manca", "bullets": [data]},
+            {"key": "alternatives", "title": "Alternative utili", "bullets": [alternatives, ask]},
+        ]
+        composed = render_sections(sections, labels["disclaimer"])
+        return response_contract(
+            composed,
+            sections,
+            summary,
+            supporting=[],
+            contradictions=[data],
+            conclusion=ask,
+            style="concise_safe",
+        )
+
+    summary = f"Here is the issue: {entity.normalized} is private and has no public common-stock ticker."
+    data = "I cannot run direct technical analysis because there is no public OHLCV series, volume, RSI, MACD, support or resistance data for the company itself."
+    alternatives = f"I can analyze the {private_theme(entity)} theme through listed proxies such as {proxies}." if proxies else "I can look for listed proxies if you specify the market or sector."
+    ask = "If useful, I can build a small public-proxy watchlist and compare momentum, risk and narrative strength."
+    sections = [
+        {"key": "summary", "title": "Summary", "bullets": [summary]},
+        {"key": "missing", "title": "What is missing", "bullets": [data]},
+        {"key": "alternatives", "title": "Useful alternatives", "bullets": [alternatives, ask]},
+    ]
+    composed = render_sections(sections, labels["disclaimer"])
+    return response_contract(composed, sections, summary, supporting=[], contradictions=[data], conclusion=ask, style="concise_safe")
+
+
+def build_ambiguous_company_response(language: str, entity: ChatEntity) -> dict:
+    labels = LABELS[language]
+    likely = ", ".join(entity.proxies or [])
+    if language == "it":
+        summary = f"'{entity.raw}' e ambiguo. Potrei intendere {likely}, ma non voglio sostituire l'asset senza conferma."
+        ask = "Dimmi il ticker preciso o il mercato di quotazione e procedo con l'analisi."
+        sections = [
+            {"key": "summary", "title": "Serve chiarimento", "bullets": [summary]},
+            {"key": "next", "title": "Prossimo passo", "bullets": [ask]},
+        ]
+    else:
+        summary = f"'{entity.raw}' is ambiguous. I may mean {likely}, but I will not substitute the asset without confirmation."
+        ask = "Send the exact ticker or listing market and I will analyze it."
+        sections = [
+            {"key": "summary", "title": "Clarification needed", "bullets": [summary]},
+            {"key": "next", "title": "Next step", "bullets": [ask]},
+        ]
+    return response_contract(render_sections(sections, labels["disclaimer"]), sections, summary, contradictions=[entity.reason], conclusion=ask, style="clarification")
+
+
+def build_unknown_asset_response(language: str, entity: ChatEntity) -> dict:
+    labels = LABELS[language]
+    if language == "it":
+        summary = f"Non riesco a collegare '{entity.raw}' a un asset pubblico presente nell'universo BLUM."
+        ask = "Mandami il ticker esatto, oppure dimmi se si tratta di azienda privata, ETF, indice o crypto."
+        sections = [
+            {"key": "summary", "title": "Asset non validato", "bullets": [summary]},
+            {"key": "next", "title": "Cosa serve", "bullets": [ask]},
+        ]
+    else:
+        summary = f"I cannot connect '{entity.raw}' to a public asset in the BLUM universe."
+        ask = "Send the exact ticker, or tell me whether it is a private company, ETF, index or crypto."
+        sections = [
+            {"key": "summary", "title": "Asset not validated", "bullets": [summary]},
+            {"key": "next", "title": "What I need", "bullets": [ask]},
+        ]
+    return response_contract(render_sections(sections, labels["disclaimer"]), sections, summary, contradictions=["Asset validation failed."], conclusion=ask, style="clarification")
+
+
+def build_error_response(language: str, message: str, suggestions: list[str] | None = None) -> dict:
+    labels = LABELS[language]
+    suggestions = dedupe_warnings(suggestions or [])
+    if language == "it":
+        sections = [
+            {"key": "summary", "title": "Non posso completare l'analisi", "bullets": [message]},
+            {"key": "next", "title": "Alternativa", "bullets": suggestions or ["Posso spiegare quali dati servirebbero o provare con un proxy valido."]},
+        ]
+    else:
+        sections = [
+            {"key": "summary", "title": "I cannot complete the analysis", "bullets": [message]},
+            {"key": "next", "title": "Alternative", "bullets": suggestions or ["I can explain which data is needed or try a valid proxy."]},
+        ]
+    return response_contract(render_sections(sections, labels["disclaimer"]), sections, message, contradictions=[message], conclusion=sections[-1]["bullets"][0], style="error")
+
+
+def build_technical_analysis_response(language: str, candidate: dict, validation: dict) -> dict:
+    labels = LABELS[language]
+    ticker = candidate.get("ticker")
+    tech = candidate.get("technical") or {}
+    levels = tech.get("levels") or {}
+    indicators = tech.get("technical_indicators") or {}
+    latest = candidate.get("price_date")
+    stale = freshness_warning(language, latest)
+    trend = tech.get("trend_direction", "not available")
+    momentum = tech.get("momentum") or {}
+    volume = tech.get("volume") or {}
+    risk = tech.get("risk_reward_estimate") or {}
+    summary = (
+        f"{ticker}: trend {trend}, RSI {indicators.get('rsi')}, volume relativo {volume.get('relative_volume')}."
+        if language == "it"
+        else f"{ticker}: {trend} trend, RSI {indicators.get('rsi')}, relative volume {volume.get('relative_volume')}."
+    )
+    if stale:
+        summary = f"{summary} {stale}"
+    if language == "it":
+        sections = [
+            {"key": "summary", "title": "Sintesi", "bullets": [summary]},
+            {"key": "trend", "title": "Trend", "bullets": [f"Struttura: {trend}. Forza trend: {tech.get('trend_strength_score', 'n/a')}/100. Ultimo dato disponibile: {latest or 'n/a'}."]},
+            {"key": "momentum", "title": "Momentum", "bullets": [f"RSI {indicators.get('rsi')}; MACD hist {indicators.get('macd_hist')}; stato momentum {momentum.get('state', 'n/a')}."]},
+            {"key": "levels", "title": "Livelli tecnici", "bullets": [f"Supporti: {level_list(levels.get('support_levels'))}. Resistenze: {level_list(levels.get('resistance_levels'))}. Breakout: {levels.get('breakout_level')}. Invalidazione: {levels.get('invalidation_level')}."]},
+            {"key": "scenario", "title": "Scenario", "bullets": [technical_scenario_it(ticker, tech, risk)]},
+            {"key": "risks", "title": "Rischi", "bullets": dedupe_warnings([f"Rischio: {candidate.get('risk_level')} / score {candidate.get('risk_score')}.", tech.get("technical_summary"), stale])},
+        ]
+    else:
+        sections = [
+            {"key": "summary", "title": "Summary", "bullets": [summary]},
+            {"key": "trend", "title": "Trend", "bullets": [f"Structure: {trend}. Trend strength: {tech.get('trend_strength_score', 'n/a')}/100. Latest available data: {latest or 'n/a'}."]},
+            {"key": "momentum", "title": "Momentum", "bullets": [f"RSI {indicators.get('rsi')}; MACD hist {indicators.get('macd_hist')}; momentum state {momentum.get('state', 'n/a')}."]},
+            {"key": "levels", "title": "Technical Levels", "bullets": [f"Support: {level_list(levels.get('support_levels'))}. Resistance: {level_list(levels.get('resistance_levels'))}. Breakout: {levels.get('breakout_level')}. Invalidation: {levels.get('invalidation_level')}."]},
+            {"key": "scenario", "title": "Scenario", "bullets": [technical_scenario_en(ticker, tech, risk)]},
+            {"key": "risks", "title": "Risks", "bullets": dedupe_warnings([f"Risk: {candidate.get('risk_level')} / score {candidate.get('risk_score')}.", tech.get("technical_summary"), stale])},
+        ]
+    sections = dedupe_response_sections(sections)
+    composed = render_sections(sections, labels["disclaimer"])
+    return response_contract(
+        composed,
+        sections,
+        summary,
+        supporting=[bullet for section in sections[:4] for bullet in section.get("bullets", [])],
+        contradictions=sections[-1]["bullets"],
+        conclusion=sections[-2]["bullets"][0],
+        style="technical",
+    )
+
+
+def build_fundamental_analysis_response(language: str, candidate: dict, validation: dict) -> dict:
+    labels = LABELS[language]
+    ticker = candidate.get("ticker")
+    fundamentals = candidate.get("fundamentals") or {}
+    metrics = fundamentals.get("metrics") or {}
+    status = fundamentals.get("status", "missing")
+    quality = fundamentals.get("quality_score", 0)
+    latest_period = metrics.get("revenue", {}).get("end") if isinstance(metrics.get("revenue"), dict) else None
+    if language == "it":
+        summary = f"{ticker}: fondamentali {status}, quality score {quality}/100."
+        sections = [
+            {"key": "summary", "title": "Sintesi", "bullets": [summary]},
+            {"key": "data", "title": "Dati disponibili", "bullets": [f"Revenue: {metric_state(metrics.get('revenue'))}; net income: {metric_state(metrics.get('net_income'))}; cash flow operativo: {metric_state(metrics.get('operating_cash_flow'))}; periodo: {latest_period or 'n/a'}."]},
+            {"key": "view", "title": "Lettura BLUM", "bullets": [fundamental_read_it(ticker, fundamentals, candidate)]},
+            {"key": "risks", "title": "Rischi", "bullets": missing_fundamental_warnings_it(ticker, fundamentals)},
+        ]
+    else:
+        summary = f"{ticker}: fundamentals {status}, quality score {quality}/100."
+        sections = [
+            {"key": "summary", "title": "Summary", "bullets": [summary]},
+            {"key": "data", "title": "Available Data", "bullets": [f"Revenue: {metric_state(metrics.get('revenue'))}; net income: {metric_state(metrics.get('net_income'))}; operating cash flow: {metric_state(metrics.get('operating_cash_flow'))}; period: {latest_period or 'n/a'}."]},
+            {"key": "view", "title": "BLUM Read", "bullets": [fundamental_read_en(ticker, fundamentals, candidate)]},
+            {"key": "risks", "title": "Risks", "bullets": missing_fundamental_warnings_en(ticker, fundamentals)},
+        ]
+    sections = dedupe_response_sections(sections)
+    return response_contract(render_sections(sections, labels["disclaimer"]), sections, summary, supporting=sections[1]["bullets"], contradictions=sections[-1]["bullets"], conclusion=sections[2]["bullets"][0], style="fundamental")
+
+
+def build_full_analysis_response(language: str, candidate: dict, narrative: dict, sentiment: dict, learning_loop_context: dict, validation: dict) -> dict:
+    technical = build_technical_analysis_response(language, candidate, validation)
+    fundamental = build_fundamental_analysis_response(language, candidate, validation)
+    labels = LABELS[language]
+    ticker = candidate.get("ticker")
+    learning = learning_loop_points(learning_loop_context, language)[:2]
+    narrative_point = narrative_sentiment_points(narrative, sentiment, {"most_discussed_assets": []})[:2]
+    if language == "it":
+        sections = [
+            {"key": "summary", "title": "Sintesi", "bullets": [f"{ticker} ha score BLUM {candidate.get('opportunity_score')}/100, confidence {candidate.get('confidence_level')} e rischio {candidate.get('risk_level')}. Ultimo dato: {candidate.get('price_date') or 'n/a'}."]},
+            *technical["standard_sections"][1:4],
+            *fundamental["standard_sections"][1:3],
+            {"key": "sentiment", "title": "Sentiment e narrativa", "bullets": narrative_point},
+            {"key": "learning", "title": "Memoria BLUM", "bullets": learning},
+            {"key": "risks", "title": "Rischi", "bullets": risk_points([candidate], {"possible_hype_bubbles": []}, [])},
+            {"key": "conclusion", "title": "Vista finale", "bullets": [f"{ticker} e interessante solo se il prezzo conferma i livelli tecnici con volume e senza peggioramento del rischio. Se manca conferma, resta watchlist."]},
+        ]
+    else:
+        sections = [
+            {"key": "summary", "title": "Summary", "bullets": [f"{ticker} has BLUM score {candidate.get('opportunity_score')}/100, confidence {candidate.get('confidence_level')} and risk {candidate.get('risk_level')}. Latest data: {candidate.get('price_date') or 'n/a'}."]},
+            *technical["standard_sections"][1:4],
+            *fundamental["standard_sections"][1:3],
+            {"key": "sentiment", "title": "Sentiment and Narrative", "bullets": narrative_point},
+            {"key": "learning", "title": "BLUM Memory", "bullets": learning},
+            {"key": "risks", "title": "Risks", "bullets": risk_points([candidate], {"possible_hype_bubbles": []}, [])},
+            {"key": "conclusion", "title": "Final View", "bullets": [f"{ticker} is interesting only if price confirms key levels with volume and no deterioration in risk. Without confirmation, it stays watchlist only."]},
+        ]
+    sections = dedupe_response_sections(sections)
+    return response_contract(render_sections(sections, labels["disclaimer"]), sections, sections[0]["bullets"][0], supporting=technical["supporting_evidence"], contradictions=fundamental["contradicting_evidence"], conclusion=sections[-1]["bullets"][0], style="full_analysis")
+
+
+def build_comparison_response(language: str, candidates: list[dict], validation: dict) -> dict:
+    labels = LABELS[language]
+    if not candidates:
+        return build_error_response(language, "No validated public assets were found for comparison." if language == "en" else "Non ho trovato asset pubblici validati da confrontare.")
+    lines = []
+    for item in candidates:
+        lines.append(f"{item.get('ticker')}: BLUM {item.get('opportunity_score')}/100 | technical {item.get('technical_score')}/100 | fundamental {item.get('fundamental_score')}/100 | risk {item.get('risk_level')}")
+    if language == "it":
+        best = max(candidates, key=lambda item: safe_float(item.get("opportunity_score")))
+        sections = [
+            {"key": "summary", "title": "Sintesi comparativa", "bullets": [f"Nel set validato, {best.get('ticker')} ha il profilo BLUM piu forte, ma il rischio resta da verificare sui livelli tecnici."]},
+            {"key": "scores", "title": "Score", "bullets": lines},
+            {"key": "risk", "title": "Rischi", "bullets": [f"Non considero questo confronto una classifica operativa: serve conferma su prezzo, volume e contesto di mercato."]},
+        ]
+    else:
+        best = max(candidates, key=lambda item: safe_float(item.get("opportunity_score")))
+        sections = [
+            {"key": "summary", "title": "Comparative Summary", "bullets": [f"In the validated set, {best.get('ticker')} has the strongest BLUM profile, but risk must still be checked against technical levels."]},
+            {"key": "scores", "title": "Scores", "bullets": lines},
+            {"key": "risk", "title": "Risks", "bullets": ["This is not an execution ranking: price, volume and market context still need confirmation."]},
+        ]
+    return response_contract(render_sections(sections, labels["disclaimer"]), dedupe_response_sections(sections), sections[0]["bullets"][0], supporting=lines, contradictions=sections[-1]["bullets"], conclusion=sections[0]["bullets"][0], style="comparison")
+
+
+def build_opportunity_search_response(language: str, candidates: list[dict], narrative: dict, learning_loop_context: dict, risk_profile: str, horizon: str) -> dict:
+    labels = LABELS[language]
+    top = candidates[:5]
+    if not top:
+        return build_error_response(language, "BLUM does not have enough validated evidence to rank opportunities right now." if language == "en" else "BLUM non ha abbastanza evidenza validata per classificare opportunita in questo momento.")
+    rows = [f"{item.get('ticker')}: {item.get('classification')} | score {item.get('opportunity_score')}/100 | risk {item.get('risk_level')} | {item.get('why_today')}" for item in top]
+    learning = learning_loop_points(learning_loop_context, language)[:2]
+    if language == "it":
+        sections = [
+            {"key": "summary", "title": "Cosa guardare ora", "bullets": [f"Con profilo {risk_profile} e orizzonte {horizon}, questi sono candidati da monitorare, non ordini operativi."]},
+            {"key": "candidates", "title": "Top candidati", "bullets": rows},
+            {"key": "learning", "title": "Filtro memoria BLUM", "bullets": learning},
+            {"key": "risk", "title": "Rischio", "bullets": ["Scarto o riduco convinzione se mancano prezzo aggiornato, volume, conferma settoriale o news di qualita."]},
+        ]
+    else:
+        sections = [
+            {"key": "summary", "title": "What to watch now", "bullets": [f"For a {risk_profile} profile and {horizon} horizon, these are monitoring candidates, not execution orders."]},
+            {"key": "candidates", "title": "Top Candidates", "bullets": rows},
+            {"key": "learning", "title": "BLUM Memory Filter", "bullets": learning},
+            {"key": "risk", "title": "Risk", "bullets": ["Conviction is reduced or rejected when updated price, volume, sector confirmation or high-quality news are missing."]},
+        ]
+    return response_contract(render_sections(sections, labels["disclaimer"]), dedupe_response_sections(sections), sections[0]["bullets"][0], supporting=rows, contradictions=sections[-1]["bullets"], conclusion=sections[0]["bullets"][0], style="opportunity_search")
+
+
+def response_contract(
+    composed: str,
+    sections: list[dict],
+    executive: str,
+    supporting: list[str] | None = None,
+    contradictions: list[str] | None = None,
+    conclusion: str = "",
+    style: str = "structured",
+) -> dict:
+    supporting = dedupe_warnings(supporting or [])
+    contradictions = dedupe_warnings(contradictions or [])
+    sections = dedupe_response_sections(sections)
+    return {
+        "response_style": style,
+        "composed_response": composed,
+        "standard_sections": sections,
+        "executive_view": executive,
+        "opportunity_lens": "Explain BLUM evidence naturally; do not force a trade thesis.",
+        "supporting_evidence": supporting,
+        "contradicting_evidence": contradictions,
+        "bull_case": "",
+        "base_case": "",
+        "bear_case": "",
+        "risk_reward_view": conclusion,
+        "what_to_monitor": [],
+        "learning_loop_view": [],
+        "research_plan": [],
+        "operation_plan": [],
+        "market_may_be_missing": [],
+        "market_sniper_mode": {},
+        "data_quality": {"policy": "No synthetic market data is created. Missing data blocks unsupported analysis."},
+        "learning_loop_memory": {},
+        "answer_to_user": conclusion or executive,
+        "intellectual_honesty": "If data is missing, BLUM says so instead of inventing analysis.",
     }
 
 
@@ -521,6 +1291,68 @@ def compact_chat_payload(payload: dict) -> dict:
     }
 
 
+def minimal_chat_payload(
+    *,
+    session: ChatSession,
+    message: str,
+    language: str,
+    intent: str,
+    answer: dict,
+    entities: list[ChatEntity],
+    mode: str | None = None,
+    validation: dict | None = None,
+) -> dict:
+    payload = {
+        "generated_at": datetime.utcnow().isoformat(),
+        "mode": "blum_multilingual_market_intelligence_chat",
+        "session_id": session.session_key,
+        "language": language,
+        "intent": intent,
+        "question": message,
+        "answer": answer,
+        "entity_resolution": [entity.to_dict() for entity in entities],
+        "candidate_opportunities": [],
+        "asset_context": [],
+        "market_context": {},
+        "semantic_evidence": [],
+        "training_memory": [],
+        "learning_loop_context": {},
+        "rag_pipeline": rag_pipeline(language, intent),
+        "sources_used": [],
+        "context_coverage": {
+            "assets_detected": 0,
+            "assets_with_price": 0,
+            "assets_with_technical_analysis": 0,
+            "assets_with_fundamentals": 0,
+            "assets_with_news": 0,
+            "semantic_hits": 0,
+            "memory_hits": 0,
+            "learning_loop_memory_hits": 0,
+            "learning_loop_signal_reliability": 0,
+        },
+        "suggested_followups": safe_followups_for_entities(language, entities),
+        "models_used": {
+            "reasoning": "deterministic_entity_validation_and_response_builder",
+            "policy": "No market analysis is generated when asset validation fails.",
+        },
+        "governance": [
+            "Entity validation runs before market-data retrieval.",
+            "Unknown or private assets are never replaced with random tickers.",
+            "Technical analysis is blocked when OHLCV data is unavailable.",
+        ],
+        "disclaimer": LABELS[language]["disclaimer"],
+    }
+    if mode in {"debug", "developer", "chatbot_debug_feedback"}:
+        payload["diagnostics"] = {
+            "detected_language": language,
+            "detected_intent": intent,
+            "entities": [entity.to_dict() for entity in entities],
+            "validation": validation or {},
+            "response_template_used": answer.get("response_style"),
+        }
+    return json_safe(payload)
+
+
 def json_safe(value):
     if value is None or isinstance(value, (str, bool, int)):
         return value
@@ -551,20 +1383,38 @@ def infer_intent(message: str, mode: str | None = None) -> str:
     if mode:
         return mode
     text = message.lower()
-    if any(term in text for term in ["sniper", "ingresso", "entry", "risk/reward", "uscita", "target", "invalidazione", "breakout"]):
-        return "market_sniper"
+    normalized = strip_accents(text)
+    if any(term in normalized for term in ["debug", "risposta sbagliata", "bad answer", "non funziona", "hai sbagliato"]):
+        return "chatbot_debug_feedback"
+    if any(term in normalized for term in ["analisi completa", "full analysis", "tecnica e fondamentale", "tecnico e fondamentale", "technical and fundamental"]):
+        return "full_analysis"
+    if any(term in normalized for term in ["analisi tecnica", "technical analysis", "rsi", "macd", "support", "resisten", "supporti", "breakout", "breakdown"]):
+        return "technical_analysis"
+    if any(term in normalized for term in ["analisi fondamentale", "fundamental analysis", "fondamentali", "bilancio", "revenue", "eps", "cash flow", "valuation", "multipli"]):
+        return "fundamental_analysis"
+    if any(term in normalized for term in ["sniper", "ingresso", "entry", "risk/reward", "uscita", "target", "invalidazione"]):
+        return "technical_analysis"
     if any(term in text for term in ["confronta", "compare", "vs", "versus"]):
-        return "comparison"
-    if any(term in text for term in ["trova", "find", "watchlist", "opportunit", "opportunity", "etf"]):
+        return "compare_assets"
+    if any(term in normalized for term in ["trova", "find", "watchlist", "opportunit", "opportunity", "etf", "candidati", "titoli interessanti"]):
         return "opportunity_search"
-    if any(term in text for term in ["narrative", "narrativa", "theme", "tema", "macro"]):
+    if any(term in normalized for term in ["narrative", "narrativa", "theme", "tema", "macro"]):
         return "narrative_analysis"
-    return "asset_or_market_analysis"
+    if any(term in normalized for term in ["portfolio", "portafoglio", "allocazione", "allocation"]):
+        return "portfolio_question"
+    if any(term in normalized for term in ["come funziona", "what is", "spiegami", "explain"]):
+        return "educational_question"
+    return "full_analysis" if looks_like_asset_request(message) else "market_summary"
 
 
 def detect_language(message: str) -> str:
     text = f" {strip_accents(message.lower())} "
     scores = {code: sum(1 for hint in hints if hint in text) for code, hints in LANGUAGE_HINTS.items()}
+    italian_words = {"analisi", "tecnica", "fondamentale", "azione", "titolo", "quotata", "borsa", "rischio", "livelli", "supporti", "resistenze"}
+    english_words = {"analysis", "technical", "fundamental", "stock", "risk", "levels", "support", "resistance"}
+    tokens = set(re.findall(r"[a-zA-Zàèéìòùáíóúñäöüß]+", message.lower()))
+    scores["it"] += len(tokens & italian_words)
+    scores["en"] += len(tokens & english_words)
     if any(char in message for char in "àèéìòù"):
         scores["it"] += 2
     if any(char in message for char in "äöüß"):
@@ -765,6 +1615,89 @@ def price_zone(last, breakout) -> str:
     if reference <= 0:
         return "Not available because price evidence is missing."
     return f"{reference * 0.99:.2f}-{reference * 1.01:.2f}"
+
+
+def freshness_warning(language: str, latest_date: str | None) -> str:
+    if not latest_date:
+        return "Attenzione: timestamp prezzo non disponibile." if language == "it" else "Warning: price timestamp is not available."
+    try:
+        point = datetime.fromisoformat(str(latest_date)).date()
+    except ValueError:
+        return ""
+    age = (datetime.utcnow().date() - point).days
+    if age > 5:
+        return f"Attenzione: ultimo dato disponibile {latest_date}, quindi non e real-time." if language == "it" else f"Warning: latest available data is {latest_date}, so this is not real-time."
+    return f"Ultimo dato disponibile: {latest_date}." if language == "it" else f"Latest available data: {latest_date}."
+
+
+def technical_scenario_it(ticker: str, tech: dict, risk: dict) -> str:
+    levels = tech.get("levels") or {}
+    breakout = levels.get("breakout_level")
+    invalidation = levels.get("invalidation_level")
+    volume = (tech.get("volume") or {}).get("relative_volume")
+    rr = risk.get("label", "non definito")
+    return (
+        f"Scenario informativo: {ticker} migliora solo con conferma sopra {breakout} e volume relativo in espansione "
+        f"(ora {volume}). L'invalidazione tecnica e {invalidation}. Rapporto rischio/rendimento: {rr}."
+    )
+
+
+def technical_scenario_en(ticker: str, tech: dict, risk: dict) -> str:
+    levels = tech.get("levels") or {}
+    breakout = levels.get("breakout_level")
+    invalidation = levels.get("invalidation_level")
+    volume = (tech.get("volume") or {}).get("relative_volume")
+    rr = risk.get("label", "undefined")
+    return (
+        f"Informational scenario: {ticker} improves only with confirmation above {breakout} and expanding relative volume "
+        f"(now {volume}). Technical invalidation is {invalidation}. Risk/reward: {rr}."
+    )
+
+
+def metric_state(metric) -> str:
+    if not metric:
+        return "missing"
+    if isinstance(metric, dict):
+        value = metric.get("value")
+        unit = metric.get("unit", "")
+        return f"available ({value} {unit})".strip()
+    return "available"
+
+
+def fundamental_read_it(ticker: str, fundamentals: dict, candidate: dict) -> str:
+    if fundamentals.get("status") != "ready":
+        return f"Per {ticker} i fondamentali non sono completi nel database BLUM; quindi la tesi deve pesare di piu su prezzo, rischio e narrativa."
+    quality = fundamentals.get("quality_score", 0)
+    return f"I fondamentali disponibili sono utilizzabili con quality score {quality}/100. Non bastano da soli: vanno confrontati con momentum, valutazione e rischio di delusione sugli utili."
+
+
+def fundamental_read_en(ticker: str, fundamentals: dict, candidate: dict) -> str:
+    if fundamentals.get("status") != "ready":
+        return f"For {ticker}, fundamentals are incomplete in BLUM's database; the thesis must lean more on price, risk and narrative evidence."
+    quality = fundamentals.get("quality_score", 0)
+    return f"Available fundamentals are usable with quality score {quality}/100. They are not sufficient alone and must be compared with momentum, valuation and earnings-disappointment risk."
+
+
+def missing_fundamental_warnings_it(ticker: str, fundamentals: dict) -> list[str]:
+    metrics = fundamentals.get("metrics") or {}
+    rows = []
+    if fundamentals.get("status") != "ready":
+        rows.append(f"{ticker}: fondamentali incompleti o non disponibili.")
+    for label, key in [("revenue", "revenue"), ("net income", "net_income"), ("cash flow operativo", "operating_cash_flow")]:
+        if not metrics.get(key):
+            rows.append(f"{ticker}: {label} non presente nel contesto recuperato.")
+    return rows or ["Il rischio principale e che la narrativa di mercato corra piu dei numeri fondamentali."]
+
+
+def missing_fundamental_warnings_en(ticker: str, fundamentals: dict) -> list[str]:
+    metrics = fundamentals.get("metrics") or {}
+    rows = []
+    if fundamentals.get("status") != "ready":
+        rows.append(f"{ticker}: fundamentals are incomplete or unavailable.")
+    for label, key in [("revenue", "revenue"), ("net income", "net_income"), ("operating cash flow", "operating_cash_flow")]:
+        if not metrics.get(key):
+            rows.append(f"{ticker}: {label} is missing from retrieved context.")
+    return rows or ["The main risk is that market narrative runs ahead of the fundamental numbers."]
 
 
 def executive_thesis(language: str, top: list[dict], market_mood: str, dominant: dict, intent: str) -> str:

@@ -104,6 +104,7 @@ export type FinancialChatResponse = {
   intent?: string;
   question: string;
   answer: {
+    response_style?: string;
     composed_response?: string;
     standard_sections?: Array<{ key: string; title: string; bullets: string[] }>;
     executive_view: string;
