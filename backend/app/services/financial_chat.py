@@ -1302,6 +1302,10 @@ def minimal_chat_payload(
     mode: str | None = None,
     validation: dict | None = None,
 ) -> dict:
+    public_answer = answer if is_debug_mode(mode) else public_answer_payload(
+        answer,
+        answer.get("response_style") in {"concise_safe", "clarification", "error", "technical", "fundamental"},
+    )
     payload = {
         "generated_at": datetime.utcnow().isoformat(),
         "mode": "blum_multilingual_market_intelligence_chat",
@@ -1309,7 +1313,7 @@ def minimal_chat_payload(
         "language": language,
         "intent": intent,
         "question": message,
-        "answer": answer,
+        "answer": public_answer,
         "candidate_opportunities": [],
         "asset_context": [],
         "market_context": {},
