@@ -1369,7 +1369,7 @@ def public_chat_payload(payload: dict) -> dict:
         "language": payload.get("language"),
         "intent": payload.get("intent"),
         "question": payload.get("question"),
-        "answer": answer,
+        "answer": public_answer_payload(answer, lightweight),
         "candidate_opportunities": [summarize_candidate(item) for item in payload.get("candidate_opportunities", [])[:10]],
         "asset_context": [summarize_asset_context(item) for item in payload.get("asset_context", [])[:8]],
         "market_context": summarize_market_context(payload.get("market_context", {})),
@@ -1381,6 +1381,37 @@ def public_chat_payload(payload: dict) -> dict:
         "suggested_followups": payload.get("suggested_followups", []),
         "disclaimer": payload.get("disclaimer"),
     }
+
+
+def public_answer_payload(answer: dict, lightweight: bool) -> dict:
+    base = {
+        "response_style": answer.get("response_style"),
+        "composed_response": answer.get("composed_response"),
+        "standard_sections": answer.get("standard_sections", []),
+        "executive_view": answer.get("executive_view"),
+        "risk_reward_view": answer.get("risk_reward_view"),
+        "data_quality": answer.get("data_quality", {}),
+        "answer_to_user": answer.get("answer_to_user"),
+        "market_sniper_mode": answer.get("market_sniper_mode", {}),
+    }
+    if lightweight:
+        return base
+    base.update(
+        {
+            "supporting_evidence": answer.get("supporting_evidence", []),
+            "contradicting_evidence": answer.get("contradicting_evidence", []),
+            "bull_case": answer.get("bull_case", ""),
+            "base_case": answer.get("base_case", ""),
+            "bear_case": answer.get("bear_case", ""),
+            "what_to_monitor": answer.get("what_to_monitor", []),
+            "research_plan": answer.get("research_plan", []),
+            "operation_plan": answer.get("operation_plan", []),
+            "market_may_be_missing": answer.get("market_may_be_missing", []),
+            "learning_loop_view": answer.get("learning_loop_view", []),
+            "learning_loop_memory": answer.get("learning_loop_memory", {}),
+        }
+    )
+    return base
 
 
 def summarize_candidate(candidate: dict) -> dict:
