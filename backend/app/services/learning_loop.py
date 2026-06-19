@@ -703,12 +703,12 @@ class StrategyMemoryService:
             if row is None:
                 row = StrategyMemory(memory_key=key, category=lesson["category"], lesson=lesson["lesson"], conditions=lesson["conditions"])
                 db.add(row)
-            row.sample_count += 1
+            row.sample_count = int(row.sample_count or 0) + 1
             if outcome.get("outcome_label") == "correct":
-                row.positive_count += 1
+                row.positive_count = int(row.positive_count or 0) + 1
             elif outcome.get("outcome_label") == "wrong":
-                row.negative_count += 1
-            row.reliability_score = memory_reliability(row.positive_count, row.negative_count, row.sample_count)
+                row.negative_count = int(row.negative_count or 0) + 1
+            row.reliability_score = memory_reliability(int(row.positive_count or 0), int(row.negative_count or 0), int(row.sample_count or 0))
             row.evidence = merge_evidence(row.evidence, context, prediction, outcome, analysis)
             row.last_seen_at = datetime.utcnow()
             row.updated_at = datetime.utcnow()
@@ -729,13 +729,13 @@ class StrategyMemoryService:
                 if row is None:
                     row = SignalPerformance(signal_name=signal_name, timeframe=timeframe, market_regime=regime)
                     db.add(row)
-                row.sample_count += 1
+                row.sample_count = int(row.sample_count or 0) + 1
                 if outcome.get("direction_correct") is True:
-                    row.correct_count += 1
+                    row.correct_count = int(row.correct_count or 0) + 1
                 if outcome.get("false_positive"):
-                    row.false_positive_count += 1
+                    row.false_positive_count = int(row.false_positive_count or 0) + 1
                 if outcome.get("false_negative"):
-                    row.false_negative_count += 1
+                    row.false_negative_count = int(row.false_negative_count or 0) + 1
                 returns = (row.evidence or {}).get("returns", [])
                 drawdowns = (row.evidence or {}).get("drawdowns", [])
                 if outcome.get("realized_return") is not None:
@@ -744,8 +744,8 @@ class StrategyMemoryService:
                     drawdowns = (drawdowns + [outcome["drawdown"]])[-200:]
                 positives = [value for value in returns if value > 0]
                 negatives = [abs(value) for value in returns if value < 0]
-                correct_rate = row.correct_count / max(1, row.sample_count)
-                false_penalty = row.false_positive_count / max(1, row.sample_count) * 18
+                correct_rate = int(row.correct_count or 0) / max(1, int(row.sample_count or 0))
+                false_penalty = int(row.false_positive_count or 0) / max(1, int(row.sample_count or 0)) * 18
                 row.average_return = round(mean(returns), 4) if returns else None
                 row.average_drawdown = round(mean(drawdowns), 4) if drawdowns else None
                 row.profit_factor = round(sum(positives) / max(0.01, sum(negatives)), 4) if returns else None
