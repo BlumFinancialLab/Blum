@@ -69,6 +69,9 @@ class FinancialChatRequest(BaseModel):
     horizon: str = Field(default="multi-horizon", max_length=80)
     risk_profile: str = Field(default="balanced", max_length=80)
     include_semantic_search: bool = True
+    language: str | None = Field(default=None, max_length=20)
+    session_id: str | None = Field(default=None, max_length=100)
+    mode: str | None = Field(default=None, max_length=80)
 
 
 class SignalRunRequest(BaseModel):

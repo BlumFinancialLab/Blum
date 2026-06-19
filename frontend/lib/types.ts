@@ -99,9 +99,13 @@ export type PortfolioScenarioPayload = {
 export type FinancialChatResponse = {
   generated_at: string;
   mode: string;
+  session_id?: string;
+  language?: string;
+  intent?: string;
   question: string;
   answer: {
     composed_response?: string;
+    standard_sections?: Array<{ key: string; title: string; bullets: string[] }>;
     executive_view: string;
     opportunity_lens: string;
     supporting_evidence: string[];
@@ -114,6 +118,8 @@ export type FinancialChatResponse = {
     research_plan?: string[];
     operation_plan?: string[];
     market_may_be_missing?: string[];
+    market_sniper_mode?: Record<string, any>;
+    data_quality?: Record<string, any>;
     answer_to_user: string;
     intellectual_honesty: string;
   };
@@ -121,6 +127,10 @@ export type FinancialChatResponse = {
   asset_context: Array<Record<string, any>>;
   market_context: Record<string, any>;
   semantic_evidence: Array<Record<string, any>>;
+  training_memory?: Array<Record<string, any>>;
+  rag_pipeline?: Array<Record<string, any>>;
+  sources_used?: Array<Record<string, any>>;
+  context_coverage?: Record<string, any>;
   suggested_followups: string[];
   models_used: Record<string, string>;
   governance: string[];

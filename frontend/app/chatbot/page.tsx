@@ -1,18 +1,22 @@
 "use client";
 
-import { FormEvent, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Send } from "lucide-react";
+import { Send, Sparkles } from "lucide-react";
 import { api } from "@/lib/api";
 import { FinancialChatResponse } from "@/lib/types";
 import { assetPath } from "@/lib/routes";
 import { BloombergPanel, ConfidenceMeter, MetricCard, RiskIndicator, ScoreBadge, TerminalHeader } from "@/components/FinancialTerminal";
 
 const STARTER_PROMPTS = [
-  "What should I monitor today across US and European equities?",
-  "Build a research plan for FTSE MIB and DAX opportunities.",
-  "Where is sentiment diverging from price action?",
-  "Create a bull/base/bear scenario plan for the strongest setup."
+  "Analizza NVIDIA con approccio tecnico e fondamentale.",
+  "Trova ETF AI interessanti con rischio definibile.",
+  "Confronta S&P 500 vs Nasdaq.",
+  "Dove potrebbe entrare un trader momentum?",
+  "Quali titoli stanno mostrando forza relativa?",
+  "Quali narrative stanno accelerando?",
+  "What could the market be missing today?",
+  "Compare Nvidia, AMD and Broadcom."
 ];
 
 type ChatMessage = {
@@ -26,35 +30,49 @@ export default function FinancialChatbotPage() {
   const [input, setInput] = useState("");
   const [horizon, setHorizon] = useState("short and medium term");
   const [riskProfile, setRiskProfile] = useState("balanced");
+  const [language, setLanguage] = useState("auto");
+  const [sessionId, setSessionId] = useState<string | undefined>();
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: "welcome",
       role: "assistant",
       content:
-        "Ask me a market question. I will answer like an evidence-bound financial analyst: thesis, supporting evidence, contradictions, scenario planning, risk controls and what to monitor next. I do not provide financial advice or guarantees.",
+        "Sono BLUM Chat. Fai una domanda come faresti a un analista buy-side: io recupero contesto BLUM, segnali, news, narrativa, tecnica, fondamentali, memoria storica e restituisco una risposta strutturata. Analisi informativa, non consulenza finanziaria.",
     },
   ]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [context, setContext] = useState<Record<string, any> | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    api.financialChatContext().then(setContext).catch(() => setContext(null));
+  }, []);
 
   const latestResponse = [...messages].reverse().find((message) => message.response)?.response;
   const candidates = latestResponse?.candidate_opportunities ?? [];
+  const mentionedAssets = latestResponse?.asset_context ?? [];
+  const sources = latestResponse?.sources_used ?? [];
+  const coverage = latestResponse?.context_coverage ?? {};
+  const sniper = latestResponse?.answer.market_sniper_mode ?? {};
+
   const contextStats = useMemo(() => {
     const marketContext = latestResponse?.market_context ?? {};
     const narrative = marketContext.narrative as any;
     const sentiment = marketContext.market_sentiment as any;
     return {
-      dominantTheme: narrative?.dominant_theme?.theme ?? "No active answer yet",
-      marketMood: narrative?.market_mood ?? "Waiting",
-      articleCount: sentiment?.article_count ?? 0,
+      dominantTheme: narrative?.dominant_theme?.theme ?? context?.dominant_narrative?.theme ?? "Waiting",
+      marketMood: narrative?.market_mood ?? context?.market_mood ?? "Waiting",
+      articleCount: sentiment?.article_count ?? context?.market_sentiment?.article_count ?? 0,
       semanticHits: latestResponse?.semantic_evidence?.length ?? 0,
+      memoryHits: latestResponse?.training_memory?.length ?? 0,
+      dataQuality: latestResponse?.answer.data_quality?.label ?? "Pending",
     };
-  }, [latestResponse]);
+  }, [context, latestResponse]);
 
-  const submit = async (event?: FormEvent) => {
+  const submit = async (event?: FormEvent, forcedPrompt?: string) => {
     event?.preventDefault();
-    const question = input.trim();
+    const question = (forcedPrompt ?? input).trim();
     if (question.length < 3 || busy) return;
     const userMessage: ChatMessage = { id: crypto.randomUUID(), role: "user", content: question };
     setMessages((current) => [...current, userMessage]);
@@ -66,8 +84,11 @@ export default function FinancialChatbotPage() {
         message: question,
         horizon,
         risk_profile: riskProfile,
+        language,
+        session_id: sessionId,
         include_semantic_search: true,
       });
+      setSessionId(response.session_id);
       setMessages((current) => [
         ...current,
         {
@@ -102,18 +123,18 @@ export default function FinancialChatbotPage() {
   return (
     <>
       <TerminalHeader
-        eyebrow="Blum Financial Chat"
-        title="AI market analyst conversation."
-        subtitle="A ChatGPT-style research interface for thesis generation, scenario planning, signal critique and evidence-bound financial reasoning."
+        eyebrow="BLUM Chat"
+        title="Financial intelligence conversation."
+        subtitle="Multilingual market assistant connected to Blum signals, narratives, technical analysis, fundamentals, memory, backtests and evidence controls."
         statusItems={[
-          { label: "Mode", value: "Conversational analyst", tone: "info" },
-          { label: "Risk frame", value: riskProfile },
-          { label: "Horizon", value: horizon },
-          { label: "Evidence", value: latestResponse ? `${contextStats.articleCount} news` : "waiting", tone: latestResponse ? "positive" : "attention" },
+          { label: "Mode", value: latestResponse?.intent ?? "RAG analyst", tone: "info" },
+          { label: "Language", value: latestResponse?.language ?? language },
+          { label: "Risk", value: riskProfile },
+          { label: "Evidence", value: `${contextStats.articleCount} news`, tone: latestResponse ? "positive" : "attention" },
         ]}
       />
 
-      <section className="chatgpt-shell">
+      <section className="chatgpt-shell blum-chat-shell">
         <div className="chatgpt-main">
           <div className="chat-thread">
             {messages.map((message) => (
@@ -123,8 +144,8 @@ export default function FinancialChatbotPage() {
               <div className="chat-bubble assistant">
                 <div className="chat-avatar">B</div>
                 <div className="chat-message-card">
-                  <span className="chat-role">Blum is reasoning</span>
-                  <p>Retrieving market context, candidate opportunities, semantic evidence, contradictions and scenario plan...</p>
+                  <span className="chat-role">BLUM is composing</span>
+                  <p>Retrieving assets, technicals, fundamentals, sentiment, narrative, memory, contradictions and risk controls...</p>
                 </div>
               </div>
             )}
@@ -138,6 +159,14 @@ export default function FinancialChatbotPage() {
 
           <form className="chat-composer" onSubmit={submit}>
             <div className="chat-composer-controls">
+              <select className="input" value={language} onChange={(event) => setLanguage(event.target.value)} aria-label="Language">
+                <option value="auto">Auto language</option>
+                <option value="it">Italiano</option>
+                <option value="en">English</option>
+                <option value="de">Deutsch</option>
+                <option value="fr">Francais</option>
+                <option value="es">Espanol</option>
+              </select>
               <select className="input" value={horizon} onChange={(event) => setHorizon(event.target.value)} aria-label="Analysis horizon">
                 <option>intraday and short term</option>
                 <option>short and medium term</option>
@@ -157,7 +186,7 @@ export default function FinancialChatbotPage() {
                 className="input chat-input"
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
-                placeholder="Ask Blum to build a thesis, compare assets, plan a monitored setup, or challenge a market narrative..."
+                placeholder="Ask BLUM to analyze an asset, compare setups, find selective opportunities, or plan a monitored technical scenario..."
                 rows={2}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && !event.shiftKey) {
@@ -175,26 +204,59 @@ export default function FinancialChatbotPage() {
         </div>
 
         <aside className="chat-context-rail">
-          <BloombergPanel title="Current Context" value={contextStats.marketMood}>
+          <BloombergPanel title="Conversation Context" value={contextStats.marketMood}>
             <div className="professional-grid-2">
               <MetricCard label="Dominant Theme" value={contextStats.dominantTheme} />
+              <MetricCard label="Data Quality" value={contextStats.dataQuality} />
               <MetricCard label="Semantic Hits" value={contextStats.semanticHits} />
-              <MetricCard label="News Evidence" value={contextStats.articleCount} />
-              <MetricCard label="Candidates" value={candidates.length} />
+              <MetricCard label="Memory Hits" value={contextStats.memoryHits} />
             </div>
           </BloombergPanel>
+
+          <BloombergPanel title="Assets Mentioned" value={`${mentionedAssets.length} names`}>
+            <div className="chat-candidate-stack">
+              {mentionedAssets.length === 0 && <div className="terminal-empty compact">Ask about an asset, ETF, sector or market to build context.</div>}
+              {mentionedAssets.slice(0, 8).map((asset: any) => <AssetContextPill asset={asset} key={asset.ticker} />)}
+            </div>
+          </BloombergPanel>
+
           <BloombergPanel title="Candidate Queue" value={`${candidates.length} names`}>
             <div className="chat-candidate-stack">
-              {candidates.length === 0 && <div className="terminal-empty compact">Ask a question to build a live research queue.</div>}
+              {candidates.length === 0 && <div className="terminal-empty compact">The assistant will populate a ranked queue from real BLUM evidence.</div>}
               {candidates.slice(0, 8).map((candidate, index) => <CompactCandidate candidate={candidate} rank={index + 1} key={`${candidate.ticker ?? "candidate"}-${index}`} />)}
             </div>
           </BloombergPanel>
+
+          {sniper?.asset && (
+            <BloombergPanel title="Market Sniper Mode" value={sniper.confidence ?? "Selective"}>
+              <div className="sniper-box">
+                <strong>{sniper.asset} | {sniper.setup_type}</strong>
+                <span>Zone: {sniper.entry_zone_informational}</span>
+                <span>Invalidation: {String(sniper.invalidation ?? "n/a")}</span>
+                <span>Target zone: {String(sniper.target_zone_informational ?? "n/a")}</span>
+                <span>{sniper.what_could_go_wrong}</span>
+              </div>
+            </BloombergPanel>
+          )}
+
+          <BloombergPanel title="Sources Used" value={`${sources.length} layers`}>
+            <div className="source-badge-grid">
+              {sources.map((source: any) => <SourceBadge source={source} key={`${source.name}-${source.type}`} />)}
+            </div>
+            <div className="context-coverage">
+              <span>Price {coverage.assets_with_price ?? 0}/{coverage.assets_detected ?? 0}</span>
+              <span>Technicals {coverage.assets_with_technical_analysis ?? 0}</span>
+              <span>Fundamentals {coverage.assets_with_fundamentals ?? 0}</span>
+              <span>News {coverage.assets_with_news ?? 0}</span>
+            </div>
+          </BloombergPanel>
+
           <BloombergPanel title="Guardrails" value="Research only">
             <div className="chat-guardrail-list">
               <span>No direct buy/sell instruction.</span>
-              <span>No promise of future performance.</span>
-              <span>Always show contradiction and invalidation logic.</span>
-              <span>Planning is hypothetical and evidence-bound.</span>
+              <span>No guaranteed outcome or market-beating claim.</span>
+              <span>Missing data is declared.</span>
+              <span>Levels are informational and probabilistic.</span>
             </div>
           </BloombergPanel>
         </aside>
@@ -209,10 +271,25 @@ function ChatBubble({ message }: { message: ChatMessage }) {
     <div className={`chat-bubble ${message.role}`}>
       <div className="chat-avatar">{message.role === "assistant" ? "B" : "U"}</div>
       <div className="chat-message-card">
-        <span className="chat-role">{message.role === "assistant" ? "Blum Financial Brain" : "You"}</span>
-        <RichAnswer text={message.content} />
+        <span className="chat-role">{message.role === "assistant" ? "BLUM Financial Brain" : "You"}</span>
+        {response?.answer.standard_sections ? <StructuredAnswer response={response} /> : <RichAnswer text={message.content} />}
         {response && <ResponseEvidence response={response} />}
       </div>
+    </div>
+  );
+}
+
+function StructuredAnswer({ response }: { response: FinancialChatResponse }) {
+  return (
+    <div className="structured-answer">
+      {response.answer.standard_sections?.map((section) => (
+        <section className="structured-section" key={section.key}>
+          <h3>{section.title}</h3>
+          <ul>
+            {section.bullets.slice(0, 8).map((bullet, index) => <li key={`${section.key}-${index}`}>{bullet}</li>)}
+          </ul>
+        </section>
+      ))}
     </div>
   );
 }
@@ -267,7 +344,7 @@ function EvidenceList({ title, rows }: { title: string; rows: string[] }) {
     <div className="chat-evidence-list compact-list">
       <strong>{title}</strong>
       {rows.length === 0 && <span>No material evidence retrieved.</span>}
-      {rows.slice(0, 6).map((row) => <span key={row}>{row}</span>)}
+      {rows.slice(0, 6).map((row, index) => <span key={`${title}-${index}`}>{row}</span>)}
     </div>
   );
 }
@@ -277,6 +354,20 @@ function ScenarioMini({ title, text }: { title: string; text: string }) {
     <div className="chat-scenario-card">
       <span>{title}</span>
       <p>{text}</p>
+    </div>
+  );
+}
+
+function AssetContextPill({ asset }: { asset: Record<string, any> }) {
+  const snapshot = asset.market_snapshot ?? {};
+  return (
+    <div className="asset-context-pill">
+      <div>
+        <Link href={assetPath(String(asset.ticker))}>{asset.ticker}</Link>
+        <p>{asset.name} | {asset.sector}</p>
+      </div>
+      <strong>{snapshot.price ? `${Number(snapshot.price).toFixed(2)} ${snapshot.currency ?? ""}` : "No price"}</strong>
+      <span>{snapshot.data_status ?? "unknown"}</span>
     </div>
   );
 }
@@ -292,7 +383,20 @@ function CompactCandidate({ candidate, rank }: { candidate: Record<string, any>;
       </div>
       <ScoreBadge value={candidate.opportunity_score} label="opp" />
       <RiskIndicator risk={candidate.risk_level ?? "Not rated"} score={candidate.risk_score} />
-      <ConfidenceMeter value={candidate.news_score} label="News" />
+      <ConfidenceMeter value={candidate.technical_score} label="Tech" />
     </div>
   );
 }
+
+function SourceBadge({ source }: { source: Record<string, any> }) {
+  return (
+    <div className="source-badge">
+      <Sparkles size={13} />
+      <div>
+        <strong>{source.name}</strong>
+        <span>{source.type} | coverage {String(source.coverage ?? 0)}</span>
+      </div>
+    </div>
+  );
+}
+

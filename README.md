@@ -118,6 +118,50 @@ Strategic modules:
 
 The wording policy explicitly avoids `buy`, `sell`, guaranteed profit or trading instructions. Surfaces use language such as monitor, observe, setup, scenario, risk review and research candidate.
 
+## BLUM Chat
+
+BLUM Chat is the conversational voice of the Blum analytical engine. It is not a generic chatbot. It is a multilingual financial intelligence assistant that retrieves internal Blum evidence and converts it into structured research dialogue.
+
+Supported languages:
+
+- Italian
+- English
+- German
+- French
+- Spanish
+
+The chat pipeline:
+
+1. Detects the user language.
+2. Detects intent: asset analysis, comparison, opportunity search, narrative analysis or selective setup planning.
+3. Extracts tickers, company names, ETFs, sectors and market terms such as FTSE MIB, DAX, S&P 500 and Nasdaq.
+4. Retrieves Blum context: ranking, signals, OHLCV snapshots, deterministic technical analysis, SEC companyfacts fundamentals, news, sentiment, narratives, semantic evidence and reasoning memory.
+5. Builds a structured answer with summary, observed data, technical analysis, fundamental analysis, sentiment/news/narrative, bull/base/bear scenario, relevant levels, risks, informational operating view and missing data.
+6. Runs an anti-hallucination pass by surfacing missing prices, stale data, missing fundamentals, missing news or limited historical memory.
+7. Stores chat sessions and messages in PostgreSQL for future personalization and training-memory workflows.
+
+BLUM Chat includes an internal **Market Sniper Mode**. This is a selective research mode, not a trading signal. It identifies informational setup zones, confirmation conditions, invalidation, target zones, risk/reward geometry, confidence and what could go wrong. It never presents an order and never guarantees an outcome.
+
+Open-source model interface:
+
+- `LLMProvider` contract for OpenAI-compatible APIs, local models, Hugging Face Inference, Ollama, vLLM and llama.cpp.
+- Deterministic evidence-bound fallback when no external model is configured.
+- Future-compatible with Llama, Mistral, Qwen, DeepSeek, Phi, FinGPT and finance models hosted on Hugging Face.
+
+Chat persistence tables:
+
+- `chat_sessions`
+- `chat_messages`
+
+Primary endpoints:
+
+- `POST /api/chat`
+- `GET /api/chat/context`
+- `GET /api/chat/assets/{ticker}`
+- `GET /api/chat/signals/{ticker}`
+- `GET /api/chat/history`
+- Legacy compatible: `POST /chat/financial`
+
 ## Self-Learning Financial Brain
 
 Blum now includes a measurable self-learning layer called **Blum Financial Brain**. This is not artificial consciousness and not autonomous trading. It is a controlled financial intelligence memory that checks whether prior signals were useful after real market outcomes arrive.
@@ -401,6 +445,12 @@ FastAPI exposes clean JSON endpoints:
 - `GET /intelligence/portfolio-scenario`
 - `GET /intelligence/reports/{ticker}`
 - `GET /intelligence/backtest/{ticker}`
+- `POST /api/chat`
+- `GET /api/chat/context`
+- `GET /api/chat/assets/{ticker}`
+- `GET /api/chat/signals/{ticker}`
+- `GET /api/chat/history`
+- `POST /chat/financial`
 - `GET /brain/status`
 - `GET /brain/accuracy`
 - `GET /brain/learning-events`
@@ -456,6 +506,7 @@ Interactive API docs are available at `/docs`.
 - AI Portfolio Scenario
 - Market Brain
 - Chart Analyst
+- BLUM Chat
 - Asset Detail
 - Blum Memory
 - Stock Radar
@@ -543,10 +594,10 @@ The UI exposes `/system/status` in the sidebar and dashboard. If the GUI looks u
 - `feature_set` must show the expected feature bundle.
 - `persistence.mode` must be `external_postgres` for strict no-reset durability, or `embedded_postgres` with a populated backup file plus persistent `/data` storage for demo durability.
 - `GET /autonomous/status` shows the latest autonomous run, stage diagnostics, readiness score and dataset catalog status.
-- `POST /system/persistence/backup` can force an immediate embedded PostgreSQL backup after a learning cycle or manual operations.
+- `POST /system/persistence/backup` exists as an administrative recovery endpoint; normal operation persists through the autonomous worker.
 - `Financial Brain` shows `fallback mode` unless `BLUM_ENABLE_FINANCIAL_BRAIN_MODEL=true`.
 - Hugging Face serves the previous Docker image until the new build finishes successfully.
-- Existing Market Brain snapshots should be regenerated with `Run brain` after a deployment.
+- Existing Market Brain snapshots are refreshed by the autonomous worker after deployment.
 - Hard-refresh the browser if old static Next.js chunks are cached.
 
 The Space serves the FastAPI backend and the exported Next.js frontend on port `7860`.

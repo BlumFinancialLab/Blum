@@ -32,6 +32,8 @@ from app.models import (
     BlumTrainingExample,
     ChartAnalysis,
     ChartPatternMemory,
+    ChatMessage,
+    ChatSession,
     ConfidenceAdjustment,
     EmbeddingVector,
     ExternalDatasetSource,
@@ -95,7 +97,8 @@ from app.services.financial_brain_learning import (
     recalculate_model_weights,
     run_learning_cycle,
 )
-from app.services.financial_chat import financial_chat_response
+from app.services.financial_chat import asset_context as chat_asset_context
+from app.services.financial_chat import chat_context_overview, chat_history, financial_chat_response
 from app.services.hybrid_chart_intelligence import HybridChartIntelligence
 from app.services.huggingface_datasets import dataset_catalog_status, refresh_huggingface_dataset_catalog
 from app.services.ipo import ipo_radar, sec_company_submissions, update_ipo_radar
@@ -139,7 +142,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
     return {
         "service": "blum-ai-financial-intelligence",
         "app_version": settings.app_version,
-        "feature_set": "autonomous-europe-narrative-chat-engine-v0.8.4",
+        "feature_set": "autonomous-europe-multilingual-financial-chat-v0.8.5",
         "environment": settings.environment,
         "generated_at": datetime.utcnow().isoformat(),
         "hugging_face": {
@@ -199,6 +202,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "financial_knowledge_graph": True,
             "portfolio_scenario": True,
             "watchlist": True,
+            "multilingual_financial_chat": True,
             "autonomous_research_engine": True,
             "huggingface_dataset_catalog": True,
         },
@@ -241,13 +245,15 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "blum_training_jobs": int(db.scalar(select(func.count(BlumModelTrainingJob.id))) or 0),
             "external_dataset_sources": int(db.scalar(select(func.count(ExternalDatasetSource.id))) or 0),
             "autonomous_engine_runs": int(db.scalar(select(func.count(AutonomousEngineRun.id))) or 0),
+            "chat_sessions": int(db.scalar(select(func.count(ChatSession.id))) or 0),
+            "chat_messages": int(db.scalar(select(func.count(ChatMessage.id))) or 0),
         },
         "latest_news_created_at": latest_brain,
         "why_gui_can_look_unchanged": [
             "Hugging Face serves the previous image until the Docker build finishes successfully.",
             "The finance-domain 7B model is disabled by default unless BLUM_ENABLE_FINANCIAL_BRAIN_MODEL=true.",
             "Existing snapshots are refreshed by the autonomous engine after a successful deployment.",
-            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.8.4.",
+            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.8.5.",
         ],
     }
 
@@ -778,7 +784,42 @@ def financial_chat(payload: FinancialChatRequest, db: Session = Depends(get_db))
         horizon=payload.horizon,
         risk_profile=payload.risk_profile,
         include_semantic_search=payload.include_semantic_search,
+        language=payload.language,
+        session_id=payload.session_id,
+        mode=payload.mode,
     )
+
+
+@router.post("/api/chat")
+def financial_chat_api(payload: FinancialChatRequest, db: Session = Depends(get_db)):
+    return financial_chat(payload, db)
+
+
+@router.get("/api/chat/context")
+def financial_chat_context(db: Session = Depends(get_db)):
+    return chat_context_overview(db)
+
+
+@router.get("/api/chat/assets/{ticker}")
+def financial_chat_asset_context(ticker: str, db: Session = Depends(get_db)):
+    asset = require_asset(db, ticker)
+    return chat_asset_context(db, asset)
+
+
+@router.get("/api/chat/signals/{ticker}")
+def financial_chat_signal_context(ticker: str, db: Session = Depends(get_db)):
+    asset = require_asset(db, ticker)
+    signal = latest_signal(db, asset.id)
+    return {
+        "ticker": asset.ticker,
+        "latest_signal": signal_payload(signal, db) if signal else None,
+        "asset_context": chat_asset_context(db, asset),
+    }
+
+
+@router.get("/api/chat/history")
+def financial_chat_history(limit: int = Query(default=80, ge=1, le=300), db: Session = Depends(get_db)):
+    return chat_history(db, limit=limit)
 
 
 @router.get("/related-news")

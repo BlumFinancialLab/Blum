@@ -1963,6 +1963,34 @@ p { color: var(--muted); line-height: 1.55; }
   padding: 13px 14px;
   background: #080d14;
 }
+.structured-answer {
+  display: grid;
+  gap: 9px;
+}
+.structured-section {
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 7px;
+  padding: 10px;
+  background: #05080d;
+}
+.structured-section h3 {
+  margin: 0 0 8px;
+  color: var(--amber);
+  font-size: 11px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.structured-section ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 17px;
+}
+.structured-section li {
+  color: #d8e1ee;
+  font-size: 12px;
+  line-height: 1.45;
+}
 .chat-role {
   display: block;
   margin-bottom: 8px;
@@ -2071,7 +2099,7 @@ p { color: var(--muted); line-height: 1.55; }
 }
 .compact-candidate {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) auto;
+  grid-template-columns: 28px minmax(0, 1fr) auto auto auto;
   gap: 8px;
   align-items: center;
   border: 1px solid rgba(255,255,255,.08);
@@ -2082,6 +2110,96 @@ p { color: var(--muted); line-height: 1.55; }
 .compact-candidate > strong {
   color: var(--amber);
   font-size: 12px;
+}
+.asset-context-pill {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px;
+  align-items: center;
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 7px;
+  padding: 9px;
+  background: #05080d;
+}
+.asset-context-pill a {
+  color: #f7fbff;
+  font-weight: 950;
+}
+.asset-context-pill p {
+  margin: 3px 0 0;
+  color: #8f9bad;
+  font-size: 11px;
+  line-height: 1.25;
+}
+.asset-context-pill strong {
+  color: var(--amber);
+  font-size: 12px;
+}
+.asset-context-pill span {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  font-weight: 900;
+}
+.source-badge-grid,
+.context-coverage,
+.sniper-box {
+  display: grid;
+  gap: 7px;
+}
+.source-badge {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 7px;
+  align-items: start;
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 7px;
+  padding: 8px;
+  background: #05080d;
+}
+.source-badge svg {
+  color: var(--amber);
+  margin-top: 1px;
+}
+.source-badge strong,
+.source-badge span,
+.sniper-box strong,
+.sniper-box span,
+.context-coverage span {
+  display: block;
+}
+.source-badge strong,
+.sniper-box strong {
+  color: #f4f8ff;
+  font-size: 12px;
+}
+.source-badge span,
+.sniper-box span,
+.context-coverage span {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+.sniper-box {
+  border: 1px solid rgba(255,176,0,.26);
+  border-radius: 7px;
+  padding: 10px;
+  background: rgba(255,176,0,.06);
+}
+.context-coverage {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 10px;
+}
+.context-coverage span {
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 5px;
+  padding: 6px;
+  background: #05080d;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  font-weight: 900;
 }
 .compact-candidate a {
   color: #f4f8ff;
@@ -2105,7 +2223,7 @@ p { color: var(--muted); line-height: 1.55; }
   .system-card { position: static; margin-top: 14px; }
   .page-header { align-items: flex-start; flex-direction: column; }
   .header-actions { justify-content: flex-start; }
-  .hero, .grid-2, .grid-3, .grid-4, .live-grid, .realtime-strip, .deployment-banner, .diagnostic-grid, .instrument-card, .market-strip, .market-strip.compact, .brain-hero, .scenario-grid, .evidence-grid, .method-grid, .event-graph, .financial-brain-grid, .quality-lists, .macro-list, .executive-hero, .executive-command, .executive-grid, .narrative-grid, .sentiment-columns, .opportunity-card, .score-stack, .allocation-list div, .brain-status-grid, .brain-two-col, .chart-snapshot-panel .brain-status-grid, .key-level-grid, .evidence-columns, .terminal-header, .terminal-status-grid, .terminal-command-grid, .market-command-layout, .market-pulse-grid, .pulse-chart-grid, .asset-command-card, .signal-note-grid, .professional-grid-2, .professional-grid-3, .professional-grid-4, .desk-layout, .market-brain-system-grid, .chat-command-layout, .chat-prompt-grid, .chat-answer-grid, .chat-candidate-row, .chatgpt-shell, .chat-evidence-columns, .scenario-mini-grid { grid-template-columns: 1fr; }
+  .hero, .grid-2, .grid-3, .grid-4, .live-grid, .realtime-strip, .deployment-banner, .diagnostic-grid, .instrument-card, .market-strip, .market-strip.compact, .brain-hero, .scenario-grid, .evidence-grid, .method-grid, .event-graph, .financial-brain-grid, .quality-lists, .macro-list, .executive-hero, .executive-command, .executive-grid, .narrative-grid, .sentiment-columns, .opportunity-card, .score-stack, .allocation-list div, .brain-status-grid, .brain-two-col, .chart-snapshot-panel .brain-status-grid, .key-level-grid, .evidence-columns, .terminal-header, .terminal-status-grid, .terminal-command-grid, .market-command-layout, .market-pulse-grid, .pulse-chart-grid, .asset-command-card, .signal-note-grid, .professional-grid-2, .professional-grid-3, .professional-grid-4, .desk-layout, .market-brain-system-grid, .chat-command-layout, .chat-prompt-grid, .chat-answer-grid, .chat-candidate-row, .chatgpt-shell, .chat-evidence-columns, .scenario-mini-grid, .compact-candidate, .asset-context-pill, .context-coverage { grid-template-columns: 1fr; }
   .chat-context-rail { position: static; }
   .chat-thread { max-height: none; }
   .tape-row { grid-template-columns: 1fr; }

@@ -9,8 +9,10 @@ import pandas as pd
 import requests
 import yfinance as yf
 
+from app.providers.base import MarketDataProvider
 
-class YFinanceProvider:
+
+class YFinanceProvider(MarketDataProvider):
     name = "yfinance"
 
     def download_history(self, tickers: list[str], period: str = "2y", interval: str = "1d") -> dict[str, pd.DataFrame]:
@@ -40,7 +42,7 @@ class YFinanceProvider:
         return frames
 
 
-class YahooChartProvider:
+class YahooChartProvider(MarketDataProvider):
     name = "yahoo_chart"
 
     def download_history(self, tickers: list[str], period: str = "2y", interval: str = "1d") -> dict[str, pd.DataFrame]:
@@ -87,7 +89,7 @@ class YahooChartProvider:
         return normalize_frame(frame)
 
 
-class NasdaqHistoricalProvider:
+class NasdaqHistoricalProvider(MarketDataProvider):
     name = "nasdaq_api"
 
     def download_history(self, tickers: list[str], period: str = "2y", interval: str = "1d") -> dict[str, pd.DataFrame]:
@@ -148,7 +150,7 @@ class NasdaqHistoricalProvider:
         return pd.DataFrame()
 
 
-class StooqProvider:
+class StooqProvider(MarketDataProvider):
     name = "stooq"
 
     def download_history(self, tickers: list[str], period: str = "2y", interval: str = "1d") -> dict[str, pd.DataFrame]:

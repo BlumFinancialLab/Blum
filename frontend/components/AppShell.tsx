@@ -22,7 +22,7 @@ const nav: NavItem[] = [
   { href: "/market-brain", label: "Brain", icon: Cpu },
   { href: "/themes", label: "Narratives", icon: Network },
   { href: "/chart-analyst", label: "Charts", icon: LineChart },
-  { href: "/chatbot", label: "Chat", icon: MessageSquare }
+  { href: "/chat", label: "Chat", icon: MessageSquare, aliases: ["/chatbot"] }
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {

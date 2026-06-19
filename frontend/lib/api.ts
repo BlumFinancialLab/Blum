@@ -91,8 +91,10 @@ export const api = {
   runMarketBrain: (refreshPipeline = false) => postJson<MarketBrain>(`/market-brain/run?refresh_pipeline=${refreshPipeline ? "true" : "false"}&refresh_sec=true`, {}),
   modelStatus: () => getJson<any>("/ai/models/status"),
   semanticSearch: (query: string) => postJson<any[]>("/semantic-search", { query, limit: 12 }),
-  financialChat: (payload: { message: string; tickers?: string[]; horizon?: string; risk_profile?: string; include_semantic_search?: boolean }) =>
-    postJson<FinancialChatResponse>("/chat/financial", payload),
+  financialChat: (payload: { message: string; tickers?: string[]; horizon?: string; risk_profile?: string; include_semantic_search?: boolean; language?: string; session_id?: string; mode?: string }) =>
+    postJson<FinancialChatResponse>("/api/chat", payload),
+  financialChatContext: () => getJson<any>("/api/chat/context"),
+  financialChatHistory: (limit = 80) => getJson<any[]>(`/api/chat/history?limit=${limit}`),
   marketUpdate: () => postJson("/market/update", { period: "max", limit: 36 }),
   newsUpdate: () => postJson("/news/update", { lookback_hours: 72, limit_per_feed: 35 }),
   runSignals: () => postJson("/signals/run", { refresh_prices: false, limit: 36 }),

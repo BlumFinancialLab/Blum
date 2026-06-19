@@ -276,6 +276,39 @@ class PortfolioScenario(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
 
+class ChatSession(Base):
+    __tablename__ = "chat_sessions"
+    __table_args__ = (
+        UniqueConstraint("session_key", name="uq_chat_session_key"),
+        Index("ix_chat_sessions_updated", "updated_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_key: Mapped[str] = mapped_column(String(80), index=True)
+    title: Mapped[str] = mapped_column(String(220), default="Blum Chat Session")
+    language: Mapped[str] = mapped_column(String(12), default="en", index=True)
+    horizon: Mapped[str] = mapped_column(String(80), default="multi-horizon", index=True)
+    risk_profile: Mapped[str] = mapped_column(String(80), default="balanced", index=True)
+    metadata_payload: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+    __table_args__ = (Index("ix_chat_messages_session_created", "session_id", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[int | None] = mapped_column(ForeignKey("chat_sessions.id", ondelete="CASCADE"), index=True)
+    role: Mapped[str] = mapped_column(String(24), index=True)
+    content: Mapped[str] = mapped_column(Text, default="")
+    language: Mapped[str] = mapped_column(String(12), default="en", index=True)
+    response_payload: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    session = relationship("ChatSession")
+
+
 class SignalEvaluation(Base):
     __tablename__ = "signal_evaluations"
     __table_args__ = (
