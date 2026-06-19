@@ -66,7 +66,7 @@ def financial_chat_response(
         "models_used": {
             "sentiment": "ProsusAI/finbert via stored sentiment rows",
             "embeddings": "sentence-transformers semantic search over stored news embeddings",
-            "reasoning": "Blum deterministic evidence-bound analyst layer",
+            "reasoning": "Blum open-source evidence-bound analyst layer with Qwen/finance LLM compatibility when enabled",
         },
         "governance": [
             "Distinguishes observed data from inference.",
@@ -246,7 +246,21 @@ def build_answer(
             contradictions.append(f"{item.get('ticker')}: market data status is {item.get('data_status')}.")
     if not contradictions:
         contradictions.append("No severe contradiction is dominant in the retrieved evidence, but macro/news data can change quickly.")
+    research_plan = planning_steps(top, risk_profile, horizon)
+    operation_plan = operation_planning_steps(top, horizon)
+    composed = compose_chat_response(
+        message=message,
+        thesis=thesis,
+        top=top,
+        supporting=support[:8],
+        contradicting=contradictions[:8],
+        research_plan=research_plan,
+        operation_plan=operation_plan,
+        horizon=horizon,
+        risk_profile=risk_profile,
+    )
     return {
+        "composed_response": composed,
         "executive_view": thesis,
         "opportunity_lens": "Focus on statistically interesting setups, not deterministic predictions.",
         "supporting_evidence": support[:8],
@@ -256,6 +270,9 @@ def build_answer(
         "bear_case": scenario_text(top, "bear"),
         "risk_reward_view": risk_reward_view(top, risk_profile, horizon),
         "what_to_monitor": monitor_points(top, asset_packets, sentiment, community),
+        "research_plan": research_plan,
+        "operation_plan": operation_plan,
+        "market_may_be_missing": market_may_be_missing(top, narrative, sentiment),
         "answer_to_user": (
             "Use the candidates as a research queue: verify price confirmation, volume confirmation, "
             "news quality, sector confirmation and invalidation levels before making any decision."
@@ -281,6 +298,93 @@ def risk_reward_view(candidates: list[dict], risk_profile: str, horizon: str) ->
         f"For a {risk_profile} profile and {horizon} horizon, prioritize high score candidates with controlled risk. "
         f"High-risk names requiring extra validation: {', '.join(high_risk[:5]) or 'none in the top evidence set'}."
     )
+
+
+def planning_steps(candidates: list[dict], risk_profile: str, horizon: str) -> list[str]:
+    if not candidates:
+        return [
+            "Start with market regime, sector breadth and narrative lifecycle before selecting individual assets.",
+            "Wait for sufficient price, news and sentiment evidence before forming a high-conviction thesis.",
+        ]
+    top = candidates[:3]
+    steps = [
+        f"Build a watch queue around {', '.join(item.get('ticker', 'n/a') for item in top)} for a {horizon} horizon.",
+        "Separate the thesis into observed facts, causal hypotheses, contradictions and invalidation conditions.",
+        "Require at least two independent confirmations: price/volume, sector ETF confirmation, sentiment/news quality or historical similarity.",
+        f"Use a {risk_profile} risk frame: lower conviction when volatility, missing data or narrative crowding rises.",
+    ]
+    if any(item.get("data_status") != "ready" for item in top):
+        steps.append("Do not escalate a setup while OHLCV evidence is missing or stale; treat it as a research candidate only.")
+    return steps
+
+
+def operation_planning_steps(candidates: list[dict], horizon: str) -> list[str]:
+    if not candidates:
+        return ["No operation plan is generated because the retrieved evidence is insufficient."]
+    top = candidates[:3]
+    return [
+        f"Pre-trade research plan: monitor {', '.join(item.get('ticker', 'n/a') for item in top)} and rank them by evidence quality, not by headline excitement.",
+        "Trigger framework: only consider action after price confirmation, relative volume expansion and narrative confirmation align.",
+        "Invalidation framework: stand down if the original catalyst fades, price breaks the relevant technical structure, or sentiment/news diverges negatively.",
+        "Risk framework: define exposure before action, cap downside through pre-defined invalidation, and avoid concentration when correlations are high.",
+        f"Review cadence: re-check the thesis daily for {horizon} and downgrade it if evidence quality deteriorates.",
+    ]
+
+
+def market_may_be_missing(candidates: list[dict], narrative: dict, sentiment: dict) -> list[str]:
+    dominant = narrative.get("dominant_theme", {}) if isinstance(narrative, dict) else {}
+    points = [
+        f"The market may be over-focusing on {dominant.get('theme', 'the dominant narrative')} headline volume while underweighting evidence quality.",
+        "Weak signals can matter when price, sentiment and sector confirmation start aligning before broad consensus forms.",
+    ]
+    if sentiment.get("article_count", 0) and abs(float(sentiment.get("average_sentiment", 0))) < 0.05:
+        points.append("Market-wide sentiment is near neutral; dispersion between assets may be more useful than the headline mood.")
+    if any(item.get("data_status") != "ready" for item in candidates[:5]):
+        points.append("Some requested assets lack ready OHLCV evidence, so the missing information itself is a risk signal.")
+    return points
+
+
+def compose_chat_response(
+    message: str,
+    thesis: str,
+    top: list[dict],
+    supporting: list[str],
+    contradicting: list[str],
+    research_plan: list[str],
+    operation_plan: list[str],
+    horizon: str,
+    risk_profile: str,
+) -> str:
+    top_tickers = [item.get("ticker") for item in top if item.get("ticker")]
+    top_line = ", ".join(top_tickers[:5]) if top_tickers else "no high-quality candidate yet"
+    missing = [item.get("ticker") for item in top if item.get("data_status") != "ready" and item.get("ticker")]
+    lines = [
+        f"I would frame your question as a research problem, not as a buy/sell decision. For a {risk_profile} profile and {horizon} horizon, the current watch queue is: {top_line}.",
+        "",
+        f"My working thesis: {thesis}",
+        "",
+        "What matters now:",
+        *[f"- {item}" for item in supporting[:5]],
+        "",
+        "What can break the thesis:",
+        *[f"- {item}" for item in contradicting[:5]],
+        "",
+        "Planning framework:",
+        *[f"- {item}" for item in research_plan[:5]],
+        "",
+        "Hypothetical operation plan, for research only:",
+        *[f"- {item}" for item in operation_plan[:5]],
+    ]
+    if missing:
+        lines.extend([
+            "",
+            f"Important limitation: {', '.join(missing[:6])} currently has incomplete stored price evidence. Blum should not raise conviction until the autonomous data layer hydrates those assets.",
+        ])
+    lines.extend([
+        "",
+        "This is not financial advice. It is an evidence-bound research workflow designed to improve decision quality, expose contradictions and avoid false conviction.",
+    ])
+    return "\n".join(lines)
 
 
 def monitor_points(candidates: list[dict], asset_packets: list[dict], sentiment: dict, community: dict) -> list[str]:

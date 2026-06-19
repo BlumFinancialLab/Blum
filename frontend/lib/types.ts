@@ -101,6 +101,7 @@ export type FinancialChatResponse = {
   mode: string;
   question: string;
   answer: {
+    composed_response?: string;
     executive_view: string;
     opportunity_lens: string;
     supporting_evidence: string[];
@@ -110,6 +111,9 @@ export type FinancialChatResponse = {
     bear_case: string;
     risk_reward_view: string;
     what_to_monitor: string[];
+    research_plan?: string[];
+    operation_plan?: string[];
+    market_may_be_missing?: string[];
     answer_to_user: string;
     intellectual_honesty: string;
   };
