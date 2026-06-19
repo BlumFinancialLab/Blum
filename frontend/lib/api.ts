@@ -1,4 +1,4 @@
-import { AccuracyOverview, AccuracyProfile, Asset, BrainAccuracy, BrainAssetMemory, BrainEvaluation, BrainStatus, ChartReport, CommunitySentimentPayload, DashboardOverview, DataCoverage, ExecutiveDashboardPayload, IPORadar, LiveNewsArticle, MacroOverview, MarketBrain, MarketBrainHistoryRow, MarketNarrativePayload, MarketSentiment, OpportunityRadarPayload, PipelineStatus, PortfolioScenarioPayload, RelatedNews, Signal, SignalValidationReport, StockRadar, SystemStatus, WatchlistPayload } from "./types";
+import { AccuracyOverview, AccuracyProfile, Asset, BrainAccuracy, BrainAssetMemory, BrainEvaluation, BrainStatus, ChartReport, CommunitySentimentPayload, DashboardOverview, DataCoverage, ExecutiveDashboardPayload, FinancialChatResponse, IPORadar, LiveNewsArticle, MacroOverview, MarketBrain, MarketBrainHistoryRow, MarketNarrativePayload, MarketSentiment, OpportunityRadarPayload, PipelineStatus, PortfolioScenarioPayload, RelatedNews, Signal, SignalValidationReport, StockRadar, SystemStatus, WatchlistPayload } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
 
@@ -91,6 +91,8 @@ export const api = {
   runMarketBrain: (refreshPipeline = false) => postJson<MarketBrain>(`/market-brain/run?refresh_pipeline=${refreshPipeline ? "true" : "false"}&refresh_sec=true`, {}),
   modelStatus: () => getJson<any>("/ai/models/status"),
   semanticSearch: (query: string) => postJson<any[]>("/semantic-search", { query, limit: 12 }),
+  financialChat: (payload: { message: string; tickers?: string[]; horizon?: string; risk_profile?: string; include_semantic_search?: boolean }) =>
+    postJson<FinancialChatResponse>("/chat/financial", payload),
   marketUpdate: () => postJson("/market/update", { period: "max", limit: 36 }),
   newsUpdate: () => postJson("/news/update", { lookback_hours: 72, limit_per_feed: 35 }),
   runSignals: () => postJson("/signals/run", { refresh_prices: false, limit: 36 }),

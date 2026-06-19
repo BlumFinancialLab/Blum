@@ -96,6 +96,33 @@ export type PortfolioScenarioPayload = {
   disclaimer: string;
 };
 
+export type FinancialChatResponse = {
+  generated_at: string;
+  mode: string;
+  question: string;
+  answer: {
+    executive_view: string;
+    opportunity_lens: string;
+    supporting_evidence: string[];
+    contradicting_evidence: string[];
+    bull_case: string;
+    base_case: string;
+    bear_case: string;
+    risk_reward_view: string;
+    what_to_monitor: string[];
+    answer_to_user: string;
+    intellectual_honesty: string;
+  };
+  candidate_opportunities: Array<Record<string, any>>;
+  asset_context: Array<Record<string, any>>;
+  market_context: Record<string, any>;
+  semantic_evidence: Array<Record<string, any>>;
+  suggested_followups: string[];
+  models_used: Record<string, string>;
+  governance: string[];
+  disclaimer: string;
+};
+
 export type WatchlistPayload = {
   status: string;
   items: Array<Record<string, any>>;

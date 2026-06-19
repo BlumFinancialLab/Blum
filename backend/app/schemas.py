@@ -63,6 +63,14 @@ class SemanticSearchRequest(BaseModel):
     limit: int = Field(default=10, ge=1, le=50)
 
 
+class FinancialChatRequest(BaseModel):
+    message: str = Field(min_length=3, max_length=3000)
+    tickers: list[str] | None = None
+    horizon: str = Field(default="multi-horizon", max_length=80)
+    risk_profile: str = Field(default="balanced", max_length=80)
+    include_semantic_search: bool = True
+
+
 class SignalRunRequest(BaseModel):
     tickers: list[str] | None = None
     refresh_prices: bool = False

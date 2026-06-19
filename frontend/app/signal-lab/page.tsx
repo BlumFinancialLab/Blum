@@ -11,8 +11,6 @@ export default function SignalLabPage() {
   const [signals, setSignals] = useState<Signal[] | null>(null);
   const [evaluations, setEvaluations] = useState<BrainEvaluation[]>([]);
   const [brainAccuracy, setBrainAccuracy] = useState<BrainAccuracy | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<any>(null);
   const [assetType, setAssetType] = useState("");
   const [risk, setRisk] = useState("");
   const [classification, setClassification] = useState("");
@@ -32,15 +30,6 @@ export default function SignalLabPage() {
       (!classification || signal.classification === classification)
     );
   }, [signals, assetType, risk, classification]);
-  const runLearning = async () => {
-    setBusy(true);
-    try {
-      setResult(await api.runLearningCycle(240));
-      load();
-    } finally {
-      setBusy(false);
-    }
-  };
   if (!signals) return <LoadingState label="Loading signal lab" />;
   return (
     <>
@@ -54,9 +43,8 @@ export default function SignalLabPage() {
           { label: "Evaluations", value: String(evaluations.length), tone: evaluations.length ? "info" : "attention" },
           { label: "Accuracy", value: ratio(brainAccuracy?.historical_accuracy), tone: "attention" }
         ]}
-        actions={<button className="button primary" onClick={runLearning} disabled={busy}>{busy ? "Running learning cycle..." : "Evaluate signals"}</button>}
       />
-      <LearningAuditSummary accuracy={brainAccuracy} result={result} />
+      <LearningAuditSummary accuracy={brainAccuracy} />
 
       <BloombergPanel title="Signal Filters" value={`${filtered.length} visible`} subtitle="Filter by asset type, risk and classification">
         <div className="control-row" style={{ marginBottom: 0 }}>
@@ -85,7 +73,7 @@ export default function SignalLabPage() {
   );
 }
 
-function LearningAuditSummary({ accuracy, result }: { accuracy: BrainAccuracy | null; result: any }) {
+function LearningAuditSummary({ accuracy }: { accuracy: BrainAccuracy | null }) {
   const calibration = accuracy?.confidence_calibration ?? {};
   return (
     <BloombergPanel title="Financial Brain Learning Audit" value={calibration.status ?? "pending"} className="financial-brain-panel">
@@ -114,7 +102,7 @@ function LearningAuditSummary({ accuracy, result }: { accuracy: BrainAccuracy | 
           </div>
         </div>
       </div>
-      {result && <p>Last learning cycle: {result.status} | mature {result.evaluation?.mature_evaluations ?? 0} | pending {result.evaluation?.inconclusive_evaluations ?? 0} | weights {result.weights?.status ?? "n/a"}</p>}
+      <p>Signal outcomes are evaluated by the autonomous learning loop. This view shows stored evidence, calibration and source reliability without requiring manual intervention.</p>
     </BloombergPanel>
   );
 }

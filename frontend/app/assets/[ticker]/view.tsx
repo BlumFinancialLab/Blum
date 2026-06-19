@@ -81,7 +81,6 @@ export function AssetDetailClient({ ticker }: { ticker: string }) {
           { label: "Provider", value: snapshot?.provider ?? "pending" },
           { label: "Updated", value: snapshot?.date ?? "no price date", tone: snapshot?.price ? "positive" : "attention" }
         ]}
-        actions={<button className="button primary" onClick={explain} disabled={insightLoading}>{insightLoading ? "Building evidence..." : "Refresh AI explanation"}</button>}
       />
 
       <AssetDetailPanel

@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     app_name: str = "Blum AI Financial Intelligence"
-    app_version: str = "0.8.1"
+    app_version: str = "0.8.2"
     environment: str = Field(default="demo", alias="ENVIRONMENT")
     database_url: str = Field(
         default="postgresql+psycopg2://postgres:postgres@127.0.0.1:5432/blum",

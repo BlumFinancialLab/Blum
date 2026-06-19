@@ -13,7 +13,6 @@ import { StatusBadge } from "@/components/StatusBadge";
 export default function MarketBrainPage() {
   const [brain, setBrain] = useState<MarketBrain | null>(null);
   const [history, setHistory] = useState<MarketBrainHistoryRow[]>([]);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
   const load = async () => {
@@ -29,20 +28,6 @@ export default function MarketBrainPage() {
   };
 
   useEffect(() => { load(); }, []);
-
-  const runBrain = async (refreshPipeline: boolean) => {
-    setBusy(true);
-    setError("");
-    try {
-      const result = await api.runMarketBrain(refreshPipeline);
-      setBrain(result);
-      setHistory(await api.marketBrainHistory(12));
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
 
   if (error) return <div className="empty-state">API error: {error}</div>;
   if (!brain) return <LoadingState label="Loading Market Brain" />;
@@ -63,12 +48,6 @@ export default function MarketBrainPage() {
           { label: "Mode", value: brain.data_mode },
           { label: "Snapshot", value: formatTime(brain.created_at), tone: "info" }
         ]}
-        actions={
-        <div className="control-row" style={{ marginBottom: 0 }}>
-          <button className="button" disabled={busy} onClick={() => runBrain(false)}>{busy ? "Running..." : "Run brain"}</button>
-          <button className="button primary" disabled={busy} onClick={() => runBrain(true)}>{busy ? "Refreshing..." : "Full data refresh"}</button>
-        </div>
-        }
       />
 
       <section className="brain-hero">
@@ -218,7 +197,7 @@ export default function MarketBrainPage() {
         <div className="panel">
           <div className="panel-head"><span>Snapshot history</span><strong>{history.length}</strong></div>
           <div className="brain-list dense">
-            {history.length === 0 && <div className="empty-state">No persisted Market Brain snapshots yet. Run brain to create the first snapshot.</div>}
+            {history.length === 0 && <div className="empty-state">No persisted Market Brain snapshots yet. The autonomous reasoning cycle is building the first durable snapshot.</div>}
             {history.map((item) => (
               <div key={item.run_id}>
                 <div className="opportunity-line">

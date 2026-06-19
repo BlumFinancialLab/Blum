@@ -16,7 +16,7 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 a { color: inherit; text-decoration: none; }
-button, input, select { font: inherit; }
+button, input, select, textarea { font: inherit; }
 
 .app-shell {
   display: grid;
@@ -1751,6 +1751,153 @@ p { color: var(--muted); line-height: 1.55; }
   overflow: auto;
   padding-right: 4px;
 }
+.chat-command-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, .65fr);
+  gap: 12px;
+  align-items: start;
+}
+.chat-prompt-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, .28fr);
+  gap: 10px;
+  align-items: stretch;
+}
+.chat-textarea {
+  min-height: 146px;
+  resize: vertical;
+  line-height: 1.45;
+}
+.chat-controls {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+.chat-controls label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 950;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+}
+.prompt-chip-row,
+.chat-monitor-list,
+.chat-guardrail-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 10px;
+}
+.prompt-chip,
+.chat-monitor-list span,
+.chat-guardrail-list span {
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 6px;
+  background: #05080d;
+  color: #b9c5d5;
+  padding: 8px 9px;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+.prompt-chip {
+  cursor: pointer;
+  text-align: left;
+}
+.prompt-chip:hover {
+  color: var(--text);
+  border-color: rgba(255,176,0,.42);
+  background: #101720;
+}
+.prompt-chip.wide {
+  width: 100%;
+}
+.chat-answer-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.chat-thesis-block,
+.chat-scenario-card {
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 7px;
+  background: #05080d;
+  padding: 13px;
+}
+.chat-thesis-block.full {
+  grid-column: 1 / -1;
+}
+.chat-thesis-block span,
+.chat-scenario-card span {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 950;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.chat-thesis-block p,
+.chat-scenario-card p {
+  margin: 8px 0 0;
+  color: #cfdae8;
+  font-size: 13px;
+}
+.chat-scenario-card.tone-positive { border-left: 3px solid var(--green); }
+.chat-scenario-card.tone-attention { border-left: 3px solid var(--amber); }
+.chat-scenario-card.tone-negative { border-left: 3px solid var(--red); }
+.chat-evidence-list {
+  display: grid;
+  gap: 8px;
+}
+.chat-evidence-list span {
+  display: block;
+  border: 1px solid rgba(255,255,255,.1);
+  border-left: 3px solid var(--line);
+  border-radius: 6px;
+  padding: 10px;
+  background: #05080d;
+  color: #c7d3e3;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.chat-evidence-list.tone-positive span { border-left-color: var(--green); }
+.chat-evidence-list.tone-negative span { border-left-color: var(--red); }
+.chat-candidate-table {
+  display: grid;
+  gap: 8px;
+}
+.chat-candidate-row {
+  display: grid;
+  grid-template-columns: 34px minmax(170px, 1fr) repeat(3, minmax(74px, .24fr)) minmax(120px, .42fr) minmax(120px, .35fr) minmax(130px, .46fr);
+  gap: 8px;
+  align-items: center;
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 7px;
+  padding: 9px;
+  background: #05080d;
+}
+.chat-candidate-row > strong {
+  color: var(--amber);
+  font-size: 12px;
+}
+.chat-candidate-row a {
+  color: #f4f8ff;
+  font-size: 18px;
+  font-weight: 950;
+}
+.chat-candidate-row p {
+  margin: 3px 0 0;
+  color: #8996aa;
+  font-size: 11px;
+  line-height: 1.35;
+}
+.chat-candidate-row > p {
+  grid-column: 2 / -1;
+  margin-top: 0;
+  color: #c1ccda;
+}
 
 @media (max-width: 1080px) {
   .app-shell { grid-template-columns: 1fr; }
@@ -1758,7 +1905,7 @@ p { color: var(--muted); line-height: 1.55; }
   .system-card { position: static; margin-top: 14px; }
   .page-header { align-items: flex-start; flex-direction: column; }
   .header-actions { justify-content: flex-start; }
-  .hero, .grid-2, .grid-3, .grid-4, .live-grid, .realtime-strip, .deployment-banner, .diagnostic-grid, .instrument-card, .market-strip, .market-strip.compact, .brain-hero, .scenario-grid, .evidence-grid, .method-grid, .event-graph, .financial-brain-grid, .quality-lists, .macro-list, .executive-hero, .executive-command, .executive-grid, .narrative-grid, .sentiment-columns, .opportunity-card, .score-stack, .allocation-list div, .brain-status-grid, .brain-two-col, .chart-snapshot-panel .brain-status-grid, .key-level-grid, .evidence-columns, .terminal-header, .terminal-status-grid, .terminal-command-grid, .market-command-layout, .market-pulse-grid, .pulse-chart-grid, .asset-command-card, .signal-note-grid, .professional-grid-2, .professional-grid-3, .professional-grid-4, .desk-layout, .market-brain-system-grid { grid-template-columns: 1fr; }
+  .hero, .grid-2, .grid-3, .grid-4, .live-grid, .realtime-strip, .deployment-banner, .diagnostic-grid, .instrument-card, .market-strip, .market-strip.compact, .brain-hero, .scenario-grid, .evidence-grid, .method-grid, .event-graph, .financial-brain-grid, .quality-lists, .macro-list, .executive-hero, .executive-command, .executive-grid, .narrative-grid, .sentiment-columns, .opportunity-card, .score-stack, .allocation-list div, .brain-status-grid, .brain-two-col, .chart-snapshot-panel .brain-status-grid, .key-level-grid, .evidence-columns, .terminal-header, .terminal-status-grid, .terminal-command-grid, .market-command-layout, .market-pulse-grid, .pulse-chart-grid, .asset-command-card, .signal-note-grid, .professional-grid-2, .professional-grid-3, .professional-grid-4, .desk-layout, .market-brain-system-grid, .chat-command-layout, .chat-prompt-grid, .chat-answer-grid, .chat-candidate-row { grid-template-columns: 1fr; }
   .tape-row { grid-template-columns: 1fr; }
   .tape-meta { justify-content: flex-start; max-width: none; }
   .terminal-header-right, .terminal-actions { justify-items: start; justify-content: flex-start; }

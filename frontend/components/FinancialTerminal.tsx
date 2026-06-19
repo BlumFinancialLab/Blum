@@ -253,7 +253,7 @@ export function AssetTable({ rows }: { rows: AssetTableRow[] }) {
   if (!rows.length) {
     return (
       <div className="terminal-empty">
-        No ranked assets are available yet. Run the intelligence pipeline to hydrate real prices, news, sentiment and signal snapshots.
+        No ranked assets are available yet. The autonomous intelligence engine is hydrating real prices, news, sentiment and signal snapshots.
       </div>
     );
   }

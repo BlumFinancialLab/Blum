@@ -20,10 +20,8 @@ export default function IPORadarPage() {
   const [selectedSection, setSelectedSection] = useState<string>("highest_opportunity");
   const [search, setSearch] = useState("");
   const [classification, setClassification] = useState("");
-  const [busy, setBusy] = useState(false);
   const [secBusy, setSecBusy] = useState("");
   const [error, setError] = useState("");
-  const [updateResult, setUpdateResult] = useState<any>(null);
   const [secResult, setSecResult] = useState<any>(null);
 
   const load = async () => {
@@ -36,20 +34,6 @@ export default function IPORadarPage() {
   };
 
   useEffect(() => { load(); }, []);
-
-  const runUpdate = async () => {
-    setBusy(true);
-    setError("");
-    try {
-      const result = await api.updateIpoRadar(70);
-      setUpdateResult(result);
-      setRadar(result.radar);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const loadSecSubmissions = async (row: IPORadarRow, persist: boolean) => {
     if (!row.company.cik) return;
@@ -87,8 +71,8 @@ export default function IPORadarPage() {
         <div>
           <div className="kicker">IPO Radar</div>
           <h1>SEC filing and pre-listing intelligence.</h1>
+          <p>Autonomous public filing surveillance for newly listed and pre-listing opportunities. No generated listing dates, valuations or tickers are displayed.</p>
         </div>
-        <button className="button primary" onClick={runUpdate} disabled={busy}>{busy ? "Scanning SEC..." : "Refresh SEC filings"}</button>
       </div>
 
       <section className="grid-4">
@@ -102,27 +86,8 @@ export default function IPORadarPage() {
         <section className="panel readiness-panel" style={{ marginTop: 12 }}>
           <div className="panel-head"><span>SEC readiness</span><strong>No IPO rows yet</strong></div>
           <p>
-            IPO Radar only displays observed SEC filings and public pre-listing narratives. Refresh SEC filings to hydrate the table;
-            no listing dates, valuations or tickers are generated.
+            IPO Radar only displays observed SEC filings and public pre-listing narratives. The autonomous engine keeps hydrating this table in the background.
           </p>
-        </section>
-      )}
-
-      {updateResult && (
-        <section className="panel" style={{ marginTop: 12 }}>
-          <div className="panel-head"><span>SEC update diagnostics</span><strong>{updateResult.status}</strong></div>
-          <div className="diagnostic-grid">
-            <div>
-              <span>SEC forms</span>
-              <strong>{updateResult.forms_requested?.join(" | ")}</strong>
-              <p>{updateResult.inserted_filings ?? 0} inserted | {updateResult.duplicate_filings ?? 0} duplicates | {updateResult.companies_touched ?? 0} companies touched</p>
-            </div>
-            <div>
-              <span>Source errors</span>
-              <strong>{updateResult.source_errors?.length ?? 0}</strong>
-              <p>{(updateResult.source_errors ?? []).slice(0, 3).map((item: any) => `${item.form_type}: ${item.status}`).join(" | ") || "No source warnings"}</p>
-            </div>
-          </div>
         </section>
       )}
 

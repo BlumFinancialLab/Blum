@@ -5,7 +5,7 @@ import { formatPercent, formatPrice, formatVolume } from "./MarketSnapshotStrip"
 import { StatusBadge } from "./StatusBadge";
 
 export function SignalTable({ signals }: { signals: Signal[] }) {
-  if (!signals.length) return <div className="empty-state">No signal snapshots are available yet. Run the full intelligence pipeline and review pipeline readiness for price, news and provider diagnostics.</div>;
+  if (!signals.length) return <div className="empty-state">No signal snapshots are available yet. The autonomous intelligence engine is hydrating price, news, sentiment and provider diagnostics.</div>;
   return (
     <div className="table-shell">
       <table className="intel-table">

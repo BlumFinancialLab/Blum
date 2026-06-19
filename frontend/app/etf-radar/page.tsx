@@ -104,7 +104,7 @@ export default function EtfRadarPage() {
               ))}
             </tbody>
           </table>
-        </div> : <div className="empty-state">No ETF trend rows are available yet. Run the full pipeline from the dashboard.</div>}
+        </div> : <div className="empty-state">No ETF trend rows are available yet. The autonomous engine is building ETF rotation evidence in the background.</div>}
       </BloombergPanel>
     </>
   );

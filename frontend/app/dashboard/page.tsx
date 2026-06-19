@@ -44,8 +44,6 @@ export default function DashboardPage() {
   const [executive, setExecutive] = useState<ExecutiveDashboardPayload | null>(null);
   const [error, setError] = useState("");
   const [liveError, setLiveError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [pipelineResult, setPipelineResult] = useState<any>(null);
   const [lastRefresh, setLastRefresh] = useState<string | null>(null);
 
   const load = async () => {
@@ -89,16 +87,6 @@ export default function DashboardPage() {
     return () => window.clearInterval(interval);
   }, []);
 
-  const runJob = async (job: () => Promise<any>) => {
-    setBusy(true);
-    try {
-      setPipelineResult(await job());
-      await load();
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const assetRows = useMemo(() => {
     if (executive?.top_opportunities_today?.length) return toAssetRowsFromOpportunities(executive.top_opportunities_today);
     return toAssetRowsFromSignals(data?.todays_strongest_signals ?? []);
@@ -130,13 +118,6 @@ export default function DashboardPage() {
           { label: "AI model", value: systemStatus?.runtime_flags.financial_brain_model_enabled ? "finance LLM" : "fallback", tone: systemStatus?.runtime_flags.financial_brain_model_enabled ? "positive" : "attention" },
           { label: "Refresh", value: lastRefresh ? formatTime(lastRefresh) : "loading", tone: "info" }
         ]}
-        actions={
-          <>
-            <button className="button" onClick={() => runJob(() => api.repairData(36))} disabled={busy}>{busy ? "Working..." : "Repair data"}</button>
-            <button className="button" onClick={() => runJob(() => api.runLearningCycle(240))} disabled={busy}>{busy ? "Learning..." : "Learning cycle"}</button>
-            <button className="button primary" onClick={() => runJob(() => api.runPipeline())} disabled={busy}>{busy ? "Running..." : "Run pipeline"}</button>
-          </>
-        }
       />
 
       {(realtime.last_error || liveError) && (
@@ -218,16 +199,10 @@ export default function DashboardPage() {
 
       <section className="desk-layout" style={{ marginTop: 12 }}>
         <div>
-          <FinancialBrainStatus status={brainStatus} busy={busy} onRunCycle={() => runJob(() => api.runLearningCycle(240))} />
+          <FinancialBrainStatus status={brainStatus} />
           <section className="professional-grid-2" style={{ marginTop: 12 }}>
-            <AccuracyPanel accuracy={data.accuracy} busy={busy} onAudit={() => runJob(() => api.runAccuracy(80))} />
-            <MacroValidationPanel
-              macro={data.macro}
-              validation={data.validation}
-              busy={busy}
-              onMacro={() => runJob(() => api.updateMacro())}
-              onFundamentals={() => runJob(() => api.updateFundamentals(24))}
-            />
+            <AccuracyPanel accuracy={data.accuracy} />
+            <MacroValidationPanel macro={data.macro} validation={data.validation} />
           </section>
         </div>
         <BloombergPanel title="Evidence Coverage" value={`${Math.round((data.data_coverage?.coverage_ratio ?? 0) * 100)}%`} subtitle="Historical price memory and provider diagnostics">
@@ -238,7 +213,7 @@ export default function DashboardPage() {
             <MetricCard label="Ready Assets" value={`${data.data_coverage?.ready_assets ?? 0}/${data.data_coverage?.asset_count ?? 0}`} />
           </div>
           <p>{data.data_coverage?.data_policy ?? "Evidence policy pending."}</p>
-          <SourceDiagnostics result={pipelineResult ?? realtime.last_result} />
+          <SourceDiagnostics result={realtime.last_result} />
         </BloombergPanel>
       </section>
     </>
@@ -289,7 +264,7 @@ function RiskOnOffGauge({ sentiment, breadth, risk }: { sentiment: number; bread
   );
 }
 
-function AccuracyPanel({ accuracy, busy, onAudit }: { accuracy?: AccuracyOverview; busy: boolean; onAudit: () => void }) {
+function AccuracyPanel({ accuracy }: { accuracy?: AccuracyOverview }) {
   if (!accuracy) {
     return (
       <BloombergPanel title="Confidence Layer" value="Pending">
@@ -310,23 +285,16 @@ function AccuracyPanel({ accuracy, busy, onAudit }: { accuracy?: AccuracyOvervie
           <span key={code}>{code.replaceAll("_", " ")} <b>{count}</b></span>
         ))}
       </div>
-      <button className="button" onClick={onAudit} disabled={busy}>{busy ? "Auditing..." : "Run evidence audit"}</button>
     </BloombergPanel>
   );
 }
 
 function MacroValidationPanel({
   macro,
-  validation,
-  busy,
-  onMacro,
-  onFundamentals
+  validation
 }: {
   macro?: MacroOverview;
   validation?: SignalValidationReport;
-  busy: boolean;
-  onMacro: () => void;
-  onFundamentals: () => void;
 }) {
   return (
     <BloombergPanel title="Macro and Validation" value={validation?.status ?? "Pending"}>
@@ -337,10 +305,6 @@ function MacroValidationPanel({
         <MetricCard label="Confirmed" value={validation?.confirmed_or_strengthening ?? 0} />
       </div>
       <p>{validation?.methodology ?? "Signal validation compares stored signals with later evidence without promising future performance."}</p>
-      <div className="control-row" style={{ marginBottom: 0 }}>
-        <button className="button" onClick={onMacro} disabled={busy}>{busy ? "Refreshing..." : "Refresh macro"}</button>
-        <button className="button" onClick={onFundamentals} disabled={busy}>{busy ? "Refreshing..." : "Refresh fundamentals"}</button>
-      </div>
     </BloombergPanel>
   );
 }

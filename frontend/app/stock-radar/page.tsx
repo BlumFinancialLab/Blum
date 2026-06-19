@@ -29,9 +29,7 @@ export default function StockRadarPage() {
   const [sector, setSector] = useState("");
   const [priority, setPriority] = useState("");
   const [search, setSearch] = useState("");
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [updateResult, setUpdateResult] = useState<any>(null);
 
   const load = async () => {
     setError("");
@@ -43,20 +41,6 @@ export default function StockRadarPage() {
   };
 
   useEffect(() => { load(); }, []);
-
-  const runUpdate = async () => {
-    setBusy(true);
-    setError("");
-    try {
-      const result = await api.updateStockRadar(60);
-      setUpdateResult(result);
-      setRadar(result.radar);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const selectedRows = radar?.sections?.[selectedSection] ?? [];
   const sectionRows = selectedRows.length ? selectedRows : (radar?.summary.signal_count ? [] : radar?.data_gaps ?? radar?.rows ?? []);
@@ -95,7 +79,6 @@ export default function StockRadarPage() {
         <div className="header-actions">
           <Link className="button" href="/etf-radar">ETF Radar</Link>
           <Link className="button" href="/ipo-radar">IPO Radar</Link>
-          <button className="button primary" onClick={runUpdate} disabled={busy}>{busy ? "Updating stock radar..." : "Run Stock Radar"}</button>
         </div>
         }
       />
@@ -113,24 +96,6 @@ export default function StockRadarPage() {
         <MetricCard label="Status" value={radar.status.replaceAll("_", " ")} subvalue="Radar readiness" />
       </section>
 
-      {updateResult && (
-        <section className="panel" style={{ marginTop: 12 }}>
-          <div className="panel-head"><span>Stock radar update diagnostics</span><strong>{updateResult.radar?.status ?? radar.status}</strong></div>
-          <div className="diagnostic-grid">
-            <div>
-              <span>Market data</span>
-              <strong>{updateResult.market_update?.updated_assets ?? 0} assets updated</strong>
-              <p>{updateResult.market_update?.price_rows ?? 0} OHLCV rows | {updateResult.market_update?.data_mode ?? "real data"}</p>
-            </div>
-            <div>
-              <span>News and sentiment</span>
-              <strong>{updateResult.news_update?.inserted_articles ?? 0} new articles</strong>
-              <p>{updateResult.news_update?.sources_ok ?? 0}/{updateResult.news_update?.sources_requested ?? 0} public sources ok | {updateResult.news_update?.linked_assets ?? 0} asset links</p>
-            </div>
-          </div>
-        </section>
-      )}
-
       <section className="radar-tabs" style={{ marginTop: 12 }}>
         {SECTIONS.map(([key, label]) => (
           <button className={selectedSection === key ? "active" : ""} onClick={() => setSelectedSection(key)} key={key}>
@@ -143,8 +108,8 @@ export default function StockRadarPage() {
         <section className="panel readiness-panel" style={{ marginTop: 12 }}>
           <div className="panel-head"><span>Evidence readiness</span><strong>{radar.status.replaceAll("_", " ")}</strong></div>
           <p>
-            No scored stock signals are available yet. The cards below show the real asset universe and latest stored market status while
-            the backend hydrates prices, news, sentiment, embeddings and signal snapshots. No synthetic prices, headlines or scores are displayed.
+            The autonomous research engine is hydrating prices, news, sentiment, embeddings and signal snapshots in the background.
+            The cards below show the real asset universe and latest stored market status. No synthetic prices, headlines or scores are displayed.
           </p>
           <div className="mini-metrics">
             <div><span>Missing signals</span><strong>{radar.summary.missing_signal_count}</strong></div>

@@ -109,7 +109,7 @@ function TechnicalSnapshot({ report }: { report: ChartReport | null }) {
       </div>
       <div className="brain-drift info">
         <strong>{String(h.timeframe_relevance ?? "timeframe pending").replaceAll("_", " ")}</strong>
-        <span>{h.trend_summary ?? "Run chart analysis to produce a hybrid technical summary."}</span>
+        <span>{h.trend_summary ?? "Technical summary will appear when stored OHLCV evidence is sufficient for the autonomous chart analyst."}</span>
       </div>
       <p>{(report?.warnings ?? h.warnings)?.join(" ") ?? "Vision model status and deterministic analysis warnings will appear here."}</p>
     </div>
@@ -153,7 +153,7 @@ function AnalystReport({ hybrid, visual, deterministic }: { hybrid: any; visual:
         <span>Analyst Report</span>
         <strong>{String(visual.mode ?? "deterministic").replaceAll("_", " ")}</strong>
       </div>
-      <p>{hybrid.analyst_report ?? deterministic.technical_summary ?? "Run chart analysis to produce the analyst report."}</p>
+      <p>{hybrid.analyst_report ?? deterministic.technical_summary ?? "The autonomous chart analyst is waiting for sufficient deterministic technical evidence."}</p>
       <div className="scenario-list">
         {(hybrid.possible_scenarios ?? []).map((scenario: any) => (
           <div key={scenario.name}>

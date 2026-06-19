@@ -89,7 +89,7 @@ def stock_row(db: Session, asset: Asset, signal: SignalSnapshot | None) -> dict:
             "signal": None,
             "research_priority": "Insufficient Evidence",
             "radar_tags": ["Needs Signal"],
-            "why_watch": "No signal snapshot exists yet. Run Stock Radar update to hydrate real prices, news and signal factors.",
+            "why_watch": "No signal snapshot exists yet. The autonomous research engine is hydrating real prices, news and signal factors.",
         }
     technical = signal.technical_summary or {}
     narrative = signal.narrative_summary or {}

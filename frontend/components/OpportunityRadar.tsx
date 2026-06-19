@@ -5,7 +5,7 @@ import { OpportunityRow } from "@/lib/types";
 import { assetPath } from "@/lib/routes";
 
 export function OpportunityRadar({ rows, onAdd }: { rows: OpportunityRow[]; onAdd?: (ticker: string) => void }) {
-  if (!rows.length) return <div className="empty-state">No opportunity rankings are available yet. Run the full intelligence pipeline to hydrate real evidence.</div>;
+  if (!rows.length) return <div className="empty-state">No opportunity rankings are available yet. The autonomous engine is hydrating real evidence before publishing ranked opportunities.</div>;
   return (
     <div className="opportunity-radar">
       {rows.slice(0, 12).map((row) => (
@@ -63,4 +63,3 @@ function formatPercent(value: number | null) {
   const sign = value > 0 ? "+" : "";
   return `${sign}${Number(value).toFixed(2)}%`;
 }
-

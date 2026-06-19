@@ -57,7 +57,7 @@ from app.models import (
     TickerAccuracyProfile,
     WatchlistItem,
 )
-from app.schemas import AssetOut, MarketUpdateRequest, NewsOut, NewsUpdateRequest, SemanticSearchRequest, SignalRunRequest
+from app.schemas import AssetOut, FinancialChatRequest, MarketUpdateRequest, NewsOut, NewsUpdateRequest, SemanticSearchRequest, SignalRunRequest
 from app.services.accuracy import asset_accuracy_profile, latest_accuracy_snapshot, market_accuracy_overview, run_accuracy_audit, signal_validation_report
 from app.services.autonomous_engine import AutonomousResearchEngine, latest_autonomous_status
 from app.services.blum_financial_model import (
@@ -95,6 +95,7 @@ from app.services.financial_brain_learning import (
     recalculate_model_weights,
     run_learning_cycle,
 )
+from app.services.financial_chat import financial_chat_response
 from app.services.hybrid_chart_intelligence import HybridChartIntelligence
 from app.services.huggingface_datasets import dataset_catalog_status, refresh_huggingface_dataset_catalog
 from app.services.ipo import ipo_radar, sec_company_submissions, update_ipo_radar
@@ -138,7 +139,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
     return {
         "service": "blum-ai-financial-intelligence",
         "app_version": settings.app_version,
-        "feature_set": "autonomous-dataset-intelligence-engine-v0.8.1",
+        "feature_set": "autonomous-europe-narrative-chat-engine-v0.8.2",
         "environment": settings.environment,
         "generated_at": datetime.utcnow().isoformat(),
         "hugging_face": {
@@ -245,8 +246,8 @@ def system_status(db: Session = Depends(get_db)) -> dict:
         "why_gui_can_look_unchanged": [
             "Hugging Face serves the previous image until the Docker build finishes successfully.",
             "The finance-domain 7B model is disabled by default unless BLUM_ENABLE_FINANCIAL_BRAIN_MODEL=true.",
-            "Existing snapshots must be regenerated with Run brain or full pipeline after a new deployment.",
-            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.8.1.",
+            "Existing snapshots are refreshed by the autonomous engine after a successful deployment.",
+            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.8.2.",
         ],
     }
 
@@ -766,6 +767,18 @@ def sentiment_for_ticker(ticker: str, db: Session = Depends(get_db)):
 @router.post("/semantic-search")
 def semantic_search(payload: SemanticSearchRequest, db: Session = Depends(get_db)):
     return SemanticService().search(db, query=payload.query, limit=payload.limit)
+
+
+@router.post("/chat/financial")
+def financial_chat(payload: FinancialChatRequest, db: Session = Depends(get_db)):
+    return financial_chat_response(
+        db,
+        message=payload.message,
+        tickers=payload.tickers,
+        horizon=payload.horizon,
+        risk_profile=payload.risk_profile,
+        include_semantic_search=payload.include_semantic_search,
+    )
 
 
 @router.get("/related-news")
