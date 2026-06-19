@@ -62,7 +62,8 @@ class BlumTrainingMemoryService:
         query_terms = {token for token in query.lower().split() if len(token) > 3}
         ranked = []
         for row in rows:
-            text = f"{row.ticker} {row.sector} {row.memory_text}".lower()
+            sector = row.metadata_payload.get("sector") or row.metadata_payload.get("asset_context", {}).get("sector") or ""
+            text = f"{row.ticker} {sector} {row.memory_text}".lower()
             overlap = sum(1 for token in query_terms if token in text)
             if overlap:
                 ranked.append((row, overlap))
@@ -70,7 +71,7 @@ class BlumTrainingMemoryService:
         return [
             {
                 "ticker": row.ticker,
-                "sector": row.sector,
+                "sector": row.metadata_payload.get("sector") or row.metadata_payload.get("asset_context", {}).get("sector"),
                 "similarity_proxy": score,
                 "memory_text": row.memory_text[:700],
                 "outcome_summary": row.metadata_payload.get("outcome_summary") or {"outcome_label": row.outcome_label},
