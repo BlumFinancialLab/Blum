@@ -359,8 +359,10 @@ def financial_chat_response(
         "disclaimer": LABELS[detected_language]["disclaimer"],
     }
     quality = quality_gate(payload, entities, validation)
-    if mode in {"debug", "developer", "chatbot_debug_feedback"}:
+    if is_debug_mode(mode):
         payload["diagnostics"] = quality
+    else:
+        payload = public_chat_payload(payload)
     payload = json_safe(payload)
     persist_chat_message(db, session, "assistant", answer["composed_response"], detected_language, compact_chat_payload(payload))
     db.commit()
@@ -1285,8 +1287,6 @@ def compact_chat_payload(payload: dict) -> dict:
         "candidate_opportunities": payload.get("candidate_opportunities", [])[:10],
         "context_coverage": payload.get("context_coverage"),
         "sources_used": payload.get("sources_used"),
-        "rag_pipeline": payload.get("rag_pipeline"),
-        "models_used": payload.get("models_used"),
         "disclaimer": payload.get("disclaimer"),
     }
 
@@ -1310,14 +1310,12 @@ def minimal_chat_payload(
         "intent": intent,
         "question": message,
         "answer": answer,
-        "entity_resolution": [entity.to_dict() for entity in entities],
         "candidate_opportunities": [],
         "asset_context": [],
         "market_context": {},
         "semantic_evidence": [],
         "training_memory": [],
         "learning_loop_context": {},
-        "rag_pipeline": rag_pipeline(language, intent),
         "sources_used": [],
         "context_coverage": {
             "assets_detected": 0,
@@ -1331,18 +1329,20 @@ def minimal_chat_payload(
             "learning_loop_signal_reliability": 0,
         },
         "suggested_followups": safe_followups_for_entities(language, entities),
-        "models_used": {
+        "disclaimer": LABELS[language]["disclaimer"],
+    }
+    if is_debug_mode(mode):
+        payload["entity_resolution"] = [entity.to_dict() for entity in entities]
+        payload["rag_pipeline"] = rag_pipeline(language, intent)
+        payload["models_used"] = {
             "reasoning": "deterministic_entity_validation_and_response_builder",
             "policy": "No market analysis is generated when asset validation fails.",
-        },
-        "governance": [
+        }
+        payload["governance"] = [
             "Entity validation runs before market-data retrieval.",
             "Unknown or private assets are never replaced with random tickers.",
             "Technical analysis is blocked when OHLCV data is unavailable.",
-        ],
-        "disclaimer": LABELS[language]["disclaimer"],
-    }
-    if mode in {"debug", "developer", "chatbot_debug_feedback"}:
+        ]
         payload["diagnostics"] = {
             "detected_language": language,
             "detected_intent": intent,
@@ -1351,6 +1351,175 @@ def minimal_chat_payload(
             "response_template_used": answer.get("response_style"),
         }
     return json_safe(payload)
+
+
+def is_debug_mode(mode: str | None) -> bool:
+    return mode in {"debug", "developer", "chatbot_debug_feedback"}
+
+
+def public_chat_payload(payload: dict) -> dict:
+    """Keep the public chat response human and compact; diagnostics stay debug-only."""
+    answer = payload.get("answer") or {}
+    response_style = answer.get("response_style")
+    lightweight = response_style in {"concise_safe", "clarification", "error", "technical", "fundamental"}
+    return {
+        "generated_at": payload.get("generated_at"),
+        "mode": payload.get("mode"),
+        "session_id": payload.get("session_id"),
+        "language": payload.get("language"),
+        "intent": payload.get("intent"),
+        "question": payload.get("question"),
+        "answer": answer,
+        "candidate_opportunities": [summarize_candidate(item) for item in payload.get("candidate_opportunities", [])[:10]],
+        "asset_context": [summarize_asset_context(item) for item in payload.get("asset_context", [])[:8]],
+        "market_context": summarize_market_context(payload.get("market_context", {})),
+        "semantic_evidence": [] if lightweight else [summarize_semantic_hit(item) for item in payload.get("semantic_evidence", [])[:6]],
+        "training_memory": [] if lightweight else summarize_training_memory(payload.get("training_memory", [])[:3]),
+        "learning_loop_context": summarize_learning_loop_context(payload.get("learning_loop_context", {})),
+        "sources_used": payload.get("sources_used", []),
+        "context_coverage": payload.get("context_coverage", {}),
+        "suggested_followups": payload.get("suggested_followups", []),
+        "disclaimer": payload.get("disclaimer"),
+    }
+
+
+def summarize_candidate(candidate: dict) -> dict:
+    keys = [
+        "ticker",
+        "name",
+        "sector",
+        "asset_type",
+        "price",
+        "currency",
+        "price_date",
+        "change_percent",
+        "opportunity_score",
+        "technical_score",
+        "fundamental_score",
+        "sentiment_score",
+        "narrative_score",
+        "momentum_score",
+        "risk_score",
+        "risk_level",
+        "confidence_level",
+        "classification",
+        "why_today",
+        "data_status",
+        "sniper_setup",
+    ]
+    return {key: candidate.get(key) for key in keys if key in candidate}
+
+
+def summarize_asset_context(asset: dict) -> dict:
+    technical = asset.get("technical") or {}
+    fundamentals = asset.get("fundamentals") or {}
+    latest_signal = asset.get("latest_signal") or {}
+    return {
+        "ticker": asset.get("ticker"),
+        "name": asset.get("name"),
+        "asset_type": asset.get("asset_type"),
+        "sector": asset.get("sector"),
+        "industry": asset.get("industry"),
+        "country": asset.get("country"),
+        "exchange": asset.get("exchange"),
+        "currency": asset.get("currency"),
+        "market_snapshot": asset.get("market_snapshot", {}),
+        "latest_signal": {
+            "classification": latest_signal.get("classification"),
+            "blum_score": latest_signal.get("blum_score"),
+            "risk_level": latest_signal.get("risk_level"),
+            "confidence_score": latest_signal.get("confidence_score"),
+            "time_horizon": latest_signal.get("time_horizon"),
+            "explanation": latest_signal.get("explanation"),
+        } if latest_signal else {},
+        "technical": {
+            "status": technical.get("status"),
+            "generated_at": technical.get("generated_at"),
+            "timeframe": technical.get("timeframe"),
+            "last_price": technical.get("last_price"),
+            "trend_direction": technical.get("trend_direction"),
+            "trend_strength_score": technical.get("trend_strength_score"),
+            "levels": technical.get("levels", {}),
+            "technical_indicators": pick_keys(technical.get("technical_indicators", {}), ["rsi", "macd_hist", "atr_percent", "adx"]),
+            "risk_reward_estimate": technical.get("risk_reward_estimate", {}),
+            "warning": technical.get("warning"),
+        } if technical else {},
+        "fundamentals": {
+            "status": fundamentals.get("status"),
+            "provider": fundamentals.get("provider"),
+            "period_end": fundamentals.get("period_end"),
+            "quality_score": fundamentals.get("quality_score"),
+        } if fundamentals else {},
+        "recent_news": [summarize_news_item(item) for item in asset.get("recent_news", [])[:5]],
+    }
+
+
+def summarize_market_context(context: dict) -> dict:
+    narrative = context.get("narrative") or {}
+    sentiment = context.get("market_sentiment") or {}
+    community = context.get("community_sentiment") or {}
+    return {
+        "narrative": {
+            "dominant_theme": narrative.get("dominant_theme"),
+            "market_mood": narrative.get("market_mood"),
+            "top_themes": narrative.get("top_themes", [])[:6],
+        },
+        "market_sentiment": {
+            "article_count": sentiment.get("article_count"),
+            "avg_finbert_score": sentiment.get("avg_finbert_score"),
+            "avg_vader_score": sentiment.get("avg_vader_score"),
+            "generated_at": sentiment.get("generated_at"),
+        },
+        "community_sentiment": {
+            "summary": community.get("summary"),
+            "top_discussed": community.get("top_discussed", [])[:6],
+        },
+    }
+
+
+def summarize_semantic_hit(hit: dict) -> dict:
+    article = hit.get("article") or {}
+    return {
+        "score": hit.get("score"),
+        "article": summarize_news_item(article),
+    }
+
+
+def summarize_news_item(article: dict) -> dict:
+    return {
+        "id": article.get("id"),
+        "title": article.get("title"),
+        "source": article.get("source"),
+        "url": article.get("url"),
+        "published_at": article.get("published_at"),
+        "quality_score": article.get("quality_score"),
+        "themes": article.get("themes") or (article.get("theme_tags") or {}).get("themes"),
+    }
+
+
+def summarize_training_memory(rows: list[dict]) -> list[dict]:
+    return [
+        {
+            "ticker": row.get("ticker"),
+            "sector": row.get("sector"),
+            "similarity_proxy": row.get("similarity_proxy"),
+            "outcome_summary": row.get("outcome_summary"),
+            "created_at": row.get("created_at"),
+        }
+        for row in rows
+    ]
+
+
+def summarize_learning_loop_context(context: dict) -> dict:
+    return {
+        "summary": context.get("summary"),
+        "strategy_memory": context.get("strategy_memory", [])[:5],
+        "signal_reliability": context.get("signal_reliability", [])[:8],
+    }
+
+
+def pick_keys(row: dict, keys: list[str]) -> dict:
+    return {key: row.get(key) for key in keys if key in row}
 
 
 def json_safe(value):

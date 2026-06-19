@@ -136,8 +136,8 @@ export type FinancialChatResponse = {
   sources_used?: Array<Record<string, any>>;
   context_coverage?: Record<string, any>;
   suggested_followups: string[];
-  models_used: Record<string, string>;
-  governance: string[];
+  models_used?: Record<string, string>;
+  governance?: string[];
   disclaimer: string;
 };
 
