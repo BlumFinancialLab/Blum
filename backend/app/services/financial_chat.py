@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
+import math
 import re
 from statistics import mean
 from uuid import uuid4
@@ -190,7 +192,8 @@ def financial_chat_response(
         ],
         "disclaimer": LABELS[detected_language]["disclaimer"],
     }
-    persist_chat_message(db, session, "assistant", answer["composed_response"], detected_language, payload)
+    payload = json_safe(payload)
+    persist_chat_message(db, session, "assistant", answer["composed_response"], detected_language, compact_chat_payload(payload))
     db.commit()
     return payload
 
@@ -428,8 +431,60 @@ def upsert_chat_session(db: Session, session_id: str | None, message: str, langu
 
 
 def persist_chat_message(db: Session, session: ChatSession, role: str, content: str, language: str, response_payload: dict | None = None) -> None:
-    db.add(ChatMessage(session_id=session.id, role=role, content=content, language=language, response_payload=response_payload or {}))
+    db.add(ChatMessage(session_id=session.id, role=role, content=content, language=language, response_payload=json_safe(response_payload or {})))
     db.flush()
+
+
+def compact_chat_payload(payload: dict) -> dict:
+    answer = payload.get("answer") or {}
+    return {
+        "generated_at": payload.get("generated_at"),
+        "mode": payload.get("mode"),
+        "session_id": payload.get("session_id"),
+        "language": payload.get("language"),
+        "intent": payload.get("intent"),
+        "question": payload.get("question"),
+        "answer": {
+            "executive_view": answer.get("executive_view"),
+            "standard_sections": answer.get("standard_sections", []),
+            "market_sniper_mode": answer.get("market_sniper_mode"),
+            "data_quality": answer.get("data_quality"),
+            "risk_reward_view": answer.get("risk_reward_view"),
+            "what_to_monitor": answer.get("what_to_monitor", []),
+        },
+        "candidate_opportunities": payload.get("candidate_opportunities", [])[:10],
+        "context_coverage": payload.get("context_coverage"),
+        "sources_used": payload.get("sources_used"),
+        "rag_pipeline": payload.get("rag_pipeline"),
+        "models_used": payload.get("models_used"),
+        "disclaimer": payload.get("disclaimer"),
+    }
+
+
+def json_safe(value):
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(key): json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [json_safe(item) for item in value]
+    if hasattr(value, "item"):
+        try:
+            return json_safe(value.item())
+        except Exception:
+            pass
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:
+            pass
+    return str(value)
 
 
 def infer_intent(message: str, mode: str | None = None) -> str:
