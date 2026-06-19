@@ -40,6 +40,50 @@ MARKET_TERM_TICKERS = {
     "EUROPEAN": ["^STOXX50E", "EXSA.DE", "^GDAXI", "^FTSEMIB", "^FCHI", "^FTSE", "SIE.DE", "ASML", "SAP", "MC.PA"],
 }
 
+COMPANY_TERM_TICKERS = {
+    "NVIDIA": ["NVDA"],
+    "TESLA": ["TSLA"],
+    "MICROSOFT": ["MSFT"],
+    "APPLE": ["AAPL"],
+    "AMAZON": ["AMZN"],
+    "ALPHABET": ["GOOGL"],
+    "GOOGLE": ["GOOGL"],
+    "META": ["META"],
+    "FACEBOOK": ["META"],
+    "BROADCOM": ["AVGO"],
+    "ADVANCED MICRO DEVICES": ["AMD"],
+    "AMD": ["AMD"],
+    "APPLIED MATERIALS": ["AMAT"],
+    "LAM RESEARCH": ["LRCX"],
+    "ASML": ["ASML"],
+    "INTEL": ["INTC"],
+    "NETFLIX": ["NFLX"],
+    "PALANTIR": ["PLTR"],
+    "ORACLE": ["ORCL"],
+    "SALESFORCE": ["CRM"],
+    "ADOBE": ["ADBE"],
+    "JPMORGAN": ["JPM"],
+    "JP MORGAN": ["JPM"],
+    "GOLDMAN": ["GS"],
+    "ELI LILLY": ["LLY"],
+    "NOVO NORDISK": ["NVO"],
+    "EXXON": ["XOM"],
+    "CHEVRON": ["CVX"],
+    "CATERPILLAR": ["CAT"],
+    "SIEMENS": ["SIE.DE"],
+    "SAP": ["SAP"],
+    "RHEINMETALL": ["RHM.DE"],
+    "AIRBUS": ["AIR.PA"],
+    "LVMH": ["MC.PA"],
+    "LOUIS VUITTON": ["MC.PA"],
+    "ENEL": ["ENEL.MI"],
+    "ENI": ["ENI.MI"],
+    "UNICREDIT": ["UCG.MI"],
+    "INTESA": ["ISP.MI"],
+    "FERRARI": ["RACE.MI"],
+    "LEONARDO": ["LDO.MI"],
+}
+
 LANGUAGE_HINTS = {
     "it": [" cosa ", " quali ", " analizza ", " trova ", " comprare", " ingresso", " rischio", " titolo", " azione", " uscita", " monitorare"],
     "en": [" what ", " which ", " analyze ", " find ", " entry", " risk", " stock", " watch", " compare", " setup"],
@@ -251,6 +295,7 @@ def relevant_assets(db: Session, message: str, tickers: list[str] | None) -> lis
     universe = db.scalars(select(Asset).where(Asset.is_active.is_(True))).all()
     text = f" {message.upper()} "
     requested.update(expand_market_terms(text))
+    requested.update(expand_company_terms(text))
     for asset in universe:
         ticker = asset.ticker.upper()
         if re.search(rf"(?<![A-Z0-9.]){re.escape(ticker)}(?![A-Z0-9.])", text):
@@ -314,10 +359,14 @@ def rank_candidates(rows: list[dict], asset_packets: list[dict]) -> list[dict]:
     by_ticker = {item["ticker"]: item for item in asset_packets}
     context_tickers = set(by_ticker)
     output = []
+    seen: set[str] = set()
     for row in rows:
         ticker = row.get("ticker")
         if context_tickers and ticker not in context_tickers:
             continue
+        if not ticker or ticker in seen:
+            continue
+        seen.add(ticker)
         packet = by_ticker.get(ticker, {})
         output.append(enrich_candidate(row, packet))
     if not output and asset_packets:
@@ -532,6 +581,14 @@ def expand_market_terms(text: str) -> set[str]:
     tickers: set[str] = set()
     for term, mapped_tickers in MARKET_TERM_TICKERS.items():
         if term in text:
+            tickers.update(mapped_tickers)
+    return tickers
+
+
+def expand_company_terms(text: str) -> set[str]:
+    tickers: set[str] = set()
+    for term, mapped_tickers in COMPANY_TERM_TICKERS.items():
+        if re.search(rf"(?<![A-Z0-9]){re.escape(term)}(?![A-Z0-9])", text):
             tickers.update(mapped_tickers)
     return tickers
 
