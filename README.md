@@ -512,7 +512,7 @@ Interactive API docs are available at `/docs`.
 - Stock Radar
 - ETF Radar
 - IPO Radar
-- Theme Explorer
+- Narratives / Theme Explorer (`/narratives`, backed by `/themes` API)
 - Signal Lab
 - Backtest
 - Methodology
