@@ -1055,20 +1055,20 @@ def build_technical_analysis_response(language: str, candidate: dict, validation
     volume = tech.get("volume") or {}
     risk = tech.get("risk_reward_estimate") or {}
     summary = (
-        f"{ticker}: trend {trend}, RSI {indicators.get('rsi')}, volume relativo {volume.get('relative_volume')}."
+        f"{ticker}: trend {trend_label(trend, language)}, RSI {indicators.get('rsi')}, volume relativo {volume.get('relative_volume')}."
         if language == "it"
-        else f"{ticker}: {trend} trend, RSI {indicators.get('rsi')}, relative volume {volume.get('relative_volume')}."
+        else f"{ticker}: {trend_label(trend, language)} trend, RSI {indicators.get('rsi')}, relative volume {volume.get('relative_volume')}."
     )
     if stale:
         summary = f"{summary} {stale}"
     if language == "it":
         sections = [
             {"key": "summary", "title": "Sintesi", "bullets": [summary]},
-            {"key": "trend", "title": "Trend", "bullets": [f"Struttura: {trend}. Forza trend: {tech.get('trend_strength_score', 'n/a')}/100. Ultimo dato disponibile: {latest or 'n/a'}."]},
-            {"key": "momentum", "title": "Momentum", "bullets": [f"RSI {indicators.get('rsi')}; MACD hist {indicators.get('macd_hist')}; stato momentum {momentum.get('state', 'n/a')}."]},
+            {"key": "trend", "title": "Trend", "bullets": [f"Struttura: {trend_label(trend, language)}. Forza trend: {tech.get('trend_strength_score', 'n/a')}/100. Ultimo dato disponibile: {latest or 'n/a'}."]},
+            {"key": "momentum", "title": "Momentum", "bullets": [f"RSI {indicators.get('rsi')}; MACD hist {indicators.get('macd_hist')}; momentum {momentum_label(momentum.get('state'), language)}."]},
             {"key": "levels", "title": "Livelli tecnici", "bullets": [f"Supporti: {level_list(levels.get('support_levels'))}. Resistenze: {level_list(levels.get('resistance_levels'))}. Breakout: {levels.get('breakout_level')}. Invalidazione: {levels.get('invalidation_level')}."]},
             {"key": "scenario", "title": "Scenario", "bullets": [technical_scenario_it(ticker, tech, risk)]},
-            {"key": "risks", "title": "Rischi", "bullets": dedupe_warnings([f"Rischio: {candidate.get('risk_level')} / score {candidate.get('risk_score')}.", tech.get("technical_summary"), stale])},
+            {"key": "risks", "title": "Rischi", "bullets": dedupe_warnings([f"Rischio: {candidate.get('risk_level')} / score {candidate.get('risk_score')}.", technical_risk_sentence_it(ticker, tech), stale])},
         ]
     else:
         sections = [
@@ -1077,7 +1077,7 @@ def build_technical_analysis_response(language: str, candidate: dict, validation
             {"key": "momentum", "title": "Momentum", "bullets": [f"RSI {indicators.get('rsi')}; MACD hist {indicators.get('macd_hist')}; momentum state {momentum.get('state', 'n/a')}."]},
             {"key": "levels", "title": "Technical Levels", "bullets": [f"Support: {level_list(levels.get('support_levels'))}. Resistance: {level_list(levels.get('resistance_levels'))}. Breakout: {levels.get('breakout_level')}. Invalidation: {levels.get('invalidation_level')}."]},
             {"key": "scenario", "title": "Scenario", "bullets": [technical_scenario_en(ticker, tech, risk)]},
-            {"key": "risks", "title": "Risks", "bullets": dedupe_warnings([f"Risk: {candidate.get('risk_level')} / score {candidate.get('risk_score')}.", tech.get("technical_summary"), stale])},
+            {"key": "risks", "title": "Risks", "bullets": dedupe_warnings([f"Risk: {candidate.get('risk_level')} / score {candidate.get('risk_score')}.", technical_risk_sentence_en(ticker, tech), stale])},
         ]
     sections = dedupe_response_sections(sections)
     composed = render_sections(sections, labels["disclaimer"])
@@ -1651,6 +1651,70 @@ def technical_scenario_en(ticker: str, tech: dict, risk: dict) -> str:
     return (
         f"Informational scenario: {ticker} improves only with confirmation above {breakout} and expanding relative volume "
         f"(now {volume}). Technical invalidation is {invalidation}. Risk/reward: {rr}."
+    )
+
+
+def trend_label(value: str | None, language: str) -> str:
+    labels = {
+        "it": {
+            "uptrend": "rialzista",
+            "uptrend_attempt": "tentativo rialzista",
+            "downtrend": "ribassista",
+            "sideways": "laterale",
+            "range": "laterale",
+        },
+        "en": {
+            "uptrend": "uptrend",
+            "uptrend_attempt": "uptrend attempt",
+            "downtrend": "downtrend",
+            "sideways": "sideways",
+            "range": "range-bound",
+        },
+    }
+    return labels.get(language, labels["en"]).get(str(value or "").lower(), str(value or "not available"))
+
+
+def momentum_label(value: str | None, language: str) -> str:
+    labels = {
+        "it": {
+            "neutral": "neutrale",
+            "extended_positive": "positivo ma tirato",
+            "positive": "positivo",
+            "negative": "negativo",
+            "oversold": "debole/iper-venduto",
+        },
+        "en": {
+            "neutral": "neutral",
+            "extended_positive": "positive but extended",
+            "positive": "positive",
+            "negative": "negative",
+            "oversold": "weak/oversold",
+        },
+    }
+    return labels.get(language, labels["en"]).get(str(value or "").lower(), str(value or "not available"))
+
+
+def technical_risk_sentence_it(ticker: str, tech: dict) -> str:
+    levels = tech.get("levels") or {}
+    volume = tech.get("volume") or {}
+    volatility = tech.get("volatility") or {}
+    breakout = tech.get("breakout_probability")
+    breakout_score = breakout.get("score") if isinstance(breakout, dict) else breakout
+    return (
+        f"Punto debole: breakout probability {breakout_score}/100, volume relativo {volume.get('relative_volume')} "
+        f"e volatilita {volatility.get('regime', 'n/a')}. Se {ticker} perde {levels.get('invalidation_level')}, lo scenario tecnico va ridotto."
+    )
+
+
+def technical_risk_sentence_en(ticker: str, tech: dict) -> str:
+    levels = tech.get("levels") or {}
+    volume = tech.get("volume") or {}
+    volatility = tech.get("volatility") or {}
+    breakout = tech.get("breakout_probability")
+    breakout_score = breakout.get("score") if isinstance(breakout, dict) else breakout
+    return (
+        f"Weak point: breakout probability {breakout_score}/100, relative volume {volume.get('relative_volume')} "
+        f"and {volatility.get('regime', 'n/a')} volatility. If {ticker} loses {levels.get('invalidation_level')}, the technical scenario should be reduced."
     )
 
 
