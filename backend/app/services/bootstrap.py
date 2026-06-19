@@ -110,7 +110,7 @@ def seed_startup_signals(db: Session) -> dict:
         return {"enabled": True, "status": "already_available", "signals_created": 0, "existing_signals": signal_count}
     if price_count == 0:
         return {"enabled": True, "status": "no_price_history", "signals_created": 0}
-    result = SignalEngine().run(db, limit=80)
+    result = SignalEngine().run(db, limit=get_settings().max_update_assets)
     return {"enabled": True, "status": "created", **result}
 
 
@@ -118,7 +118,7 @@ def seed_startup_accuracy(db: Session) -> dict:
     price_count = int(db.scalar(select(func.count(PriceHistory.id))) or 0)
     if price_count == 0:
         return {"enabled": True, "status": "no_price_history", "message": "Accuracy audit waits for verified OHLCV rows."}
-    return {"enabled": True, **run_accuracy_audit(db, limit=80)}
+    return {"enabled": True, **run_accuracy_audit(db, limit=get_settings().max_update_assets)}
 
 
 def price_row_from_cache(asset_id: int, item: dict) -> dict | None:

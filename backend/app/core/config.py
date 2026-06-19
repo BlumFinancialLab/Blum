@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     app_name: str = "Blum AI Financial Intelligence"
-    app_version: str = "0.8.2"
+    app_version: str = "0.8.3"
     environment: str = Field(default="demo", alias="ENVIRONMENT")
     database_url: str = Field(
         default="postgresql+psycopg2://postgres:postgres@127.0.0.1:5432/blum",
@@ -28,15 +28,15 @@ class Settings(BaseSettings):
     chart_vision_min_confidence: float = Field(default=0.70, alias="CHART_VISION_MIN_CONFIDENCE")
     default_benchmark: str = Field(default="SPY", alias="BLUM_DEFAULT_BENCHMARK")
     enable_yfinance_fallback: bool = Field(default=False, alias="BLUM_ENABLE_YFINANCE_FALLBACK")
-    max_update_assets: int = Field(default=80, alias="BLUM_MAX_UPDATE_ASSETS")
+    max_update_assets: int = Field(default=160, alias="BLUM_MAX_UPDATE_ASSETS")
     enable_live_startup: bool = Field(default=True, alias="BLUM_ENABLE_LIVE_STARTUP")
     enable_autonomous_engine: bool = Field(default=True, alias="BLUM_ENABLE_AUTONOMOUS_ENGINE")
     autonomous_cycle_minutes: int = Field(default=20, alias="BLUM_AUTONOMOUS_CYCLE_MINUTES")
-    autonomous_repair_limit: int = Field(default=20, alias="BLUM_AUTONOMOUS_REPAIR_LIMIT")
+    autonomous_repair_limit: int = Field(default=80, alias="BLUM_AUTONOMOUS_REPAIR_LIMIT")
     seed_historical_prices_on_startup: bool = Field(default=True, alias="BLUM_SEED_HISTORICAL_PRICES_ON_STARTUP")
     seed_signals_on_startup: bool = Field(default=True, alias="BLUM_SEED_SIGNALS_ON_STARTUP")
     seed_accuracy_on_startup: bool = Field(default=True, alias="BLUM_SEED_ACCURACY_ON_STARTUP")
-    startup_pipeline_limit: int = Field(default=80, alias="BLUM_STARTUP_PIPELINE_LIMIT")
+    startup_pipeline_limit: int = Field(default=160, alias="BLUM_STARTUP_PIPELINE_LIMIT")
     news_refresh_minutes: int = Field(default=10, alias="BLUM_NEWS_REFRESH_MINUTES")
     market_refresh_minutes: int = Field(default=45, alias="BLUM_MARKET_REFRESH_MINUTES")
     data_gap_repair_minutes: int = Field(default=180, alias="BLUM_DATA_GAP_REPAIR_MINUTES")
@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     enable_learning_loop: bool = Field(default=True, alias="BLUM_ENABLE_LEARNING_LOOP")
     learning_loop_minutes: int = Field(default=360, alias="BLUM_LEARNING_LOOP_MINUTES")
     blum_model_cycle_minutes: int = Field(default=5, alias="BLUM_MODEL_CYCLE_MINUTES")
-    blum_model_cycle_limit: int = Field(default=120, alias="BLUM_MODEL_CYCLE_LIMIT")
+    blum_model_cycle_limit: int = Field(default=160, alias="BLUM_MODEL_CYCLE_LIMIT")
     fundamentals_refresh_minutes: int = Field(default=720, alias="BLUM_FUNDAMENTALS_REFRESH_MINUTES")
     macro_refresh_minutes: int = Field(default=240, alias="BLUM_MACRO_REFRESH_MINUTES")
     stale_price_max_age_days: int = Field(default=7, alias="BLUM_STALE_PRICE_MAX_AGE_DAYS")
