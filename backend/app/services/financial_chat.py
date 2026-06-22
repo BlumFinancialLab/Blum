@@ -147,7 +147,7 @@ COMPANY_TERM_TICKERS = {
 }
 
 LANGUAGE_HINTS = {
-    "it": [" cosa ", " quali ", " analizza ", " analisi ", " trova ", " comprare", " ingresso", " rischio", " titolo", " azione", " uscita", " monitorare", " tecnica", " fondamentale", " confronto", " spiegami"],
+    "it": [" cosa ", " quali ", " qual ", " quanto ", " sta ", " mercato", " peggiore", " peggior", " errore", " capitale", " virtuale", " analizza ", " analisi ", " trova ", " comprare", " ingresso", " rischio", " titolo", " azione", " uscita", " monitorare", " tecnica", " fondamentale", " confronto", " spiegami"],
     "en": [" what ", " which ", " analyze ", " analysis ", " find ", " entry", " risk", " stock", " watch", " compare", " setup", " technical", " fundamental"],
     "de": [" was ", " welche ", " analysiere ", " analyse ", " risiko", " aktie", " einstieg", " beobachten", " vergleich"],
     "fr": [" que ", " quels ", " analyse ", " risque", " action", " entree", " surveiller", " comparer"],
@@ -1894,7 +1894,7 @@ def infer_intent(message: str, mode: str | None = None) -> str:
 def detect_language(message: str) -> str:
     text = f" {strip_accents(message.lower())} "
     scores = {code: sum(1 for hint in hints if hint in text) for code, hints in LANGUAGE_HINTS.items()}
-    italian_words = {"analisi", "tecnica", "fondamentale", "azione", "titolo", "quotata", "borsa", "rischio", "livelli", "supporti", "resistenze"}
+    italian_words = {"analisi", "tecnica", "fondamentale", "azione", "titolo", "quotata", "borsa", "rischio", "livelli", "supporti", "resistenze", "sta", "quanto", "qual", "quale", "mercato", "capitale", "virtuale", "peggior", "peggiore", "errore", "battendo"}
     english_words = {"analysis", "technical", "fundamental", "stock", "risk", "levels", "support", "resistance"}
     tokens = set(re.findall(r"[a-zA-Zàèéìòùáíóúñäöüß]+", message.lower()))
     scores["it"] += len(tokens & italian_words)
