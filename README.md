@@ -789,6 +789,21 @@ The UI is intentionally dense, dark and technical: Bloomberg-style information d
 
 Signal surfaces include score version, confidence score and lifecycle state (`new`, `confirmed`, `strengthening`, `active`, `faded`, `invalidated`) so the platform can show whether a signal is emerging, durable or deteriorating.
 
+## Trading Game Transparency
+
+BLUM now treats the Reproducible Trading Game as an auditable evidence system, not a black-box P/L counter. Every simulated paper trade can be traced through:
+
+- Trade Ledger: ticker, setup, entry, exit, position size, stop/invalidation, targets, P/L, R-multiple, benchmark excess and outcome label.
+- Trade Replay: entry decision, exit decision, thesis link, risk plan, same-period benchmark comparison and learning outcome.
+- Trade Attribution: Technical Engine, Sniper Engine, Regime Engine, Learning Loop, Capital Manager and Benchmark Evaluator contributions.
+- Trade Quality Score: process-quality scoring separated from raw P/L, so lucky profitable trades can be penalized and rule-following losses can still be useful evidence.
+- Annotated Equity Curve: entry/exit, wins, losses, stop hits, missed entries, bankruptcy and other learning events are attached to the capital curve.
+- Learning Evidence Log: each trade can create structured observations for setup confirmation, setup failure, entry timing, exit logic, no-trade filters and benchmark-relative learning.
+- Reality Check: sample size, profit concentration, sector/regime coverage, fractional-share simplification, slippage/spread assumptions and possible overfitting warnings.
+- P/L Breakdown: total and per-trade P/L, fees/slippage/spread estimates, P/L by setup, ticker, sector, regime, engine contribution and holding-period bucket.
+
+Simulated P/L is research evidence only. Strong numbers are not considered robust until sample size, regime coverage, benchmark fairness and execution realism pass the reality checks. BLUM does not claim guaranteed profit or provide financial advice.
+
 ## Local Setup
 
 ```bash

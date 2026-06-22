@@ -248,6 +248,12 @@ class TradingGameSimulator:
             executed.append(serialize_game_trade(trade))
         self.recalculate_game(db, game)
         self.update_lessons(db, game)
+        try:
+            from app.services.trade_transparency import TradeLedgerService
+
+            TradeLedgerService().refresh_game_transparency(db, game, commit=False)
+        except Exception as exc:
+            game.ledger_summary = {"status": "degraded", "error": f"{type(exc).__name__}: {exc}"}
         db.commit()
         return {
             "status": "ok",
@@ -331,30 +337,69 @@ class TradingGameSimulator:
         exit_price = estimated_exit_price(entry_price, simulation)
         position_size = risk_amount / max(0.01, abs((entry_price or 1.0) * 0.02)) if risk_amount and entry_price else 0.0
         exit_date = prediction.analysis_date + timedelta(days=simulation.time_in_trade or 0) if prediction and simulation.time_in_trade else None
+        asset = db.scalar(select(Asset).where(Asset.ticker == simulation.ticker).limit(1))
+        gross_pl = 0.0 if decision in {"avoid", "wait_for_trigger"} else risk_amount * (r_multiple or 0.0)
+        pnl_pct = round(realized_pl / max(0.01, capital_before) * 100, 4) if capital_before else None
+        pnl_per_share = round((exit_price - entry_price), 4) if exit_price is not None and entry_price is not None else None
+        benchmark_return = self.benchmark_return_for(db, prediction, simulation)
+        asset_return = round((exit_price / entry_price - 1) * 100, 4) if exit_price is not None and entry_price else None
+        excess_return = round(asset_return - benchmark_return, 4) if asset_return is not None and benchmark_return is not None else None
         trade = TradingGameTrade(
             game_id=game.id,
             execution_simulation_id=simulation.id,
             ticker=simulation.ticker,
+            asset_name=asset.name if asset else simulation.ticker,
+            asset_type=asset.asset_type if asset else None,
+            sector=asset.sector if asset else None,
+            industry=asset.industry if asset else None,
             setup_type=simulation.setup_type,
+            thesis_id=prediction.id if prediction else None,
+            confidence_at_entry=prediction.confidence if prediction else None,
+            actionability_state_at_entry=decision,
+            market_regime_at_entry=prediction.market_regime if prediction else "unknown",
+            sector_regime_at_entry=(asset.sector if asset else None) or "unknown",
+            benchmark_ticker=game.benchmark_ticker,
             timeframe=normalize_timeframe((simulation.simulation_payload or {}).get("timeframe") or "daily"),
             decision_state=decision,
             entry_date=prediction.analysis_date if prediction else None,
             exit_date=exit_date,
             entry_price=entry_price,
             exit_price=exit_price,
+            entry_reason=f"Reproducible paper setup generated from point-in-time prediction {prediction.id if prediction else 'unknown'} and execution simulation {simulation.id}.",
+            entry_trigger=simulation.entry_model,
+            confirmation_condition=f"{simulation.entry_model}; setup must remain reproducible on daily/4H policy.",
             position_size=round(position_size, 6),
+            notional_value=round(position_size * entry_price, 4) if position_size and entry_price else 0.0,
             risk_amount=risk_amount,
             risk_percent=sizing["risk_percent"],
+            max_expected_loss=risk_amount,
+            exit_reason=exit_reason_from_simulation(decision, simulation),
+            exit_trigger=simulation.exit_model,
+            holding_days=simulation.time_in_trade,
+            gross_pnl_eur=round(gross_pl, 4),
+            net_pnl_eur=round(realized_pl, 4),
+            pnl_percent=pnl_pct,
+            pnl_per_share=pnl_per_share,
             realized_r_multiple=r_multiple,
             realized_pl=round(realized_pl, 4),
             capital_before=round(capital_before, 4),
             capital_after=round(capital_after, 4),
+            max_favorable_excursion=simulation.max_favorable_excursion,
+            max_adverse_excursion=simulation.max_adverse_excursion,
             stop_hit=simulation.stop_hit,
             target_hit=simulation.target_hit,
+            target_1_hit=simulation.target_hit,
+            target_2_hit=bool(simulation.target_hit and safe_float(simulation.realized_r_multiple) >= 2),
+            invalidation_hit=simulation.stop_hit,
             missed_entry=simulation.missed_entry,
             false_breakout=simulation.false_breakout,
             reproducibility_score=reproducibility,
-            benchmark_return=self.benchmark_return_for(db, prediction, simulation),
+            benchmark_return=benchmark_return,
+            benchmark_return_same_period=benchmark_return,
+            excess_return_vs_benchmark=excess_return,
+            data_quality_score=prediction.data_quality_score if prediction else None,
+            outcome_label=game_outcome_label(decision, simulation),
+            lesson_generated=game_lesson_from_simulation(decision, simulation),
             payload={
                 "capital_policy": sizing,
                 "simulation": simulation.simulation_payload,
@@ -389,6 +434,9 @@ class TradingGameSimulator:
                 drawdown=game.max_drawdown,
                 benchmark_equity=benchmark_equity,
                 benchmark_return=benchmark_return,
+                event_type=payload.get("event") or ("trade_exit" if payload.get("trade_id") else None),
+                related_trade_id=payload.get("trade_id"),
+                annotation_payload=payload,
                 payload=payload,
             )
         )
@@ -760,6 +808,52 @@ def guardrails() -> list[str]:
         "No benchmark outperformance claim without enough samples and benchmark coverage.",
         "Low reproducibility and hostile regimes reduce size or reject the trade.",
     ]
+
+
+def game_outcome_label(decision: str, simulation: ExecutionSimulation) -> str:
+    if simulation.missed_entry:
+        return "missed_entry"
+    if decision == "avoid":
+        return "no_trade_missed_opportunity" if safe_float(simulation.opportunity_cost) > 0 else "no_trade_correct"
+    if decision == "wait_for_trigger":
+        return "missed_entry" if safe_float(simulation.realized_r_multiple) > 0 else "no_trade_correct"
+    if simulation.stop_hit:
+        return "stopped_out"
+    if simulation.target_hit and safe_float(simulation.realized_r_multiple) > 0:
+        return "target_hit"
+    if safe_float(simulation.realized_r_multiple) > 0.15:
+        return "win"
+    if safe_float(simulation.realized_r_multiple) < -0.15:
+        return "loss"
+    return "breakeven"
+
+
+def exit_reason_from_simulation(decision: str, simulation: ExecutionSimulation) -> str:
+    if decision in {"avoid", "wait_for_trigger"}:
+        return "No executed paper position: BLUM kept the setup in avoid/wait state."
+    if simulation.stop_hit:
+        return "Stop or invalidation proxy hit in the historical execution simulation."
+    if simulation.target_hit:
+        return "Target proxy reached in the historical execution simulation."
+    if simulation.trailing_exit_hit:
+        return "Trailing exit proxy hit after favorable excursion."
+    return "Time-stop or horizon exit from the historical execution simulation."
+
+
+def game_lesson_from_simulation(decision: str, simulation: ExecutionSimulation) -> str:
+    label = game_outcome_label(decision, simulation)
+    setup = simulation.setup_type.replace("_", " ")
+    if label in {"win", "target_hit"}:
+        return f"{setup} produced positive paper R; verify benchmark excess and repeatability before increasing confidence."
+    if label in {"loss", "stopped_out"}:
+        return f"{setup} failed or stopped out; review confirmation, regime and invalidation distance."
+    if label == "missed_entry":
+        return f"{setup} was missed; evaluate whether trigger or entry-zone logic is too strict."
+    if label == "no_trade_correct":
+        return f"No-trade decision protected capital in this historical case."
+    if label == "no_trade_missed_opportunity":
+        return f"No-trade decision may have been too conservative; replay similar cases before changing rules."
+    return f"{setup} outcome is neutral; keep as low-confidence learning evidence."
 
 
 def serialize_game(row: TradingGame | None) -> dict | None:

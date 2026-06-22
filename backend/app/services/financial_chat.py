@@ -45,6 +45,7 @@ from app.services.strategic_intelligence import community_sentiment, market_narr
 from app.services.dashboard import signal_payload
 from app.services.technical_analysis_engine import TechnicalAnalysisEngine
 from app.services.trading_game import TradingGameSimulator
+from app.services.trade_transparency import PnLBreakdownService, TradeLedgerService, TradingGameRealityCheckService
 
 
 DISCLAIMER = "Analisi informativa, non consulenza finanziaria. I livelli sono tecnici e probabilistici, non garanzie."
@@ -459,11 +460,15 @@ def sniper_context_for_assets(db: Session, assets: list[Asset], limit: int = 5) 
 def trading_game_context_for_chat(db: Session) -> dict:
     engine = TradingGameSimulator()
     try:
+        ledger = TradeLedgerService().ledger(db, limit=18, sort_by="pnl_desc")
         return {
             "status": engine.status(db),
             "benchmark": engine.benchmark(db),
             "equity": engine.equity(db, limit=80),
             "trades": engine.trades(db, limit=40),
+            "ledger": ledger,
+            "pnl_breakdown": PnLBreakdownService().game_breakdown(db),
+            "reality_check": TradingGameRealityCheckService().evaluate(db),
             "failures": engine.failures(db, limit=12),
             "lessons": engine.lessons(db, limit=12),
             "reproducibility": engine.reproducibility(db, limit=120),
@@ -1435,6 +1440,10 @@ def build_trading_game_response(language: str, context: dict) -> dict:
     lessons = context.get("lessons") or []
     failures = context.get("failures") or []
     trades = context.get("trades") or []
+    ledger = context.get("ledger") or {}
+    ledger_rows = ledger.get("rows") or []
+    pnl_breakdown = context.get("pnl_breakdown") or {}
+    reality_check = context.get("reality_check") or {}
     if not game:
         message = "BLUM non ha ancora un Trading Game persistito. Serve almeno un ciclo Sniper/Learning Loop per creare simulazioni P/L reali." if language == "it" else "BLUM does not have a persisted Trading Game yet. It needs at least one Sniper/Learning Loop cycle to create real P/L simulations."
         return build_error_response(language, message, [])
@@ -1459,6 +1468,9 @@ def build_trading_game_response(language: str, context: dict) -> dict:
                 f"{benchmark.get('benchmark') or game.get('benchmark_ticker')} return: {format_signed(benchmark.get('benchmark_return'))}%",
                 "Nessuna dichiarazione di outperformance e valida se il campione e piccolo o incompleto.",
             ]},
+            {"key": "trade_ledger", "title": "Trade ledger", "bullets": trade_ledger_lines(ledger_rows, language)},
+            {"key": "pnl_breakdown", "title": "P/L breakdown", "bullets": pnl_breakdown_lines(pnl_breakdown, language)},
+            {"key": "reality_check", "title": "Reality check", "bullets": reality_check_lines(reality_check, language)},
             {"key": "reproducibility", "title": "Riproducibilita", "bullets": [
                 f"Score medio: {format_number(reproducibility.get('average_reproducibility'))}/100",
                 f"Distribuzione: {reproducibility.get('distribution') or {}}",
@@ -1490,6 +1502,9 @@ def build_trading_game_response(language: str, context: dict) -> dict:
                 f"{benchmark.get('benchmark') or game.get('benchmark_ticker')} return: {format_signed(benchmark.get('benchmark_return'))}%",
                 "No outperformance claim is valid when sample size or benchmark coverage is insufficient.",
             ]},
+            {"key": "trade_ledger", "title": "Trade Ledger", "bullets": trade_ledger_lines(ledger_rows, language)},
+            {"key": "pnl_breakdown", "title": "P/L Breakdown", "bullets": pnl_breakdown_lines(pnl_breakdown, language)},
+            {"key": "reality_check", "title": "Reality Check", "bullets": reality_check_lines(reality_check, language)},
             {"key": "reproducibility", "title": "Reproducibility", "bullets": [
                 f"Average score: {format_number(reproducibility.get('average_reproducibility'))}/100",
                 f"Distribution: {reproducibility.get('distribution') or {}}",
@@ -1514,9 +1529,70 @@ def build_trading_game_response(language: str, context: dict) -> dict:
         "executive_view": summary,
         "risk_reward_view": f"Expectancy {format_number(game.get('expectancy_r'))}R, drawdown {format_signed(game.get('max_drawdown'))}%.",
         "data_quality": {"sample_warning": sample_warning, "trades": game.get("trade_count"), "reproducibility": reproducibility},
-        "learning_loop_memory": {"trading_game": game, "lessons": lessons[:6], "latest_trades": trades[:6]},
+        "learning_loop_memory": {"trading_game": game, "lessons": lessons[:6], "latest_trades": trades[:6], "ledger": ledger_rows[:8], "reality_check": reality_check},
         "answer_to_user": summary,
     }
+
+
+def trade_ledger_lines(rows: list[dict], language: str) -> list[str]:
+    if not rows:
+        return ["BLUM ha metriche di gioco, ma il trade ledger dettagliato non e ancora disponibile." if language == "it" else "BLUM has game-level metrics, but the detailed trade ledger is not available yet."]
+    lines = []
+    for row in rows[:5]:
+        ticker = row.get("ticker")
+        setup = str(row.get("setup_type") or "setup").replace("_", " ")
+        pnl = format_money(row.get("net_pnl_eur") if row.get("net_pnl_eur") is not None else row.get("realized_pl"))
+        r_value = format_number(row.get("r_multiple"))
+        entry = row.get("entry_price")
+        exit_price = row.get("exit_price")
+        outcome = str(row.get("outcome_label") or row.get("decision_state") or "unknown").replace("_", " ")
+        if language == "it":
+            lines.append(f"{ticker}: {setup}, entry {format_number(entry)}, exit {format_number(exit_price)}, P/L {pnl}, {r_value}R, esito {outcome}.")
+        else:
+            lines.append(f"{ticker}: {setup}, entry {format_number(entry)}, exit {format_number(exit_price)}, P/L {pnl}, {r_value}R, outcome {outcome}.")
+    return lines
+
+
+def pnl_breakdown_lines(payload: dict, language: str) -> list[str]:
+    if not payload or payload.get("status") == "no_game":
+        return ["Breakdown P/L non disponibile." if language == "it" else "P/L breakdown is not available."]
+    by_setup = payload.get("pnl_by_setup") or {}
+    by_ticker = payload.get("pnl_by_ticker") or {}
+    top_setup = next(iter(by_setup.items()), None)
+    top_ticker = next(iter(by_ticker.items()), None)
+    lines = []
+    if language == "it":
+        lines.append(f"P/L realizzato totale: {format_money(payload.get('total_realized_pnl'))}; unrealized: {format_money(payload.get('total_unrealized_pnl'))}.")
+        lines.append(f"Costi stimati: fees {format_money(payload.get('fees_estimate'))}, slippage {format_money(payload.get('slippage_estimate'))}.")
+        if top_setup:
+            lines.append(f"Setup con maggiore contributo: {str(top_setup[0]).replace('_', ' ')} con {format_money(top_setup[1].get('pnl'))}.")
+        if top_ticker:
+            lines.append(f"Ticker con maggiore contributo: {top_ticker[0]} con {format_money(top_ticker[1].get('pnl'))}.")
+    else:
+        lines.append(f"Total realized P/L: {format_money(payload.get('total_realized_pnl'))}; unrealized: {format_money(payload.get('total_unrealized_pnl'))}.")
+        lines.append(f"Estimated costs: fees {format_money(payload.get('fees_estimate'))}, slippage {format_money(payload.get('slippage_estimate'))}.")
+        if top_setup:
+            lines.append(f"Largest setup contribution: {str(top_setup[0]).replace('_', ' ')} with {format_money(top_setup[1].get('pnl'))}.")
+        if top_ticker:
+            lines.append(f"Largest ticker contribution: {top_ticker[0]} with {format_money(top_ticker[1].get('pnl'))}.")
+    return lines
+
+
+def reality_check_lines(payload: dict, language: str) -> list[str]:
+    if not payload or payload.get("status") == "no_game":
+        return ["Reality check non disponibile." if language == "it" else "Reality check is not available."]
+    warnings = payload.get("warnings") or []
+    base = payload.get("explanation") or ""
+    lines = [base] if base else []
+    if language == "it":
+        lines.append(f"Campione: {payload.get('trades_count')} trade, {payload.get('unique_tickers')} ticker, {payload.get('unique_sectors')} settori, confidenza statistica {payload.get('statistical_confidence')}.")
+        if warnings:
+            lines.append(f"Warning attivi: {', '.join(str(item).replace('_', ' ') for item in warnings[:5])}.")
+    else:
+        lines.append(f"Sample: {payload.get('trades_count')} trades, {payload.get('unique_tickers')} tickers, {payload.get('unique_sectors')} sectors, statistical confidence {payload.get('statistical_confidence')}.")
+        if warnings:
+            lines.append(f"Active warnings: {', '.join(str(item).replace('_', ' ') for item in warnings[:5])}.")
+    return lines
 
 
 def build_reasoning_memory_response(language: str, candidates: list[dict], asset_packets: list[dict], validation: dict) -> dict:
@@ -1914,6 +1990,9 @@ def summarize_trading_game_context(context: dict) -> dict:
     game = status.get("current_game") or {}
     benchmark = (context or {}).get("benchmark") or {}
     reproducibility = (context or {}).get("reproducibility") or {}
+    ledger = (context or {}).get("ledger") or {}
+    reality = (context or {}).get("reality_check") or {}
+    pnl = (context or {}).get("pnl_breakdown") or {}
     return {
         "current_game": {
             "status": game.get("status"),
@@ -1925,6 +2004,20 @@ def summarize_trading_game_context(context: dict) -> dict:
         },
         "benchmark": benchmark,
         "reproducibility": reproducibility,
+        "ledger": {
+            "status": ledger.get("status"),
+            "total": ledger.get("total"),
+            "top_trades": (ledger.get("rows") or [])[:5],
+        },
+        "reality_check": {
+            "statistical_confidence": reality.get("statistical_confidence"),
+            "warnings": reality.get("warnings", [])[:5],
+            "realism_score": reality.get("realism_score"),
+        },
+        "pnl_breakdown": {
+            "total_realized_pnl": pnl.get("total_realized_pnl"),
+            "pnl_by_setup": dict(list((pnl.get("pnl_by_setup") or {}).items())[:5]),
+        },
     }
 
 
@@ -2124,7 +2217,7 @@ def infer_intent(message: str, mode: str | None = None) -> str:
         return "fundamental_analysis"
     if any(term in normalized for term in ["tesi", "thesis", "convinzione", "conviction", "ancora valida", "still valid", "sopravviss", "survival", "decay", "decad", "bull bear neutral", "tesi bull", "tesi bear", "tesi neutral", "motore", "engine vote", "sta migliorando", "dove ha sbagliato", "reasoning core", "batte spy", "batte qqq", "vs spy", "vs qqq"]):
         return "reasoning_memory_question"
-    if any(term in normalized for term in ["capitale virtuale", "trading game", "sta battendo", "batte il mercato", "benchmark", "drawdown", "profit factor", "expectancy", "p/l", "pl ", "peggior errore", "andato a zero", "rischio per trade", "riproducibil", "reproducib", "win rate"]):
+    if any(term in normalized for term in ["capitale virtuale", "trading game", "sta battendo", "batte il mercato", "benchmark", "drawdown", "profit factor", "expectancy", "p/l", "pl ", "peggior errore", "andato a zero", "rischio per trade", "riproducibil", "reproducib", "win rate", "quali trade", "trade hanno", "dove e entrato", "dove e uscito", "entrato blum", "uscito blum", "per azione", "fortuna", "profitto arriva", "ledger", "trade piu importante"]):
         return "trading_game"
     if any(term in normalized for term in ["sniper", "entrabile", "meglio aspettare", "ingresso", "entry", "risk/reward", "uscita", "exit", "target", "invalidazione", "invalidation", "profitto", "take profit"]):
         return "market_sniper"

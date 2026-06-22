@@ -1877,8 +1877,11 @@ class TradingGame(Base):
     failure_report: Mapped[dict] = mapped_column(JsonType, default=dict)
     success_report: Mapped[dict] = mapped_column(JsonType, default=dict)
     lessons: Mapped[dict] = mapped_column(JsonType, default=dict)
+    ledger_summary: Mapped[dict] = mapped_column(JsonType, default=dict)
+    reality_check_summary: Mapped[dict] = mapped_column(JsonType, default=dict)
     started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    transparency_updated_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
 
 
@@ -1890,28 +1893,68 @@ class TradingGameTrade(Base):
     game_id: Mapped[int] = mapped_column(ForeignKey("trading_games.id", ondelete="CASCADE"), index=True)
     execution_simulation_id: Mapped[int | None] = mapped_column(ForeignKey("execution_simulations.id", ondelete="SET NULL"), index=True)
     ticker: Mapped[str] = mapped_column(String(32), index=True)
+    asset_name: Mapped[str | None] = mapped_column(String(220))
+    asset_type: Mapped[str | None] = mapped_column(String(40), index=True)
+    sector: Mapped[str | None] = mapped_column(String(120), index=True)
+    industry: Mapped[str | None] = mapped_column(String(160))
     setup_type: Mapped[str] = mapped_column(String(100), index=True)
+    thesis_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    sniper_score_at_entry: Mapped[float | None] = mapped_column(Float)
+    opportunity_score_at_entry: Mapped[float | None] = mapped_column(Float)
+    confidence_at_entry: Mapped[float | None] = mapped_column(Float)
+    actionability_state_at_entry: Mapped[str | None] = mapped_column(String(80), index=True)
+    market_regime_at_entry: Mapped[str | None] = mapped_column(String(120), index=True)
+    sector_regime_at_entry: Mapped[str | None] = mapped_column(String(120))
+    benchmark_ticker: Mapped[str | None] = mapped_column(String(32), index=True)
     timeframe: Mapped[str] = mapped_column(String(40), default="daily", index=True)
     decision_state: Mapped[str] = mapped_column(String(80), default="wait_for_trigger", index=True)
     entry_date: Mapped[datetime | None] = mapped_column(Date, index=True)
     exit_date: Mapped[datetime | None] = mapped_column(Date, index=True)
     entry_price: Mapped[float | None] = mapped_column(Float)
     exit_price: Mapped[float | None] = mapped_column(Float)
+    entry_reason: Mapped[str | None] = mapped_column(Text)
+    entry_trigger: Mapped[str | None] = mapped_column(Text)
+    confirmation_condition: Mapped[str | None] = mapped_column(Text)
     position_size: Mapped[float] = mapped_column(Float, default=0.0)
+    notional_value: Mapped[float | None] = mapped_column(Float)
     risk_amount: Mapped[float] = mapped_column(Float, default=0.0)
     risk_percent: Mapped[float] = mapped_column(Float, default=0.0)
+    stop_loss: Mapped[float | None] = mapped_column(Float)
+    invalidation_level: Mapped[float | None] = mapped_column(Float)
+    initial_target_1: Mapped[float | None] = mapped_column(Float)
+    initial_target_2: Mapped[float | None] = mapped_column(Float)
+    trailing_stop: Mapped[str | None] = mapped_column(Text)
+    max_expected_loss: Mapped[float | None] = mapped_column(Float)
+    exit_reason: Mapped[str | None] = mapped_column(Text)
+    exit_trigger: Mapped[str | None] = mapped_column(Text)
+    holding_days: Mapped[int | None] = mapped_column(Integer)
+    gross_pnl_eur: Mapped[float | None] = mapped_column(Float)
+    net_pnl_eur: Mapped[float | None] = mapped_column(Float)
+    pnl_percent: Mapped[float | None] = mapped_column(Float)
+    pnl_per_share: Mapped[float | None] = mapped_column(Float)
     realized_r_multiple: Mapped[float | None] = mapped_column(Float, index=True)
     realized_pl: Mapped[float] = mapped_column(Float, default=0.0)
     capital_before: Mapped[float] = mapped_column(Float, default=0.0)
     capital_after: Mapped[float] = mapped_column(Float, default=0.0)
+    max_favorable_excursion: Mapped[float | None] = mapped_column(Float)
+    max_adverse_excursion: Mapped[float | None] = mapped_column(Float)
     stop_hit: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     target_hit: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    target_1_hit: Mapped[bool | None] = mapped_column(Boolean, index=True)
+    target_2_hit: Mapped[bool | None] = mapped_column(Boolean, index=True)
+    invalidation_hit: Mapped[bool | None] = mapped_column(Boolean, index=True)
     missed_entry: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     false_breakout: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     slippage_bps: Mapped[float] = mapped_column(Float, default=8.0)
     spread_bps: Mapped[float] = mapped_column(Float, default=6.0)
     reproducibility_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
     benchmark_return: Mapped[float | None] = mapped_column(Float)
+    benchmark_return_same_period: Mapped[float | None] = mapped_column(Float)
+    excess_return_vs_benchmark: Mapped[float | None] = mapped_column(Float)
+    trade_quality_score: Mapped[float | None] = mapped_column(Float, index=True)
+    data_quality_score: Mapped[float | None] = mapped_column(Float)
+    outcome_label: Mapped[str | None] = mapped_column(String(80), index=True)
+    lesson_generated: Mapped[str | None] = mapped_column(Text)
     payload: Mapped[dict] = mapped_column(JsonType, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
@@ -1932,6 +1975,9 @@ class TradingGameEquityCurve(Base):
     drawdown: Mapped[float] = mapped_column(Float, default=0.0)
     benchmark_equity: Mapped[float | None] = mapped_column(Float)
     benchmark_return: Mapped[float | None] = mapped_column(Float)
+    event_type: Mapped[str | None] = mapped_column(String(100), index=True)
+    related_trade_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    annotation_payload: Mapped[dict] = mapped_column(JsonType, default=dict)
     payload: Mapped[dict] = mapped_column(JsonType, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
@@ -1964,3 +2010,121 @@ class CapitalManagementLesson(Base):
     evidence: Mapped[dict] = mapped_column(JsonType, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
+class TradeEngineAttribution(Base):
+    __tablename__ = "trade_engine_attributions"
+    __table_args__ = (
+        UniqueConstraint("trade_id", "engine_name", name="uq_trade_engine_attribution_trade_engine"),
+        Index("ix_trade_engine_attributions_trade_engine", "trade_id", "engine_name"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    trade_id: Mapped[int] = mapped_column(ForeignKey("trading_game_trades.id", ondelete="CASCADE"), index=True)
+    engine_name: Mapped[str] = mapped_column(String(120), index=True)
+    vote: Mapped[str] = mapped_column(String(80), default="neutral", index=True)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    contribution_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    evidence_quality: Mapped[float] = mapped_column(Float, default=0.0)
+    was_correct: Mapped[bool | None] = mapped_column(Boolean, index=True)
+    reliability_delta: Mapped[float] = mapped_column(Float, default=0.0)
+    explanation: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    trade = relationship("TradingGameTrade")
+
+
+class TradeQualityScore(Base):
+    __tablename__ = "trade_quality_scores"
+    __table_args__ = (
+        UniqueConstraint("trade_id", name="uq_trade_quality_scores_trade"),
+        Index("ix_trade_quality_scores_final_created", "final_trade_quality_score", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    trade_id: Mapped[int] = mapped_column(ForeignKey("trading_game_trades.id", ondelete="CASCADE"), index=True)
+    entry_quality: Mapped[float] = mapped_column(Float, default=0.0)
+    exit_quality: Mapped[float] = mapped_column(Float, default=0.0)
+    risk_reward_quality: Mapped[float] = mapped_column(Float, default=0.0)
+    sizing_quality: Mapped[float] = mapped_column(Float, default=0.0)
+    regime_alignment: Mapped[float] = mapped_column(Float, default=0.0)
+    reproducibility_quality: Mapped[float] = mapped_column(Float, default=0.0)
+    thesis_consistency: Mapped[float] = mapped_column(Float, default=0.0)
+    benchmark_relative_quality: Mapped[float] = mapped_column(Float, default=0.0)
+    rule_compliance: Mapped[float] = mapped_column(Float, default=0.0)
+    luck_factor: Mapped[float] = mapped_column(Float, default=0.0)
+    final_trade_quality_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    explanation: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    trade = relationship("TradingGameTrade")
+
+
+class TradeLearningEvidence(Base):
+    __tablename__ = "trade_learning_evidence"
+    __table_args__ = (Index("ix_trade_learning_evidence_setup_regime", "setup_type", "regime", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    trade_id: Mapped[int | None] = mapped_column(ForeignKey("trading_game_trades.id", ondelete="CASCADE"), index=True)
+    game_id: Mapped[int | None] = mapped_column(ForeignKey("trading_games.id", ondelete="CASCADE"), index=True)
+    ticker: Mapped[str] = mapped_column(String(32), index=True)
+    setup_type: Mapped[str] = mapped_column(String(100), index=True)
+    regime: Mapped[str] = mapped_column(String(120), default="unknown", index=True)
+    lesson_type: Mapped[str] = mapped_column(String(120), index=True)
+    observation: Mapped[str] = mapped_column(Text, default="")
+    sample_size: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    supporting_trades_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    contradicted_rules_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    proposed_rule_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    affected_module: Mapped[str] = mapped_column(String(120), default="trading_game", index=True)
+    action_taken: Mapped[str] = mapped_column(String(160), default="logged_for_learning", index=True)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    trade = relationship("TradingGameTrade")
+    game = relationship("TradingGame")
+
+
+class TradingGameRealityCheck(Base):
+    __tablename__ = "trading_game_reality_checks"
+    __table_args__ = (Index("ix_trading_game_reality_checks_game_eval", "game_id", "evaluated_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    game_id: Mapped[int] = mapped_column(ForeignKey("trading_games.id", ondelete="CASCADE"), index=True)
+    evaluated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    trades_count: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    unique_tickers: Mapped[int] = mapped_column(Integer, default=0)
+    unique_sectors: Mapped[int] = mapped_column(Integer, default=0)
+    unique_regimes: Mapped[int] = mapped_column(Integer, default=0)
+    profit_concentration_top_1: Mapped[float | None] = mapped_column(Float)
+    profit_concentration_top_3: Mapped[float | None] = mapped_column(Float)
+    sample_quality_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    realism_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    statistical_confidence: Mapped[str] = mapped_column(String(80), default="low", index=True)
+    warnings_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    explanation: Mapped[str] = mapped_column(Text, default="")
+
+    game = relationship("TradingGame")
+
+
+class EquityCurveAnnotation(Base):
+    __tablename__ = "equity_curve_annotations"
+    __table_args__ = (Index("ix_equity_curve_annotations_game_time", "game_id", "timestamp"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    game_id: Mapped[int] = mapped_column(ForeignKey("trading_games.id", ondelete="CASCADE"), index=True)
+    equity_curve_id: Mapped[int | None] = mapped_column(ForeignKey("trading_game_equity_curve.id", ondelete="SET NULL"), index=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    event_type: Mapped[str] = mapped_column(String(100), index=True)
+    label: Mapped[str] = mapped_column(String(180), default="")
+    description: Mapped[str] = mapped_column(Text, default="")
+    related_trade_id: Mapped[int | None] = mapped_column(ForeignKey("trading_game_trades.id", ondelete="SET NULL"), index=True)
+    related_thesis_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    pnl_impact: Mapped[float | None] = mapped_column(Float)
+    capital_after_event: Mapped[float | None] = mapped_column(Float)
+    payload: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    game = relationship("TradingGame")
+    equity_curve = relationship("TradingGameEquityCurve")
+    trade = relationship("TradingGameTrade")

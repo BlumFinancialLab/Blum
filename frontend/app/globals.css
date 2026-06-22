@@ -319,6 +319,21 @@ p { color: var(--muted); line-height: 1.55; }
   padding: 12px;
   background: #070a0f;
 }
+.panel-inner {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 12px;
+  background: #070a0f;
+}
+.panel-inner > span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  font-weight: 900;
+  margin-bottom: 8px;
+}
 .financial-brain-grid {
   display: grid;
   grid-template-columns: minmax(320px, 1.15fr) repeat(3, minmax(220px, .95fr));
@@ -2267,6 +2282,28 @@ p { color: var(--muted); line-height: 1.55; }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.trade-ledger-table {
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+.learning-row.trade-ledger-row {
+  grid-template-columns: 72px minmax(150px, 1fr) minmax(110px, .85fr) minmax(110px, .85fr) 92px 82px 58px minmax(110px, .85fr) 72px 82px;
+  min-width: 1040px;
+}
+.learning-row.clickable {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.learning-row.clickable:hover {
+  border-color: rgba(255,176,0,.42);
+  background: #0b1119;
+}
+.trade-detail-panel h3 {
+  margin: 8px 0;
+  font-size: 22px;
 }
 
 @media (max-width: 1080px) {

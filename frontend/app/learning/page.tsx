@@ -15,20 +15,27 @@ export default function LearningPage() {
   const [memory, setMemory] = useState<any | null>(null);
   const [trading, setTrading] = useState<any | null>(null);
   const [reasoning, setReasoning] = useState<any | null>(null);
+  const [selectedTrade, setSelectedTrade] = useState<any | null>(null);
+  const [tradeError, setTradeError] = useState("");
   const [error, setError] = useState("");
 
   useEffect(() => {
     let mounted = true;
     async function load() {
       setError("");
-      const [dashResult, runsResult, predictionsResult, memoryResult, tradingStatusResult, equityResult, tradesResult, failuresResult, lessonsResult, benchmarkResult, reproducibilityResult, reasoningStatusResult, survivalResult, convictionResult, reliabilityResult, competitionResult, ensembleResult, benchmarkRelativeResult, trainingQualityResult] = await Promise.allSettled([
+      const [dashResult, runsResult, predictionsResult, memoryResult, tradingStatusResult, equityResult, annotatedEquityResult, tradesResult, ledgerResult, learningEvidenceResult, realityCheckResult, pnlBreakdownResult, failuresResult, lessonsResult, benchmarkResult, reproducibilityResult, reasoningStatusResult, survivalResult, convictionResult, reliabilityResult, competitionResult, ensembleResult, benchmarkRelativeResult, trainingQualityResult] = await Promise.allSettled([
         api.learningDashboard(),
         api.learningRuns(20),
         api.learningPredictions(36),
         api.learningMemory(32),
         api.tradingGameStatus(),
         api.tradingGameEquity(240),
+        api.tradingGameAnnotatedEquity(360),
         api.tradingGameTrades(80),
+        api.tradingGameLedger(120),
+        api.tradingGameLearningEvidence(60),
+        api.tradingGameRealityCheck(),
+        api.tradingGamePnlBreakdown(),
         api.tradingGameFailures(24),
         api.tradingGameLessons(24),
         api.tradingGameBenchmark(),
@@ -50,7 +57,12 @@ export default function LearningPage() {
       setTrading({
         status: tradingStatusResult.status === "fulfilled" ? tradingStatusResult.value : null,
         equity: equityResult.status === "fulfilled" ? equityResult.value : [],
+        annotatedEquity: annotatedEquityResult.status === "fulfilled" ? annotatedEquityResult.value : null,
         trades: tradesResult.status === "fulfilled" ? tradesResult.value : [],
+        ledger: ledgerResult.status === "fulfilled" ? ledgerResult.value : null,
+        learningEvidence: learningEvidenceResult.status === "fulfilled" ? learningEvidenceResult.value : null,
+        realityCheck: realityCheckResult.status === "fulfilled" ? realityCheckResult.value : null,
+        pnlBreakdown: pnlBreakdownResult.status === "fulfilled" ? pnlBreakdownResult.value : null,
         failures: failuresResult.status === "fulfilled" ? failuresResult.value : [],
         lessons: lessonsResult.status === "fulfilled" ? lessonsResult.value : [],
         benchmark: benchmarkResult.status === "fulfilled" ? benchmarkResult.value : null,
@@ -85,7 +97,13 @@ export default function LearningPage() {
   const latestRun = dashboard?.latest_run;
   const game = trading?.status?.current_game ?? dashboard?.trading_game?.current_game;
   const equityRows = trading?.equity ?? [];
+  const annotatedEquityRows = trading?.annotatedEquity?.equity_curve_points ?? equityRows;
+  const equityAnnotations = trading?.annotatedEquity?.annotations ?? [];
   const gameTrades = trading?.trades ?? [];
+  const ledgerRows = trading?.ledger?.rows ?? [];
+  const learningEvidenceRows = trading?.learningEvidence?.rows ?? [];
+  const realityCheck = trading?.realityCheck ?? {};
+  const pnlBreakdown = trading?.pnlBreakdown ?? {};
   const tradingLessons = trading?.lessons ?? [];
   const tradingBenchmark = trading?.benchmark ?? {};
   const reproducibility = trading?.reproducibility ?? {};
@@ -107,12 +125,33 @@ export default function LearningPage() {
   }, [byTimeframe]);
 
   const equityChart = useMemo(() => {
-    const x = equityRows.map((row: any) => row.equity_date || row.created_at);
+    const x = annotatedEquityRows.map((row: any) => row.timestamp || row.equity_date || row.created_at);
+    const markerAnnotations = equityAnnotations.filter((item: any) => item.event_type !== "trade_entry");
     return [
-      { x, y: equityRows.map((row: any) => row.equity), type: "scatter", mode: "lines", name: "BLUM", line: { color: "#ffb000", width: 3 } },
-      { x, y: equityRows.map((row: any) => row.benchmark_equity), type: "scatter", mode: "lines", name: "Benchmark", line: { color: "#55aaff", width: 2 } }
+      { x, y: annotatedEquityRows.map((row: any) => row.equity), type: "scatter", mode: "lines", name: "BLUM", line: { color: "#ffb000", width: 3 } },
+      { x, y: annotatedEquityRows.map((row: any) => row.benchmark_equity), type: "scatter", mode: "lines", name: "Benchmark", line: { color: "#55aaff", width: 2 } },
+      {
+        x: markerAnnotations.map((item: any) => item.timestamp),
+        y: markerAnnotations.map((item: any) => item.capital_after_event),
+        type: "scatter",
+        mode: "markers",
+        name: "Events",
+        marker: { color: markerAnnotations.map((item: any) => item.pnl_impact >= 0 ? "#20e070" : "#ff4d5e"), size: 9, symbol: "diamond" },
+        text: markerAnnotations.map((item: any) => item.label),
+        hovertemplate: "%{text}<extra></extra>"
+      }
     ];
-  }, [equityRows]);
+  }, [annotatedEquityRows, equityAnnotations]);
+
+  async function openTrade(tradeId: number) {
+    setTradeError("");
+    try {
+      const detail = await api.tradingGameTradeDetail(tradeId);
+      setSelectedTrade(detail);
+    } catch (err) {
+      setTradeError(err instanceof Error ? err.message : String(err));
+    }
+  }
 
   if (error && !dashboard) return <div className="empty-state">API error: {error}</div>;
   if (!dashboard) return <LoadingState label="Loading BLUM Learning Loop" />;
@@ -170,6 +209,151 @@ export default function LearningPage() {
               </div>
             ))}
             {survivalRows.length === 0 && <div className="empty-state">No thesis survival rows yet. The autonomous model cycle will create them after stored theses exist.</div>}
+          </div>
+        </div>
+      </section>
+
+      <section className="panel" style={{ marginTop: 12 }}>
+        <div className="panel-head">
+          <span>Full Trade Ledger</span>
+          <strong>{ledgerRows.length} visible / {trading?.ledger?.total ?? 0} total</strong>
+        </div>
+        <div className="learning-table trade-ledger-table">
+          <div className="learning-row trade-ledger-row head"><span>Ticker</span><span>Setup</span><span>Entry</span><span>Exit</span><span>P/L EUR</span><span>P/L %</span><span>R</span><span>Outcome</span><span>Quality</span><span>Excess</span></div>
+          {ledgerRows.slice(0, 18).map((row: any) => (
+            <button className="learning-row trade-ledger-row clickable" key={row.trade_id} onClick={() => openTrade(row.trade_id)}>
+              <strong>{row.ticker}</strong>
+              <span>{String(row.setup_type).replaceAll("_", " ")}</span>
+              <span>{row.entry_date}<br />{formatNumber(row.entry_price)}</span>
+              <span>{row.exit_date ?? "open"}<br />{formatNumber(row.exit_price)}</span>
+              <span className={Number(row.net_pnl_eur) >= 0 ? "positive-text" : "negative-text"}>{formatCurrency(row.net_pnl_eur)}</span>
+              <span className={Number(row.pnl_percent) >= 0 ? "positive-text" : "negative-text"}>{formatPctRaw(row.pnl_percent)}</span>
+              <span className={Number(row.r_multiple) >= 0 ? "positive-text" : "negative-text"}>{formatNumber(row.r_multiple)}</span>
+              <span>{String(row.outcome_label ?? row.decision_state).replaceAll("_", " ")}</span>
+              <span>{formatNumber(row.trade_quality_score)}</span>
+              <span className={Number(row.excess_return_vs_benchmark) >= 0 ? "positive-text" : "negative-text"}>{formatPctRaw(row.excess_return_vs_benchmark)}</span>
+            </button>
+          ))}
+          {ledgerRows.length === 0 && <div className="empty-state">No detailed trade ledger is available yet. The next Trading Game run will enrich persisted trades with entry, exit, attribution, P/L and learning evidence.</div>}
+        </div>
+      </section>
+
+      {tradeError && <div className="empty-state" style={{ marginTop: 12 }}>Trade detail error: {tradeError}</div>}
+      {selectedTrade && (
+        <section className="panel trade-detail-panel" style={{ marginTop: 12 }}>
+          <div className="panel-head">
+            <span>Trade Replay</span>
+            <button className="button compact" onClick={() => setSelectedTrade(null)}>Close</button>
+          </div>
+          <div className="grid-3">
+            <div className="observed-model-panel">
+              <span>Trade</span>
+              <h3>{selectedTrade.trade?.ticker} / {String(selectedTrade.trade?.setup_type).replaceAll("_", " ")}</h3>
+              <p>{selectedTrade.replay?.entry_decision?.why_considered}</p>
+              <p>{selectedTrade.replay?.exit_decision?.reason}</p>
+            </div>
+            <div className="observed-model-panel">
+              <span>P/L Breakdown</span>
+              <div className="evidence-grid">
+                <SmallDatum label="Net P/L" value={formatCurrency(selectedTrade.pnl_breakdown?.net_pnl_eur)} />
+                <SmallDatum label="Per Share" value={formatNumber(selectedTrade.pnl_breakdown?.pnl_per_share)} />
+                <SmallDatum label="R Multiple" value={formatNumber(selectedTrade.pnl_breakdown?.r_multiple)} />
+                <SmallDatum label="Benchmark Excess" value={formatPctRaw(selectedTrade.pnl_breakdown?.benchmark_relative_pnl)} />
+                <SmallDatum label="Fees" value={formatCurrency(selectedTrade.pnl_breakdown?.fees_estimate)} />
+                <SmallDatum label="Slippage" value={formatCurrency(selectedTrade.pnl_breakdown?.slippage_estimate)} />
+              </div>
+            </div>
+            <div className="observed-model-panel">
+              <span>Risk Plan</span>
+              <div className="evidence-grid">
+                <SmallDatum label="Capital Before" value={formatCurrency(selectedTrade.replay?.risk_management?.capital_before)} />
+                <SmallDatum label="Risk EUR" value={formatCurrency(selectedTrade.replay?.risk_management?.risk_amount_eur)} />
+                <SmallDatum label="Risk %" value={formatPctRaw(selectedTrade.replay?.risk_management?.risk_percent)} />
+                <SmallDatum label="Size" value={formatNumber(selectedTrade.replay?.risk_management?.position_size)} />
+                <SmallDatum label="Invalidation" value={formatNumber(selectedTrade.replay?.risk_management?.invalidation_level)} />
+                <SmallDatum label="Max Loss" value={formatCurrency(selectedTrade.replay?.risk_management?.max_expected_loss)} />
+              </div>
+            </div>
+          </div>
+          <section className="grid-3" style={{ marginTop: 12 }}>
+            <div className="panel-inner">
+              <span>Engine Attribution</span>
+              <div className="brain-list dense">
+                {(selectedTrade.attribution ?? []).slice(0, 6).map((row: any) => (
+                  <div key={row.id ?? row.engine_name}>
+                    <StatusBadge label={row.engine_name} />
+                    <strong>{row.vote} | contribution {formatNumber(row.contribution_score)}</strong>
+                    <p>{row.explanation}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="panel-inner">
+              <span>Trade Quality</span>
+              <p>{selectedTrade.quality?.explanation}</p>
+              <div className="evidence-grid">
+                <SmallDatum label="Final" value={formatNumber(selectedTrade.quality?.final_trade_quality_score)} />
+                <SmallDatum label="Entry" value={formatNumber(selectedTrade.quality?.entry_quality)} />
+                <SmallDatum label="Exit" value={formatNumber(selectedTrade.quality?.exit_quality)} />
+                <SmallDatum label="Risk/Reward" value={formatNumber(selectedTrade.quality?.risk_reward_quality)} />
+                <SmallDatum label="Rule" value={formatNumber(selectedTrade.quality?.rule_compliance)} />
+                <SmallDatum label="Luck" value={formatNumber(selectedTrade.quality?.luck_factor)} />
+              </div>
+            </div>
+            <div className="panel-inner">
+              <span>Learning Outcome</span>
+              <div className="brain-list dense">
+                {(selectedTrade.learning_outcome ?? []).slice(0, 4).map((row: any) => (
+                  <div key={row.id}>
+                    <StatusBadge label={String(row.lesson_type).replaceAll("_", " ")} />
+                    <strong>{row.affected_module}</strong>
+                    <p>{row.observation}</p>
+                  </div>
+                ))}
+                {(!selectedTrade.learning_outcome || selectedTrade.learning_outcome.length === 0) && <div className="empty-state compact">No learning evidence is linked to this trade yet.</div>}
+              </div>
+            </div>
+          </section>
+        </section>
+      )}
+
+      <section className="grid-3" style={{ marginTop: 12 }}>
+        <div className="panel">
+          <div className="panel-head"><span>Reality Check</span><strong>{realityCheck?.statistical_confidence ?? "n/a"}</strong></div>
+          <div className="evidence-grid">
+            <SmallDatum label="Trades" value={realityCheck?.trades_count ?? 0} />
+            <SmallDatum label="Tickers" value={realityCheck?.unique_tickers ?? 0} />
+            <SmallDatum label="Sectors" value={realityCheck?.unique_sectors ?? 0} />
+            <SmallDatum label="Regimes" value={realityCheck?.unique_regimes ?? 0} />
+            <SmallDatum label="Sample" value={`${formatNumber(realityCheck?.sample_quality_score)}/100`} />
+            <SmallDatum label="Realism" value={`${formatNumber(realityCheck?.realism_score)}/100`} />
+          </div>
+          <p>{realityCheck?.explanation ?? "Reality check will appear after trade transparency runs."}</p>
+          {(realityCheck?.warnings ?? []).length > 0 && <div className="tag-row">{realityCheck.warnings.slice(0, 8).map((item: string) => <span key={item}>{item.replaceAll("_", " ")}</span>)}</div>}
+        </div>
+        <div className="panel">
+          <div className="panel-head"><span>P/L Breakdown</span><strong>{formatCurrency(pnlBreakdown?.total_realized_pnl)}</strong></div>
+          <div className="brain-list dense">
+            {Object.entries(pnlBreakdown?.pnl_by_setup ?? {}).slice(0, 5).map(([setup, value]: any) => (
+              <div key={setup}>
+                <div className="opportunity-line"><strong>{setup.replaceAll("_", " ")}</strong><span className={Number(value.pnl) >= 0 ? "positive-text" : "negative-text"}>{formatCurrency(value.pnl)}</span></div>
+                <p>Count {value.count} | average {formatNumber(value.average_r)}R</p>
+              </div>
+            ))}
+            {Object.keys(pnlBreakdown?.pnl_by_setup ?? {}).length === 0 && <div className="empty-state compact">No setup-level P/L breakdown yet.</div>}
+          </div>
+        </div>
+        <div className="panel">
+          <div className="panel-head"><span>Learning Evidence Log</span><strong>{learningEvidenceRows.length}</strong></div>
+          <div className="brain-list dense">
+            {learningEvidenceRows.slice(0, 6).map((row: any) => (
+              <div key={row.id}>
+                <StatusBadge label={String(row.lesson_type).replaceAll("_", " ")} />
+                <strong>{row.ticker} | {String(row.setup_type).replaceAll("_", " ")}</strong>
+                <p>{row.observation}</p>
+              </div>
+            ))}
+            {learningEvidenceRows.length === 0 && <div className="empty-state compact">No trade learning evidence has been persisted yet.</div>}
           </div>
         </div>
       </section>
@@ -422,6 +606,11 @@ function formatPct(value: any) {
 function formatPctDecimal(value: any) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return "n/a";
   return `${(Number(value) * 100).toFixed(2)}%`;
+}
+
+function formatPctRaw(value: any) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "n/a";
+  return `${Number(value).toFixed(2)}%`;
 }
 
 function percentToNumber(value: any) {

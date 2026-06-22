@@ -80,6 +80,11 @@ from app.models import (
     TradingGameEquityCurve,
     TradingGameFailure,
     TradingGameTrade,
+    TradeEngineAttribution,
+    TradeLearningEvidence,
+    TradeQualityScore,
+    TradingGameRealityCheck,
+    EquityCurveAnnotation,
     MetaLearningEvent,
     ThesisCompetition,
     ThesisConvictionHistory,
@@ -172,6 +177,15 @@ from app.services.strategic_intelligence import (
 )
 from app.services.thesis_engine import build_asset_thesis
 from app.services.trading_game import TradingGameSimulator
+from app.services.trade_transparency import (
+    EquityCurveAnnotationService,
+    PnLBreakdownService,
+    TradeAttributionService,
+    TradeLedgerService,
+    TradeLearningEvidenceService,
+    TradeQualityEvaluator,
+    TradingGameRealityCheckService,
+)
 from app.signals.backtest import run_simple_backtest
 from app.signals.engine import SignalEngine
 
@@ -276,6 +290,13 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "blum_learning_loop": True,
             "market_sniper_engine": True,
             "reproducible_trading_game": True,
+            "trading_game_transparency": True,
+            "trade_ledger": True,
+            "trade_replay": True,
+            "trade_attribution": True,
+            "trade_quality_score": True,
+            "annotated_equity_curve": True,
+            "trading_game_reality_check": True,
         },
         "database_counts": {
             "assets": int(db.scalar(select(func.count(Asset.id))) or 0),
@@ -308,6 +329,11 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "trading_game_trades": int(db.scalar(select(func.count(TradingGameTrade.id))) or 0),
             "trading_game_equity_curve": int(db.scalar(select(func.count(TradingGameEquityCurve.id))) or 0),
             "trading_game_failures": int(db.scalar(select(func.count(TradingGameFailure.id))) or 0),
+            "trade_engine_attributions": int(db.scalar(select(func.count(TradeEngineAttribution.id))) or 0),
+            "trade_quality_scores": int(db.scalar(select(func.count(TradeQualityScore.id))) or 0),
+            "trade_learning_evidence": int(db.scalar(select(func.count(TradeLearningEvidence.id))) or 0),
+            "trading_game_reality_checks": int(db.scalar(select(func.count(TradingGameRealityCheck.id))) or 0),
+            "equity_curve_annotations": int(db.scalar(select(func.count(EquityCurveAnnotation.id))) or 0),
             "model_weight_versions": int(db.scalar(select(func.count(ModelWeightVersion.id))) or 0),
             "historical_similarity_cases": int(db.scalar(select(func.count(HistoricalSimilarityCase.id))) or 0),
             "confidence_adjustments": int(db.scalar(select(func.count(ConfidenceAdjustment.id))) or 0),
@@ -353,7 +379,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "Hugging Face serves the previous image until the Docker build finishes successfully.",
             "The finance-domain 7B model is disabled by default unless BLUM_ENABLE_FINANCIAL_BRAIN_MODEL=true.",
             "Existing snapshots are refreshed by the autonomous engine after a successful deployment.",
-            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.13.0.",
+            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.14.0.",
         ],
     }
 
@@ -563,6 +589,15 @@ def trading_game_equity(
     return TradingGameSimulator().equity(db, game_id=game_id, limit=limit)
 
 
+@router.get("/api/trading-game/equity/annotated")
+def trading_game_annotated_equity(
+    game_id: int | None = Query(default=None),
+    limit: int = Query(default=800, ge=1, le=3000),
+    db: Session = Depends(get_db),
+) -> dict:
+    return EquityCurveAnnotationService().annotated_equity(db, game_id=game_id, limit=limit)
+
+
 @router.get("/api/trading-game/trades")
 def trading_game_trades(
     game_id: int | None = Query(default=None),
@@ -570,6 +605,61 @@ def trading_game_trades(
     db: Session = Depends(get_db),
 ) -> list[dict]:
     return TradingGameSimulator().trades(db, game_id=game_id, limit=limit)
+
+
+@router.get("/api/trading-game/ledger")
+def trading_game_ledger(
+    game_id: int | None = Query(default=None),
+    ticker: str | None = Query(default=None),
+    setup_type: str | None = Query(default=None),
+    outcome_label: str | None = Query(default=None),
+    start_date: str | None = Query(default=None),
+    end_date: str | None = Query(default=None),
+    min_r: float | None = Query(default=None),
+    max_r: float | None = Query(default=None),
+    only_open: bool = Query(default=False),
+    only_closed: bool = Query(default=False),
+    sort_by: str = Query(default="created_at_desc"),
+    limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+) -> dict:
+    return TradeLedgerService().ledger(
+        db,
+        game_id=game_id,
+        ticker=ticker,
+        setup_type=setup_type,
+        outcome_label=outcome_label,
+        start_date=start_date,
+        end_date=end_date,
+        min_r=min_r,
+        max_r=max_r,
+        only_open=only_open,
+        only_closed=only_closed,
+        sort_by=sort_by,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/api/trading-game/trades/{trade_id}")
+def trading_game_trade_detail(trade_id: int, db: Session = Depends(get_db)) -> dict:
+    return TradeLedgerService().detail(db, trade_id)
+
+
+@router.get("/api/trading-game/trades/{trade_id}/attribution")
+def trading_game_trade_attribution(trade_id: int, db: Session = Depends(get_db)) -> list[dict]:
+    return TradeAttributionService().for_trade(db, trade_id)
+
+
+@router.get("/api/trading-game/trades/{trade_id}/quality")
+def trading_game_trade_quality(trade_id: int, db: Session = Depends(get_db)) -> dict:
+    return TradeQualityEvaluator().for_trade(db, trade_id)
+
+
+@router.get("/api/trading-game/trades/{trade_id}/pnl-breakdown")
+def trading_game_trade_pnl_breakdown(trade_id: int, db: Session = Depends(get_db)) -> dict:
+    return PnLBreakdownService().trade_breakdown(db, trade_id)
 
 
 @router.get("/api/trading-game/failures")
@@ -590,6 +680,39 @@ def trading_game_benchmark(game_id: int | None = Query(default=None), db: Sessio
 @router.get("/api/trading-game/reproducibility")
 def trading_game_reproducibility(limit: int = Query(default=120, ge=1, le=1000), db: Session = Depends(get_db)) -> dict:
     return TradingGameSimulator().reproducibility(db, limit=limit)
+
+
+@router.get("/api/trading-game/learning-evidence")
+def trading_game_learning_evidence(
+    setup_type: str | None = Query(default=None),
+    ticker: str | None = Query(default=None),
+    regime: str | None = Query(default=None),
+    lesson_type: str | None = Query(default=None),
+    min_sample_size: int | None = Query(default=None, ge=0),
+    affected_module: str | None = Query(default=None),
+    limit: int = Query(default=120, ge=1, le=1000),
+    db: Session = Depends(get_db),
+) -> dict:
+    return TradeLearningEvidenceService().list(
+        db,
+        setup_type=setup_type,
+        ticker=ticker,
+        regime=regime,
+        lesson_type=lesson_type,
+        min_sample_size=min_sample_size,
+        affected_module=affected_module,
+        limit=limit,
+    )
+
+
+@router.get("/api/trading-game/reality-check")
+def trading_game_reality_check(game_id: int | None = Query(default=None), persist: bool = Query(default=False), db: Session = Depends(get_db)) -> dict:
+    return TradingGameRealityCheckService().evaluate(db, game_id, persist=persist)
+
+
+@router.get("/api/trading-game/pnl-breakdown")
+def trading_game_pnl_breakdown(game_id: int | None = Query(default=None), db: Session = Depends(get_db)) -> dict:
+    return PnLBreakdownService().game_breakdown(db, game_id=game_id)
 
 
 @router.get("/model/status")
