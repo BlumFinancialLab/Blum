@@ -913,6 +913,7 @@ def update_r_metrics(db: Session, simulations: list[dict]) -> None:
 
 def update_signal_reliability_matrix(db: Session, rows: list[tuple[HistoricalPrediction, PredictionOutcome]], simulations: list[dict]) -> None:
     by_prediction = {item["prediction_id"]: item for item in simulations if item.get("prediction_id")}
+    row_cache: dict[tuple[str, str, str, str, str, str, str, str], SignalReliabilityMatrix] = {}
     for prediction, outcome in rows:
         sim = by_prediction.get(prediction.id)
         if not sim:
@@ -931,21 +932,34 @@ def update_signal_reliability_matrix(db: Session, rows: list[tuple[HistoricalPre
                 "asset_class": prediction.asset_type or "Unknown",
                 "liquidity_bucket": "unknown",
             }
-            row = db.scalar(
-                select(SignalReliabilityMatrix).where(
-                    SignalReliabilityMatrix.signal_name == key["signal_name"],
-                    SignalReliabilityMatrix.setup_type == key["setup_type"],
-                    SignalReliabilityMatrix.timeframe == key["timeframe"],
-                    SignalReliabilityMatrix.sector == key["sector"],
-                    SignalReliabilityMatrix.market_regime == key["market_regime"],
-                    SignalReliabilityMatrix.volatility_state == key["volatility_state"],
-                    SignalReliabilityMatrix.asset_class == key["asset_class"],
-                    SignalReliabilityMatrix.liquidity_bucket == key["liquidity_bucket"],
-                ).limit(1)
+            cache_key = (
+                key["signal_name"],
+                key["setup_type"],
+                key["timeframe"],
+                key["sector"],
+                key["market_regime"],
+                key["volatility_state"],
+                key["asset_class"],
+                key["liquidity_bucket"],
             )
+            row = row_cache.get(cache_key)
+            if row is None:
+                row = db.scalar(
+                    select(SignalReliabilityMatrix).where(
+                        SignalReliabilityMatrix.signal_name == key["signal_name"],
+                        SignalReliabilityMatrix.setup_type == key["setup_type"],
+                        SignalReliabilityMatrix.timeframe == key["timeframe"],
+                        SignalReliabilityMatrix.sector == key["sector"],
+                        SignalReliabilityMatrix.market_regime == key["market_regime"],
+                        SignalReliabilityMatrix.volatility_state == key["volatility_state"],
+                        SignalReliabilityMatrix.asset_class == key["asset_class"],
+                        SignalReliabilityMatrix.liquidity_bucket == key["liquidity_bucket"],
+                    ).limit(1)
+                )
             if row is None:
                 row = SignalReliabilityMatrix(**key)
                 db.add(row)
+            row_cache[cache_key] = row
             values = (row.evidence or {}).get("r_values", [])
             values = (values + [r_value])[-240:]
             row.sample_count = len(values)
