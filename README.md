@@ -37,6 +37,7 @@ This is not a consumer trading app and not a simple dashboard. The project is a 
 | BLUM Learning Loop | point-in-time historical simulation lab, outcome evaluation, mistake taxonomy, adaptive signal reliability and strategy memory |
 | Market Sniper Engine | market regime detection, setup classification, conditional entry/exit planning, no-trade filtering, execution simulation and R-multiple learning |
 | Reproducible Trading Game | 100 EUR paper bankroll, position sizing, P/L learning, benchmark comparison, risk of ruin and capital management lessons |
+| Reasoning Precision Core | thesis survival, conviction decay, regime-aware reliability, thesis competition, ensemble evolution, benchmark-relative evaluation and training-data quality gates |
 | Time-series intelligence | statistical fallback compatible with future Chronos, TimesFM or PatchTST adapters |
 | Deployment | Hugging Face Docker Space |
 
@@ -82,7 +83,8 @@ Blum does not use one generic AI model for everything.
 24. Classify mistakes, update strategy memory, recalibrate signal reliability and persist reversible model-weight versions.
 25. Convert prediction memory into execution-quality R-multiple learning through the Market Sniper Engine.
 26. Run the Reproducible Trading Game with 100 EUR paper capital, risk-managed sizing, P/L tracking and benchmark comparison.
-27. Produce AI explanations using only retrieved evidence.
+27. Run the Reasoning Precision Core: thesis survival, conviction decay, bull/bear/neutral thesis competition, benchmark-relative evaluation, engine voting and training-data quality scoring.
+28. Produce AI explanations using only retrieved evidence.
 
 ## Live Runtime
 
@@ -143,11 +145,11 @@ Supported languages:
 The chat pipeline:
 
 1. Detects the user language.
-2. Detects intent: technical analysis, fundamental analysis, full analysis, comparison, opportunity search, narrative analysis, private-company request, unknown-asset request, educational question, portfolio question or chatbot debug feedback.
+2. Detects intent: technical analysis, fundamental analysis, full analysis, comparison, opportunity search, narrative analysis, reasoning-memory question, private-company request, unknown-asset request, educational question, portfolio question or chatbot debug feedback.
 3. Extracts and classifies entities as public stock, ETF, index, crypto, private company, ambiguous company, unknown asset or general market topic.
 4. Validates that the resolved ticker matches the requested entity and that OHLCV exists before producing technical analysis.
 5. Blocks unsupported analysis instead of substituting unrelated tickers. For example, SpaceX and OpenAI are treated as private companies; BLUM can discuss listed proxies but cannot invent direct RSI, MACD or support/resistance levels.
-6. Retrieves Blum context only after validation: ranking, signals, OHLCV snapshots, deterministic technical analysis, SEC companyfacts fundamentals, news, sentiment, narratives, semantic evidence, learning memory and reasoning memory.
+6. Retrieves Blum context only after validation: ranking, signals, OHLCV snapshots, deterministic technical analysis, SEC companyfacts fundamentals, news, sentiment, narratives, semantic evidence, learning memory and Reasoning Precision Core memory.
 7. Selects a response builder by intent instead of using one universal template. Simple missing-data questions get concise answers; validated public assets get structured analysis.
 8. Runs a quality gate for language match, entity match, duplicate tickers, data availability, impossible technical analysis, repeated sections and disclaimer discipline.
 9. Stores chat sessions and messages in PostgreSQL for future personalization and training-memory workflows.
@@ -160,6 +162,7 @@ Response-builder modules include:
 - `build_full_analysis_response()`
 - `build_comparison_response()`
 - `build_opportunity_search_response()`
+- `build_reasoning_memory_response()`
 - `build_error_response()`
 
 Debug diagnostics are hidden by default. When `mode=debug`, `mode=developer` or `mode=chatbot_debug_feedback`, the API can return detected language, detected intent, entity resolution, validation result, duplicate count, data freshness and response template used.
@@ -426,6 +429,15 @@ New persistence tables include:
 - `model_reliability_matrix`
 - `confidence_calibration_buckets`
 - `meta_learning_events`
+- `thesis_survival_metrics`
+- `thesis_conviction_history`
+- `model_reliability_by_regime`
+- `thesis_competitions`
+- `competing_theses`
+- `engine_votes`
+- `ensemble_weight_versions`
+- `training_example_quality_scores`
+- `benchmark_relative_outcomes`
 - `blum_knowledge_graph_nodes`
 - `blum_knowledge_graph_edges`
 - `blum_dataset_exports`
@@ -452,10 +464,36 @@ The reasoning model APIs are backend-only:
 - `GET /model/graph`
 - `GET /model/reasoning-core/status`
 - `POST /model/reasoning-core/run`
+- `GET /model/reasoning-core/latest`
+- `GET /model/reasoning-core/diagnostics`
 - `GET /model/thesis-lifecycle`
 - `GET /model/reliability-matrix`
 - `GET /model/confidence-calibration`
 - `GET /model/meta-learning`
+- `GET /model/thesis-survival`
+- `GET /model/thesis-survival/{thesis_id}`
+- `POST /model/thesis-survival/evaluate`
+- `GET /model/conviction-decay`
+- `GET /model/conviction-decay/{thesis_id}`
+- `POST /model/conviction-decay/evaluate`
+- `GET /model/reliability-by-regime`
+- `GET /model/reliability-by-regime/{engine_name}`
+- `POST /model/reliability-by-regime/recalculate`
+- `GET /model/thesis-competitions`
+- `GET /model/thesis-competitions/{ticker}`
+- `POST /model/thesis-competitions/run/{ticker}`
+- `POST /model/thesis-competitions/evaluate`
+- `GET /model/ensemble/status`
+- `POST /model/ensemble/vote/{ticker}`
+- `POST /model/ensemble/recalculate`
+- `GET /model/ensemble/weights`
+- `GET /model/ensemble/disagreements`
+- `GET /model/benchmark-relative`
+- `GET /model/benchmark-relative/{ticker}`
+- `POST /model/benchmark-relative/evaluate`
+- `GET /model/training/quality`
+- `POST /model/training/quality/evaluate`
+- `POST /model/training/export/high-quality`
 
 Training export uses JSONL and targets future Hugging Face training workflows for Qwen, Llama or Mistral with LoRA, full fine-tuning, DPO or preference learning. The Space only creates dataset and job-plan records; it does not launch fine-tuning automatically.
 
@@ -463,12 +501,16 @@ The objective is not to predict stock prices. The objective is to learn how Blum
 
 The autonomous Blum Financial Model cycle is server-side and evidence-bound. When `BLUM_ENABLE_LEARNING_LOOP=true`, it runs on startup, during market refresh and on its own interval controlled by `BLUM_MODEL_CYCLE_MINUTES` and `BLUM_MODEL_CYCLE_LIMIT`. Each cycle captures recent signal reasoning, evaluates matured thesis outcomes, refreshes training examples and logs a `blum_model_autonomous_cycle` learning event.
 
-The **Reasoning Core** extends this cycle from static score memory to thesis memory:
+The **Reasoning Precision Core** extends this cycle from static score memory to thesis memory:
 
-- every thesis receives a lifecycle status: `ACTIVE`, `STRENGTHENING`, `WEAKENING`, `INVALIDATED` or `COMPLETED`;
-- the self-critique process is preserved as Analyst, Skeptic, Historian and Judge views;
-- model reliability is measured by engine, sector, market regime and horizon;
-- confidence is calibrated in historical buckets so 70% confidence can be compared with realized thesis outcomes;
+- every thesis receives a lifecycle status: `ACTIVE`, `STRENGTHENING`, `WEAKENING`, `INVALIDATED`, `COMPLETED` or `EXPIRED`;
+- thesis survival measures how long a thesis remains valid, when it weakens, when it expires and whether it beats the relevant benchmark;
+- conviction decay updates confidence gradually from fresh evidence, stale evidence, contradictions, price confirmation, sector/regime confirmation and benchmark-relative behavior;
+- reliability is measured by engine, signal type, setup type, thesis type, sector, industry, asset class, horizon, market regime, volatility regime and breadth regime;
+- thesis competition stores bull, bear and neutral alternatives so BLUM is not forced into one opinion when uncertainty is high;
+- ensemble evolution records each internal engine vote, penalizes disagreement and stores reversible weight versions only when sample size is sufficient;
+- benchmark-relative intelligence checks whether a thesis beats SPY, QQQ, VTI or sector proxies instead of merely moving with the market;
+- training dataset quality gates decide which examples are good enough for future SFT, preference learning or DPO export;
 - meta-learning events explain repeated reasoning errors, overconfidence, underconfidence and engine reliability changes.
 
 It updates database memory only; it does not self-modify source code, it does not execute trades and it does not claim guaranteed market outperformance.
@@ -495,7 +537,7 @@ The autonomous cycle executes in this strict order:
 8. Update ETF intelligence.
 9. Update IPO radar.
 10. Run accuracy audit.
-11. Run Blum Financial Model reasoning and outcome learning.
+11. Run Blum Financial Model reasoning, outcome learning and Reasoning Precision Core orchestration.
 12. Run BLUM Learning Loop point-in-time historical simulation batch.
 13. Persist embedded PostgreSQL backup when configured.
 

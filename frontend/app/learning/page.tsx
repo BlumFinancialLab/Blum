@@ -14,13 +14,14 @@ export default function LearningPage() {
   const [predictions, setPredictions] = useState<any[]>([]);
   const [memory, setMemory] = useState<any | null>(null);
   const [trading, setTrading] = useState<any | null>(null);
+  const [reasoning, setReasoning] = useState<any | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
     let mounted = true;
     async function load() {
       setError("");
-      const [dashResult, runsResult, predictionsResult, memoryResult, tradingStatusResult, equityResult, tradesResult, failuresResult, lessonsResult, benchmarkResult, reproducibilityResult] = await Promise.allSettled([
+      const [dashResult, runsResult, predictionsResult, memoryResult, tradingStatusResult, equityResult, tradesResult, failuresResult, lessonsResult, benchmarkResult, reproducibilityResult, reasoningStatusResult, survivalResult, convictionResult, reliabilityResult, competitionResult, ensembleResult, benchmarkRelativeResult, trainingQualityResult] = await Promise.allSettled([
         api.learningDashboard(),
         api.learningRuns(20),
         api.learningPredictions(36),
@@ -31,7 +32,15 @@ export default function LearningPage() {
         api.tradingGameFailures(24),
         api.tradingGameLessons(24),
         api.tradingGameBenchmark(),
-        api.tradingGameReproducibility(160)
+        api.tradingGameReproducibility(160),
+        api.reasoningCoreStatus(),
+        api.thesisSurvival(24),
+        api.convictionDecay(24),
+        api.reliabilityByRegime(24),
+        api.thesisCompetitions(16),
+        api.ensembleStatus(),
+        api.benchmarkRelative(24),
+        api.trainingQuality(24)
       ] as const);
       if (!mounted) return;
       if (dashResult.status === "fulfilled") setDashboard(dashResult.value);
@@ -46,6 +55,16 @@ export default function LearningPage() {
         lessons: lessonsResult.status === "fulfilled" ? lessonsResult.value : [],
         benchmark: benchmarkResult.status === "fulfilled" ? benchmarkResult.value : null,
         reproducibility: reproducibilityResult.status === "fulfilled" ? reproducibilityResult.value : null
+      });
+      setReasoning({
+        status: reasoningStatusResult.status === "fulfilled" ? reasoningStatusResult.value : null,
+        survival: survivalResult.status === "fulfilled" ? survivalResult.value : null,
+        conviction: convictionResult.status === "fulfilled" ? convictionResult.value : null,
+        reliability: reliabilityResult.status === "fulfilled" ? reliabilityResult.value : null,
+        competitions: competitionResult.status === "fulfilled" ? competitionResult.value : null,
+        ensemble: ensembleResult.status === "fulfilled" ? ensembleResult.value : null,
+        benchmark: benchmarkRelativeResult.status === "fulfilled" ? benchmarkRelativeResult.value : null,
+        trainingQuality: trainingQualityResult.status === "fulfilled" ? trainingQualityResult.value : null
       });
       const failed = [dashResult, runsResult, predictionsResult, memoryResult, tradingStatusResult].find(isRejected);
       if (failed) setError((failed.reason as Error).message);
@@ -70,6 +89,12 @@ export default function LearningPage() {
   const tradingLessons = trading?.lessons ?? [];
   const tradingBenchmark = trading?.benchmark ?? {};
   const reproducibility = trading?.reproducibility ?? {};
+  const precisionCounts = reasoning?.status?.precision_core?.counts ?? {};
+  const survivalRows = reasoning?.survival?.rows ?? [];
+  const convictionRows = reasoning?.conviction?.rows ?? [];
+  const reliabilityByRegimeRows = reasoning?.reliability?.rows ?? [];
+  const competitionRows = reasoning?.competitions?.rows ?? [];
+  const trainingQualityRows = reasoning?.trainingQuality?.rows ?? [];
 
   const accuracyChart = useMemo(() => {
     const labels = ["short", "mid", "long"];
@@ -111,6 +136,83 @@ export default function LearningPage() {
         <LearningMetric icon={<Gauge size={18} />} label="Short Accuracy" value={formatPct(byTimeframe.short?.accuracy)} subvalue="5-20 trading days" />
         <LearningMetric icon={<LineChart size={18} />} label="Mid Accuracy" value={formatPct(byTimeframe.mid?.accuracy)} subvalue="1-3 months" />
         <LearningMetric icon={<AlertTriangle size={18} />} label="Calibration Error" value={formatNumber(metrics.confidence_calibration?.mean_absolute_error)} subvalue={metrics.confidence_calibration?.status ?? "insufficient sample"} />
+      </section>
+
+      <section className="grid-2" style={{ marginTop: 12 }}>
+        <div className="panel">
+          <div className="panel-head">
+            <span>Reasoning Precision Core</span>
+            <strong>{reasoning?.status?.precision_core?.status ?? "Loading"}</strong>
+          </div>
+          <div className="evidence-grid">
+            <SmallDatum label="Survival Metrics" value={precisionCounts.thesis_survival_metrics ?? 0} />
+            <SmallDatum label="Conviction Rows" value={precisionCounts.conviction_history_rows ?? 0} />
+            <SmallDatum label="Regime Reliability" value={precisionCounts.reliability_by_regime_rows ?? 0} />
+            <SmallDatum label="Thesis Competitions" value={precisionCounts.thesis_competitions ?? 0} />
+            <SmallDatum label="Engine Votes" value={precisionCounts.engine_votes ?? 0} />
+            <SmallDatum label="Benchmark Outcomes" value={precisionCounts.benchmark_relative_outcomes ?? 0} />
+          </div>
+          <p>These panels measure thesis durability, confidence decay, benchmark-relative evidence and engine disagreement. They update database memory only; no source code is self-modified.</p>
+        </div>
+
+        <div className="panel">
+          <div className="panel-head"><span>Thesis survival and decay</span><strong>{survivalRows.length} / {convictionRows.length}</strong></div>
+          <div className="learning-table">
+            <div className="learning-row head"><span>Ticker</span><span>Status</span><span>Age</span><span>Confidence</span><span>Excess</span><span>Quality</span></div>
+            {survivalRows.slice(0, 8).map((row: any) => (
+              <div className="learning-row" key={row.id}>
+                <strong>{row.ticker}</strong>
+                <span>{row.survival_status}</span>
+                <span>{formatNumber(row.survival_days)}d</span>
+                <span>{formatNumber(row.current_confidence)}</span>
+                <span className={Number(row.excess_return) >= 0 ? "positive-text" : "negative-text"}>{formatPctDecimal(row.excess_return)}</span>
+                <span>{formatNumber(row.survival_quality_score)}</span>
+              </div>
+            ))}
+            {survivalRows.length === 0 && <div className="empty-state">No thesis survival rows yet. The autonomous model cycle will create them after stored theses exist.</div>}
+          </div>
+        </div>
+      </section>
+
+      <section className="grid-2" style={{ marginTop: 12 }}>
+        <div className="panel">
+          <div className="panel-head"><span>Regime-aware reliability</span><strong>{reliabilityByRegimeRows.length}</strong></div>
+          <div className="learning-table">
+            <div className="learning-row head"><span>Engine</span><span>Setup</span><span>Regime</span><span>Samples</span><span>Hit</span><span>Penalty</span></div>
+            {reliabilityByRegimeRows.slice(0, 8).map((row: any) => (
+              <div className="learning-row" key={row.id}>
+                <strong>{String(row.engine_name).replaceAll("_", " ")}</strong>
+                <span>{String(row.setup_type).replaceAll("_", " ")}</span>
+                <span>{row.market_regime}</span>
+                <span>{row.sample_size}</span>
+                <span>{formatPct(row.hit_rate)}</span>
+                <span>{formatNumber(row.confidence_penalty)}</span>
+              </div>
+            ))}
+            {reliabilityByRegimeRows.length === 0 && <div className="empty-state">No regime-specific reliability rows yet. BLUM needs matured thesis outcomes first.</div>}
+          </div>
+        </div>
+
+        <div className="panel">
+          <div className="panel-head"><span>Thesis competition and training quality</span><strong>{competitionRows.length}</strong></div>
+          <div className="brain-list dense">
+            {competitionRows.slice(0, 5).map((row: any) => (
+              <div key={row.id}>
+                <StatusBadge label={row.ticker} />
+                <strong>{row.judge_summary || "Competition pending"}</strong>
+                <p>Uncertainty {formatNumber(row.uncertainty_score)}/100 | theses {row.theses?.length ?? 0}</p>
+              </div>
+            ))}
+            {competitionRows.length === 0 && <div className="empty-state">No bull/bear/neutral thesis competitions yet.</div>}
+            {trainingQualityRows.slice(0, 3).map((row: any) => (
+              <div key={`quality-${row.id}`}>
+                <StatusBadge label="Training gate" />
+                <strong>Training value {formatNumber(row.final_training_value_score)}/100</strong>
+                <p>SFT {String(row.include_in_sft)} | preference {String(row.include_in_preference_training)} | DPO {String(row.include_in_dpo)}</p>
+              </div>
+            ))}
+          </div>
+        </div>
       </section>
 
       <section className="grid-2" style={{ marginTop: 12 }}>
@@ -315,6 +417,11 @@ function SmallDatum({ label, value }: { label: string; value: any }) {
 function formatPct(value: any) {
   if (value === null || value === undefined) return "n/a";
   return `${(Number(value) * 100).toFixed(1)}%`;
+}
+
+function formatPctDecimal(value: any) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "n/a";
+  return `${(Number(value) * 100).toFixed(2)}%`;
 }
 
 function percentToNumber(value: any) {

@@ -29,16 +29,23 @@ from app.models import (
     BlumThesisQualityScore,
     BlumTrainingExample,
     ConfidenceCalibrationBucket,
+    BenchmarkRelativeOutcome,
+    EngineVote,
+    ModelReliabilityByRegime,
     LearningEvent,
     MetaLearningEvent,
     ModelReliabilityMatrix,
     PriceHistory,
     SignalSnapshot,
+    ThesisCompetition,
+    ThesisConvictionHistory,
     ThesisLifecycleEvent,
+    ThesisSurvivalMetric,
+    TrainingExampleQualityScore,
 )
 from app.services.thesis_engine import build_asset_thesis
 from app.services.persistence import backup_embedded_postgres_if_configured
-from app.services.reasoning_core import run_reasoning_core_cycle
+from app.services.reasoning_precision import ReasoningCoreOrchestrator
 
 
 HORIZONS = (1, 3, 7, 14, 30)
@@ -69,6 +76,13 @@ def model_status(db: Session) -> dict:
             "model_reliability_rows": count(db, ModelReliabilityMatrix.id),
             "confidence_calibration_buckets": count(db, ConfidenceCalibrationBucket.id),
             "meta_learning_events": count(db, MetaLearningEvent.id),
+            "thesis_survival_metrics": count(db, ThesisSurvivalMetric.id),
+            "thesis_conviction_history": count(db, ThesisConvictionHistory.id),
+            "model_reliability_by_regime": count(db, ModelReliabilityByRegime.id),
+            "thesis_competitions": count(db, ThesisCompetition.id),
+            "engine_votes": count(db, EngineVote.id),
+            "training_example_quality_scores": count(db, TrainingExampleQualityScore.id),
+            "benchmark_relative_outcomes": count(db, BenchmarkRelativeOutcome.id),
             "graph_nodes": count(db, BlumKnowledgeGraphNode.id),
             "graph_edges": count(db, BlumKnowledgeGraphEdge.id),
             "dataset_exports": count(db, BlumDatasetExport.id),
@@ -96,7 +110,7 @@ def run_model_learning_cycle(db: Session, limit: int = 120) -> dict:
     captured = max(0, count(db, BlumKnowledgeRecord.id) - before_count)
     outcome_result = evaluate_thesis_outcomes(db, limit=limit)
     dataset_result = build_training_dataset(db, limit=limit, min_quality=55.0)
-    reasoning_core_result = run_reasoning_core_cycle(db, limit=limit, commit=False)
+    reasoning_core_result = ReasoningCoreOrchestrator().run(db, limit=limit, commit=False)
     event = LearningEvent(
         event_type="blum_model_autonomous_cycle",
         severity="Info",

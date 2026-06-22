@@ -19,7 +19,7 @@ from app.models import (
 )
 
 
-THESIS_STATUSES = ("ACTIVE", "STRENGTHENING", "WEAKENING", "INVALIDATED", "COMPLETED")
+THESIS_STATUSES = ("ACTIVE", "STRENGTHENING", "WEAKENING", "INVALIDATED", "COMPLETED", "EXPIRED")
 MATURE_OUTCOMES = ("correct", "wrong", "neutral")
 ENGINE_NAMES = (
     "thesis_engine",
@@ -117,7 +117,11 @@ def classify_lifecycle(record: BlumKnowledgeRecord, outcomes: list[BlumThesisOut
     realized = [float(row.realized_return) for row in mature if row.realized_return is not None]
     drawdowns = [float(row.max_drawdown) for row in mature if row.max_drawdown is not None]
     strongest_horizon = max((row.horizon_days for row in mature), default=0)
-    if not mature:
+    thesis_age_days = max(0, (datetime.utcnow() - (record.created_at or datetime.utcnow())).days)
+    if not mature and thesis_age_days > 90:
+        status = "EXPIRED"
+        reason = "No matured outcome resolved the thesis after the monitoring window; thesis is expired rather than silently kept active."
+    elif not mature:
         status = "ACTIVE"
         reason = "No matured outcome has enough stored price evidence yet; thesis remains active but unproven."
     elif wrong >= 2 and wrong > correct:

@@ -1012,6 +1012,273 @@ class MetaLearningEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
 
+class ThesisSurvivalMetric(Base):
+    __tablename__ = "thesis_survival_metrics"
+    __table_args__ = (
+        UniqueConstraint("thesis_id", name="uq_thesis_survival_metric_thesis"),
+        Index("ix_thesis_survival_ticker_status", "ticker", "survival_status"),
+        Index("ix_thesis_survival_regime_quality", "regime_primary", "survival_quality_score"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    thesis_id: Mapped[int] = mapped_column(ForeignKey("blum_knowledge_records.id", ondelete="CASCADE"), index=True)
+    ticker: Mapped[str] = mapped_column(String(32), index=True)
+    sector: Mapped[str] = mapped_column(String(120), default="", index=True)
+    thesis_type: Mapped[str] = mapped_column(String(100), default="research_thesis", index=True)
+    direction: Mapped[str] = mapped_column(String(40), default="neutral", index=True)
+    horizon: Mapped[str] = mapped_column(String(40), default="multi", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    evaluated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    thesis_age_days: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    survival_status: Mapped[str] = mapped_column(String(40), default="ACTIVE", index=True)
+    survival_days: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    initial_confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    current_confidence: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    confidence_decay: Mapped[float] = mapped_column(Float, default=0.0)
+    max_confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    min_confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    invalidated_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    expired_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    final_return: Mapped[float | None] = mapped_column(Float)
+    benchmark_return: Mapped[float | None] = mapped_column(Float)
+    excess_return: Mapped[float | None] = mapped_column(Float, index=True)
+    max_adverse_excursion: Mapped[float | None] = mapped_column(Float)
+    max_favorable_excursion: Mapped[float | None] = mapped_column(Float)
+    regime_primary: Mapped[str] = mapped_column(String(120), default="Unknown", index=True)
+    regime_secondary: Mapped[str] = mapped_column(String(120), default="Unknown", index=True)
+    sector_regime: Mapped[str] = mapped_column(String(120), default="Unknown", index=True)
+    failure_reason: Mapped[str] = mapped_column(String(180), default="", index=True)
+    survival_quality_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    notes_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+    thesis = relationship("BlumKnowledgeRecord")
+
+
+class ThesisConvictionHistory(Base):
+    __tablename__ = "thesis_conviction_history"
+    __table_args__ = (
+        Index("ix_thesis_conviction_thesis_evaluated", "thesis_id", "evaluated_at"),
+        Index("ix_thesis_conviction_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    thesis_id: Mapped[int] = mapped_column(ForeignKey("blum_knowledge_records.id", ondelete="CASCADE"), index=True)
+    evaluated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    previous_confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    new_confidence: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    confidence_delta: Mapped[float] = mapped_column(Float, default=0.0)
+    decay_score: Mapped[float] = mapped_column(Float, default=0.0)
+    strengthening_score: Mapped[float] = mapped_column(Float, default=0.0)
+    evidence_freshness_score: Mapped[float] = mapped_column(Float, default=0.0)
+    contradiction_pressure: Mapped[float] = mapped_column(Float, default=0.0)
+    price_confirmation_score: Mapped[float] = mapped_column(Float, default=0.0)
+    volume_confirmation_score: Mapped[float] = mapped_column(Float, default=0.0)
+    sentiment_confirmation_score: Mapped[float] = mapped_column(Float, default=0.0)
+    narrative_confirmation_score: Mapped[float] = mapped_column(Float, default=0.0)
+    regime_confirmation_score: Mapped[float] = mapped_column(Float, default=0.0)
+    benchmark_confirmation_score: Mapped[float] = mapped_column(Float, default=0.0)
+    invalidation_distance: Mapped[float | None] = mapped_column(Float)
+    status: Mapped[str] = mapped_column(String(40), default="stable", index=True)
+    explanation: Mapped[str] = mapped_column(Text, default="")
+
+    thesis = relationship("BlumKnowledgeRecord")
+
+
+class ModelReliabilityByRegime(Base):
+    __tablename__ = "model_reliability_by_regime"
+    __table_args__ = (
+        UniqueConstraint(
+            "engine_name",
+            "signal_type",
+            "setup_type",
+            "thesis_type",
+            "sector",
+            "industry",
+            "asset_class",
+            "horizon",
+            "market_regime",
+            "volatility_regime",
+            "breadth_regime",
+            name="uq_model_reliability_by_regime_context",
+        ),
+        Index("ix_reliability_by_regime_engine_score", "engine_name", "reliability_score"),
+        Index("ix_reliability_by_regime_context", "market_regime", "sector", "horizon"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    engine_name: Mapped[str] = mapped_column(String(100), index=True)
+    signal_type: Mapped[str] = mapped_column(String(100), default="unknown", index=True)
+    setup_type: Mapped[str] = mapped_column(String(100), default="unknown", index=True)
+    thesis_type: Mapped[str] = mapped_column(String(100), default="research_thesis", index=True)
+    sector: Mapped[str] = mapped_column(String(120), default="Unknown", index=True)
+    industry: Mapped[str] = mapped_column(String(160), default="", index=True)
+    asset_class: Mapped[str] = mapped_column(String(40), default="stock", index=True)
+    horizon: Mapped[str] = mapped_column(String(40), default="multi", index=True)
+    market_regime: Mapped[str] = mapped_column(String(120), default="Unknown", index=True)
+    volatility_regime: Mapped[str] = mapped_column(String(80), default="Unknown", index=True)
+    breadth_regime: Mapped[str] = mapped_column(String(80), default="Unknown", index=True)
+    sample_size: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    hit_rate: Mapped[float] = mapped_column(Float, default=0.0)
+    average_return: Mapped[float | None] = mapped_column(Float)
+    excess_return_vs_benchmark: Mapped[float | None] = mapped_column(Float)
+    average_r_multiple: Mapped[float | None] = mapped_column(Float)
+    max_drawdown: Mapped[float | None] = mapped_column(Float)
+    false_positive_rate: Mapped[float] = mapped_column(Float, default=0.0)
+    false_negative_rate: Mapped[float] = mapped_column(Float, default=0.0)
+    calibration_error: Mapped[float | None] = mapped_column(Float)
+    reliability_score: Mapped[float] = mapped_column(Float, default=50.0, index=True)
+    confidence_penalty: Mapped[float] = mapped_column(Float, default=0.0)
+    last_updated: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class ThesisCompetition(Base):
+    __tablename__ = "thesis_competitions"
+    __table_args__ = (
+        Index("ix_thesis_competitions_ticker_status", "ticker", "status"),
+        Index("ix_thesis_competitions_created", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ticker: Mapped[str] = mapped_column(String(32), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    market_regime: Mapped[str] = mapped_column(String(120), default="Unknown", index=True)
+    sector_regime: Mapped[str] = mapped_column(String(120), default="Unknown", index=True)
+    winning_thesis_id: Mapped[int | None] = mapped_column(ForeignKey("competing_theses.id", ondelete="SET NULL"), index=True)
+    runner_up_thesis_id: Mapped[int | None] = mapped_column(ForeignKey("competing_theses.id", ondelete="SET NULL"), index=True)
+    uncertainty_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    judge_summary: Mapped[str] = mapped_column(Text, default="")
+    next_evidence_to_watch: Mapped[dict] = mapped_column(JsonType, default=dict)
+    status: Mapped[str] = mapped_column(String(40), default="active", index=True)
+
+
+class CompetingThesis(Base):
+    __tablename__ = "competing_theses"
+    __table_args__ = (
+        Index("ix_competing_theses_competition_side", "competition_id", "thesis_side"),
+        Index("ix_competing_theses_judge_score", "judge_score"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    competition_id: Mapped[int] = mapped_column(ForeignKey("thesis_competitions.id", ondelete="CASCADE"), index=True)
+    thesis_side: Mapped[str] = mapped_column(String(40), index=True)
+    thesis_text: Mapped[str] = mapped_column(Text, default="")
+    supporting_evidence_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    contradicting_evidence_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    judge_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    invalidation_conditions_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    expected_horizon: Mapped[str] = mapped_column(String(80), default="multi", index=True)
+    outcome_status: Mapped[str] = mapped_column(String(40), default="pending", index=True)
+    benchmark_relative_outcome: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    evaluated_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+
+    competition = relationship("ThesisCompetition", foreign_keys=[competition_id])
+
+
+class EngineVote(Base):
+    __tablename__ = "engine_votes"
+    __table_args__ = (
+        UniqueConstraint("thesis_id", "engine_name", "horizon", name="uq_engine_vote_thesis_engine_horizon"),
+        Index("ix_engine_votes_ticker_engine", "ticker", "engine_name"),
+        Index("ix_engine_votes_outcome", "outcome_evaluated", "was_correct"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    thesis_id: Mapped[int] = mapped_column(ForeignKey("blum_knowledge_records.id", ondelete="CASCADE"), index=True)
+    ticker: Mapped[str] = mapped_column(String(32), index=True)
+    engine_name: Mapped[str] = mapped_column(String(100), index=True)
+    vote: Mapped[str] = mapped_column(String(40), index=True)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    evidence_quality: Mapped[float] = mapped_column(Float, default=0.0)
+    horizon: Mapped[str] = mapped_column(String(40), default="multi", index=True)
+    regime: Mapped[str] = mapped_column(String(120), default="Unknown", index=True)
+    sector: Mapped[str] = mapped_column(String(120), default="Unknown", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    outcome_evaluated: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    was_correct: Mapped[bool | None] = mapped_column(Boolean, index=True)
+    excess_return_contribution: Mapped[float | None] = mapped_column(Float)
+    reliability_weight_at_time: Mapped[float] = mapped_column(Float, default=0.5)
+
+    thesis = relationship("BlumKnowledgeRecord")
+
+
+class EnsembleWeightVersion(Base):
+    __tablename__ = "ensemble_weight_versions"
+    __table_args__ = (Index("ix_ensemble_weight_versions_active_created", "is_active", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    version_name: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    weights_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    sample_size: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    validation_score: Mapped[float] = mapped_column(Float, default=0.0)
+    calibration_score: Mapped[float] = mapped_column(Float, default=0.0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+
+
+class TrainingExampleQualityScore(Base):
+    __tablename__ = "training_example_quality_scores"
+    __table_args__ = (
+        UniqueConstraint("training_example_id", name="uq_training_example_quality_example"),
+        Index("ix_training_quality_value", "final_training_value_score"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    training_example_id: Mapped[int] = mapped_column(ForeignKey("blum_training_examples.id", ondelete="CASCADE"), index=True)
+    thesis_id: Mapped[int | None] = mapped_column(ForeignKey("blum_knowledge_records.id", ondelete="SET NULL"), index=True)
+    reasoning_quality_score: Mapped[float] = mapped_column(Float, default=0.0)
+    outcome_clarity_score: Mapped[float] = mapped_column(Float, default=0.0)
+    data_quality_score: Mapped[float] = mapped_column(Float, default=0.0)
+    contradiction_handling_score: Mapped[float] = mapped_column(Float, default=0.0)
+    confidence_calibration_score: Mapped[float] = mapped_column(Float, default=0.0)
+    regime_context_score: Mapped[float] = mapped_column(Float, default=0.0)
+    benchmark_relevance_score: Mapped[float] = mapped_column(Float, default=0.0)
+    reproducibility_score: Mapped[float] = mapped_column(Float, default=0.0)
+    final_training_value_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    include_in_sft: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    include_in_preference_training: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    include_in_dpo: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    exclusion_reason: Mapped[str] = mapped_column(Text, default="")
+    evaluated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    training_example = relationship("BlumTrainingExample")
+    thesis = relationship("BlumKnowledgeRecord")
+
+
+class BenchmarkRelativeOutcome(Base):
+    __tablename__ = "benchmark_relative_outcomes"
+    __table_args__ = (
+        UniqueConstraint("object_type", "object_id", "benchmark_ticker", name="uq_benchmark_relative_object_benchmark"),
+        Index("ix_benchmark_relative_ticker", "ticker"),
+        Index("ix_benchmark_relative_hit", "hit_vs_benchmark"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    object_type: Mapped[str] = mapped_column(String(80), index=True)
+    object_id: Mapped[int] = mapped_column(Integer, index=True)
+    ticker: Mapped[str] = mapped_column(String(32), index=True)
+    benchmark_ticker: Mapped[str] = mapped_column(String(32), index=True)
+    start_date: Mapped[datetime | None] = mapped_column(Date, index=True)
+    end_date: Mapped[datetime | None] = mapped_column(Date, index=True)
+    asset_return: Mapped[float | None] = mapped_column(Float)
+    benchmark_return: Mapped[float | None] = mapped_column(Float)
+    excess_return: Mapped[float | None] = mapped_column(Float, index=True)
+    max_drawdown_asset: Mapped[float | None] = mapped_column(Float)
+    max_drawdown_benchmark: Mapped[float | None] = mapped_column(Float)
+    volatility_asset: Mapped[float | None] = mapped_column(Float)
+    volatility_benchmark: Mapped[float | None] = mapped_column(Float)
+    hit_vs_benchmark: Mapped[bool | None] = mapped_column(Boolean, index=True)
+    information_ratio_proxy: Mapped[float | None] = mapped_column(Float)
+    opportunity_cost: Mapped[float | None] = mapped_column(Float)
+    evaluation_notes: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
 class BlumKnowledgeGraphNode(Base):
     __tablename__ = "blum_knowledge_graph_nodes"
     __table_args__ = (UniqueConstraint("canonical_key", name="uq_blum_graph_node_key"),)

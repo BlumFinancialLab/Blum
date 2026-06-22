@@ -9,17 +9,37 @@ from statistics import mean
 from uuid import uuid4
 
 import pandas as pd
-from sqlalchemy import desc, func, select
+from sqlalchemy import and_, desc, func, select
 from sqlalchemy.orm import Session
 
 from app.ai.llm_provider import EvidenceBoundFallbackProvider
-from app.models import Asset, ChatMessage, ChatSession, NewsArticle, NewsAssetLink, PriceHistory, SignalSnapshot
+from app.models import (
+    Asset,
+    BenchmarkRelativeOutcome,
+    ChatMessage,
+    ChatSession,
+    CompetingThesis,
+    EngineVote,
+    NewsArticle,
+    NewsAssetLink,
+    PriceHistory,
+    SignalSnapshot,
+    ThesisCompetition,
+    ThesisConvictionHistory,
+    ThesisSurvivalMetric,
+)
 from app.services.blum_training_memory import BlumTrainingMemoryService
 from app.services.fundamentals import fundamentals_for_asset
 from app.services.live import market_sentiment
 from app.services.learning_loop import LearningDashboardService
 from app.services.market_data import market_snapshot_for_asset
 from app.services.market_sniper import MarketSniperEngine
+from app.services.reasoning_precision import (
+    serialize_benchmark,
+    serialize_competing_thesis,
+    serialize_conviction,
+    serialize_survival,
+)
 from app.services.semantic import SemanticService
 from app.services.strategic_intelligence import community_sentiment, market_narrative, opportunity_radar
 from app.services.dashboard import signal_payload
@@ -836,6 +856,7 @@ def asset_context(db: Session, asset: Asset) -> dict:
     fundamentals = fundamentals_for_asset(db, asset)
     latest_news = related_articles(db, asset.id, limit=8)
     memory = BlumTrainingMemoryService().asset_memory(db, asset)
+    reasoning_memory = reasoning_memory_for_asset(db, asset)
     return {
         "ticker": asset.ticker,
         "name": asset.name,
@@ -850,12 +871,95 @@ def asset_context(db: Session, asset: Asset) -> dict:
         "technical_analysis": technical,
         "fundamentals": fundamentals,
         "training_memory": memory,
+        "reasoning_memory": reasoning_memory,
         "history_depth": {
             "rows": len(price_rows),
             "latest_date": price_rows[0].date.isoformat() if price_rows else None,
             "oldest_sample_date": price_rows[-1].date.isoformat() if price_rows else None,
         },
         "recent_news": latest_news,
+    }
+
+
+def reasoning_memory_for_asset(db: Session, asset: Asset) -> dict:
+    survival = db.scalar(
+        select(ThesisSurvivalMetric)
+        .where(ThesisSurvivalMetric.ticker == asset.ticker)
+        .order_by(desc(ThesisSurvivalMetric.evaluated_at))
+        .limit(1)
+    )
+    conviction = None
+    benchmark = None
+    votes: list[EngineVote] = []
+    if survival is not None:
+        conviction = db.scalar(
+            select(ThesisConvictionHistory)
+            .where(ThesisConvictionHistory.thesis_id == survival.thesis_id)
+            .order_by(desc(ThesisConvictionHistory.evaluated_at))
+            .limit(1)
+        )
+        benchmark = db.scalar(
+            select(BenchmarkRelativeOutcome)
+            .where(
+                and_(
+                    BenchmarkRelativeOutcome.object_type == "blum_thesis",
+                    BenchmarkRelativeOutcome.object_id == survival.thesis_id,
+                )
+            )
+            .order_by(desc(BenchmarkRelativeOutcome.updated_at))
+            .limit(1)
+        )
+        votes = list(
+            db.scalars(
+                select(EngineVote)
+                .where(EngineVote.thesis_id == survival.thesis_id)
+                .order_by(desc(EngineVote.created_at))
+                .limit(12)
+            ).all()
+        )
+    competition = db.scalar(
+        select(ThesisCompetition)
+        .where(ThesisCompetition.ticker == asset.ticker)
+        .order_by(desc(ThesisCompetition.created_at))
+        .limit(1)
+    )
+    competing = []
+    if competition is not None:
+        competing = list(
+            db.scalars(
+                select(CompetingThesis)
+                .where(CompetingThesis.competition_id == competition.id)
+                .order_by(desc(CompetingThesis.judge_score))
+            ).all()
+        )
+    return {
+        "status": "ready" if survival or competition or conviction or benchmark else "missing",
+        "survival": serialize_survival(survival) if survival else None,
+        "conviction": serialize_conviction(conviction) if conviction else None,
+        "benchmark_relative": serialize_benchmark(benchmark) if benchmark else None,
+        "competition": {
+            "id": competition.id,
+            "ticker": competition.ticker,
+            "created_at": competition.created_at.isoformat() if competition.created_at else None,
+            "winning_thesis_id": competition.winning_thesis_id,
+            "runner_up_thesis_id": competition.runner_up_thesis_id,
+            "uncertainty_score": competition.uncertainty_score,
+            "judge_summary": competition.judge_summary,
+            "next_evidence_to_watch": competition.next_evidence_to_watch,
+            "theses": [serialize_competing_thesis(row) for row in competing],
+        } if competition else None,
+        "engine_votes": [
+            {
+                "engine_name": row.engine_name,
+                "vote": row.vote,
+                "confidence": row.confidence,
+                "evidence_quality": row.evidence_quality,
+                "regime": row.regime,
+                "was_correct": row.was_correct,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+            for row in votes
+        ],
     }
 
 
@@ -919,6 +1023,8 @@ def build_answer(
 ) -> dict:
     if intent == "trading_game":
         return build_trading_game_response(language, trading_game_context)
+    if intent == "reasoning_memory_question":
+        return build_reasoning_memory_response(language, candidates[:3], asset_packets, validation)
     if intent == "market_sniper":
         return build_market_sniper_response(language, sniper_context, candidates, validation)
     if intent == "technical_analysis" and len(candidates) == 1:
@@ -1413,6 +1519,131 @@ def build_trading_game_response(language: str, context: dict) -> dict:
     }
 
 
+def build_reasoning_memory_response(language: str, candidates: list[dict], asset_packets: list[dict], validation: dict) -> dict:
+    labels = LABELS[language]
+    if not candidates:
+        message = "Non ho una tesi BLUM validata per questo asset nel database." if language == "it" else "I do not have a validated BLUM thesis for this asset in the database."
+        return build_error_response(language, message, ["Esegui il ciclo reasoning core dopo aver creato segnali reali." if language == "it" else "Run the reasoning core after real signals have been created."])
+    candidate = candidates[0]
+    reasoning = candidate.get("reasoning_memory") or {}
+    survival = reasoning.get("survival") or {}
+    conviction = reasoning.get("conviction") or {}
+    competition = reasoning.get("competition") or {}
+    benchmark = reasoning.get("benchmark_relative") or {}
+    votes = reasoning.get("engine_votes") or []
+    ticker = candidate.get("ticker")
+    if reasoning.get("status") != "ready":
+        message = (
+            f"Per {ticker} BLUM ha dati asset, ma non ha ancora survival/decay/competition sufficienti. Non forzo una risposta."
+            if language == "it"
+            else f"For {ticker}, BLUM has asset data but not enough survival/decay/competition memory yet. I will not force an answer."
+        )
+        return build_error_response(language, message, [])
+    survival_status = survival.get("survival_status") or "unknown"
+    confidence = conviction.get("new_confidence") or survival.get("current_confidence")
+    delta = conviction.get("confidence_delta")
+    benchmark_excess = benchmark.get("excess_return")
+    leading = ""
+    if competition.get("theses"):
+        top = competition["theses"][0]
+        leading = f"{top.get('thesis_side')} thesis, judge score {top.get('judge_score')}/100"
+    vote_lines = [f"{row.get('engine_name')}: {row.get('vote')} ({row.get('confidence')}/100)" for row in votes[:6]]
+    if language == "it":
+        summary = f"{ticker}: la tesi BLUM e {survival_status.lower()}, confidence {confidence}/100."
+        if delta is not None:
+            summary += f" Variazione recente: {delta:+.2f}."
+        sections = [
+            {"key": "summary", "title": "Sintesi", "bullets": [summary]},
+            {"key": "survival", "title": "Thesis Survival", "bullets": [
+                f"Status: {survival_status}; giorni sopravvissuti: {survival.get('survival_days')}; quality score: {survival.get('survival_quality_score')}/100.",
+                f"Motivo fragile/errore: {survival.get('failure_reason') or 'nessun failure dominante registrato.'}",
+            ]},
+            {"key": "decay", "title": "Conviction Decay", "bullets": [
+                f"Stato: {conviction.get('status')}; evidence freshness {conviction.get('evidence_freshness_score')}/100; contradiction pressure {conviction.get('contradiction_pressure')}/100.",
+                conviction.get("explanation") or "Nessuna spiegazione decay registrata.",
+            ]},
+            {"key": "competition", "title": "Bull / Bear / Neutral", "bullets": [
+                f"Tesi guida: {leading or 'non disponibile'}.",
+                competition.get("judge_summary") or "Competizione tesi non ancora risolta.",
+            ]},
+            {"key": "benchmark", "title": "Benchmark", "bullets": [
+                f"Benchmark: {benchmark.get('benchmark_ticker') or 'n/a'}; excess return: {format_signed_decimal(benchmark_excess)}.",
+                "Questo distingue una tesi che batte il benchmark da una che sale solo con il mercato.",
+            ]},
+            {"key": "engines", "title": "Motori interni", "bullets": vote_lines or ["Nessun voto ensemble disponibile."]},
+            {"key": "final", "title": "Vista BLUM", "bullets": [reasoning_final_view_it(ticker, survival_status, confidence, delta, benchmark_excess)]},
+        ]
+    else:
+        summary = f"{ticker}: the BLUM thesis is {survival_status.lower()}, confidence {confidence}/100."
+        if delta is not None:
+            summary += f" Recent change: {delta:+.2f}."
+        sections = [
+            {"key": "summary", "title": "Summary", "bullets": [summary]},
+            {"key": "survival", "title": "Thesis Survival", "bullets": [
+                f"Status: {survival_status}; survival days: {survival.get('survival_days')}; quality score: {survival.get('survival_quality_score')}/100.",
+                f"Fragility/failure reason: {survival.get('failure_reason') or 'no dominant failure logged.'}",
+            ]},
+            {"key": "decay", "title": "Conviction Decay", "bullets": [
+                f"Status: {conviction.get('status')}; evidence freshness {conviction.get('evidence_freshness_score')}/100; contradiction pressure {conviction.get('contradiction_pressure')}/100.",
+                conviction.get("explanation") or "No decay explanation recorded.",
+            ]},
+            {"key": "competition", "title": "Bull / Bear / Neutral", "bullets": [
+                f"Leading thesis: {leading or 'not available'}.",
+                competition.get("judge_summary") or "Thesis competition is not resolved yet.",
+            ]},
+            {"key": "benchmark", "title": "Benchmark", "bullets": [
+                f"Benchmark: {benchmark.get('benchmark_ticker') or 'n/a'}; excess return: {format_signed_decimal(benchmark_excess)}.",
+                "This separates a thesis that beats its benchmark from one that only moves with the market.",
+            ]},
+            {"key": "engines", "title": "Internal Engines", "bullets": vote_lines or ["No ensemble vote available."]},
+            {"key": "final", "title": "BLUM View", "bullets": [reasoning_final_view_en(ticker, survival_status, confidence, delta, benchmark_excess)]},
+        ]
+    sections = dedupe_response_sections(sections)
+    return {
+        "response_style": "reasoning_memory",
+        "composed_response": render_sections(sections, labels["disclaimer"]),
+        "standard_sections": sections,
+        "executive_view": summary,
+        "supporting_evidence": [bullet for section in sections[:4] for bullet in section.get("bullets", [])],
+        "contradicting_evidence": [sections[1]["bullets"][-1], sections[2]["bullets"][0]],
+        "risk_reward_view": sections[-1]["bullets"][0],
+        "data_quality": {"reasoning_memory_status": reasoning.get("status"), "validation": validation},
+        "answer_to_user": sections[-1]["bullets"][0],
+        "reasoning_core_view": reasoning,
+    }
+
+
+def format_signed_decimal(value: object) -> str:
+    numeric = nullable_float(value)
+    if numeric is None:
+        return "n/a"
+    return f"{numeric * 100:+.2f}%"
+
+
+def reasoning_final_view_it(ticker: str, status: str, confidence: object, delta: object, benchmark_excess: object) -> str:
+    numeric_delta = nullable_float(delta)
+    excess = nullable_float(benchmark_excess)
+    if status == "INVALIDATED":
+        return f"{ticker}: la tesi e invalidata. BLUM dovrebbe trattarla come errore di ragionamento da studiare, non come idea attiva."
+    if numeric_delta is not None and numeric_delta < -2:
+        return f"{ticker}: tesi ancora monitorabile ma in deterioramento. Serve nuova conferma prima di aumentare convinzione."
+    if excess is not None and excess < 0:
+        return f"{ticker}: attenzione, la tesi non sta battendo il benchmark rilevante. La forza potrebbe essere solo mercato o rumore."
+    return f"{ticker}: tesi osservabile, ma BLUM deve continuare a chiedersi cosa la conferma e cosa la invalida."
+
+
+def reasoning_final_view_en(ticker: str, status: str, confidence: object, delta: object, benchmark_excess: object) -> str:
+    numeric_delta = nullable_float(delta)
+    excess = nullable_float(benchmark_excess)
+    if status == "INVALIDATED":
+        return f"{ticker}: the thesis is invalidated. BLUM should treat it as reasoning error evidence, not an active idea."
+    if numeric_delta is not None and numeric_delta < -2:
+        return f"{ticker}: thesis is still monitorable but deteriorating. Fresh confirmation is needed before conviction increases."
+    if excess is not None and excess < 0:
+        return f"{ticker}: caution, the thesis is not beating its relevant benchmark. Strength may be broad market beta or noise."
+    return f"{ticker}: thesis is observable, but BLUM must keep asking what confirms it and what invalidates it."
+
+
 def format_money(value: object) -> str:
     numeric = nullable_float(value)
     if numeric is None:
@@ -1656,6 +1887,7 @@ def public_answer_payload(answer: dict, lightweight: bool) -> dict:
         "data_quality": answer.get("data_quality", {}),
         "answer_to_user": answer.get("answer_to_user"),
         "market_sniper_mode": answer.get("market_sniper_mode", {}),
+        "reasoning_core_view": answer.get("reasoning_core_view", {}),
     }
     if lightweight:
         return base
@@ -1727,6 +1959,11 @@ def summarize_asset_context(asset: dict) -> dict:
     technical = asset.get("technical") or {}
     fundamentals = asset.get("fundamentals") or {}
     latest_signal = asset.get("latest_signal") or {}
+    reasoning = asset.get("reasoning_memory") or {}
+    survival = reasoning.get("survival") or {}
+    conviction = reasoning.get("conviction") or {}
+    competition = reasoning.get("competition") or {}
+    benchmark = reasoning.get("benchmark_relative") or {}
     return {
         "ticker": asset.get("ticker"),
         "name": asset.get("name"),
@@ -1763,6 +2000,17 @@ def summarize_asset_context(asset: dict) -> dict:
             "period_end": fundamentals.get("period_end"),
             "quality_score": fundamentals.get("quality_score"),
         } if fundamentals else {},
+        "reasoning_memory": {
+            "status": reasoning.get("status"),
+            "survival_status": survival.get("survival_status"),
+            "survival_days": survival.get("survival_days"),
+            "current_confidence": survival.get("current_confidence") or conviction.get("new_confidence"),
+            "confidence_delta": conviction.get("confidence_delta"),
+            "conviction_status": conviction.get("status"),
+            "benchmark_excess_return": benchmark.get("excess_return"),
+            "judge_summary": competition.get("judge_summary"),
+            "uncertainty_score": competition.get("uncertainty_score"),
+        } if reasoning else {},
         "recent_news": [summarize_news_item(item) for item in asset.get("recent_news", [])[:5]],
     }
 
@@ -1874,6 +2122,8 @@ def infer_intent(message: str, mode: str | None = None) -> str:
         return "technical_analysis"
     if any(term in normalized for term in ["analisi fondamentale", "fundamental analysis", "fondamentali", "bilancio", "revenue", "eps", "cash flow", "valuation", "multipli"]):
         return "fundamental_analysis"
+    if any(term in normalized for term in ["tesi", "thesis", "convinzione", "conviction", "ancora valida", "still valid", "sopravviss", "survival", "decay", "decad", "bull bear neutral", "tesi bull", "tesi bear", "tesi neutral", "motore", "engine vote", "sta migliorando", "dove ha sbagliato", "reasoning core", "batte spy", "batte qqq", "vs spy", "vs qqq"]):
+        return "reasoning_memory_question"
     if any(term in normalized for term in ["capitale virtuale", "trading game", "sta battendo", "batte il mercato", "benchmark", "drawdown", "profit factor", "expectancy", "p/l", "pl ", "peggior errore", "andato a zero", "rischio per trade", "riproducibil", "reproducib", "win rate"]):
         return "trading_game"
     if any(term in normalized for term in ["sniper", "entrabile", "meglio aspettare", "ingresso", "entry", "risk/reward", "uscita", "exit", "target", "invalidazione", "invalidation", "profitto", "take profit"]):
@@ -1976,6 +2226,7 @@ def enrich_candidate(row: dict, packet: dict) -> dict:
     fundamentals = packet.get("fundamentals") or {}
     signal = packet.get("latest_signal") or {}
     memory = packet.get("training_memory") or {}
+    reasoning_memory = packet.get("reasoning_memory") or {}
     technical_score = score_technical(technical)
     fundamental_score = score_fundamentals(fundamentals)
     sentiment_score = safe_float(row.get("sentiment_score") or (signal.get("score_breakdown") or {}).get("sentiment_score"))
@@ -2007,6 +2258,7 @@ def enrich_candidate(row: dict, packet: dict) -> dict:
         "technical": technical,
         "fundamentals": fundamentals,
         "memory": memory,
+        "reasoning_memory": reasoning_memory,
         "recent_news": packet.get("recent_news", []),
     }
     enriched["sniper_setup"] = build_sniper_setup(enriched)
@@ -2596,6 +2848,7 @@ def sources_used(asset_packets: list[dict], semantic_hits: list[dict], memory_hi
         {"name": "Narrative intelligence", "type": "semantic_news", "coverage": len(narrative.get("emerging_subthemes", []) or [])},
         {"name": "Semantic news search", "type": "embeddings", "coverage": len(semantic_hits)},
         {"name": "Blum training memory", "type": "reasoning_memory", "coverage": len(memory_hits)},
+        {"name": "BLUM Reasoning Core", "type": "thesis_survival_decay_ensemble", "coverage": sum(1 for item in asset_packets if (item.get("reasoning_memory") or {}).get("status") == "ready")},
         {"name": "BLUM Learning Loop strategy memory", "type": "point_in_time_simulation_memory", "coverage": len((learning_loop_context or {}).get("strategy_memory", []))},
         {"name": "BLUM Learning Loop signal reliability", "type": "walk_forward_outcome_memory", "coverage": len((learning_loop_context or {}).get("signal_reliability", []))},
     ]
@@ -2613,6 +2866,7 @@ def context_coverage(asset_packets: list[dict], semantic_hits: list[dict], memor
         "memory_hits": len(memory_hits),
         "learning_loop_memory_hits": len((learning_loop_context or {}).get("strategy_memory", [])),
         "learning_loop_signal_reliability": len((learning_loop_context or {}).get("signal_reliability", [])),
+        "reasoning_core_assets": sum(1 for item in asset_packets if (item.get("reasoning_memory") or {}).get("status") == "ready"),
     }
 
 

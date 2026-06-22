@@ -18,6 +18,7 @@ from app.models import (
     AccuracySnapshot,
     Asset,
     AutonomousEngineRun,
+    BenchmarkRelativeOutcome,
     BlumDatasetExport,
     BlumKnowledgeGraphEdge,
     BlumKnowledgeGraphNode,
@@ -34,9 +35,12 @@ from app.models import (
     ChartPatternMemory,
     ChatMessage,
     ChatSession,
+    CompetingThesis,
     ConfidenceCalibrationBucket,
     ConfidenceAdjustment,
     EmbeddingVector,
+    EngineVote,
+    EnsembleWeightVersion,
     ExternalDatasetSource,
     FundamentalSnapshot,
     HistoricalPrediction,
@@ -51,6 +55,7 @@ from app.models import (
     ModelWeightVersion,
     ModelVersion,
     ModelReliabilityMatrix,
+    ModelReliabilityByRegime,
     NewsArticle,
     NewsAssetLink,
     PortfolioScenario,
@@ -76,7 +81,11 @@ from app.models import (
     TradingGameFailure,
     TradingGameTrade,
     MetaLearningEvent,
+    ThesisCompetition,
+    ThesisConvictionHistory,
     ThesisLifecycleEvent,
+    ThesisSurvivalMetric,
+    TrainingExampleQualityScore,
     WatchlistItem,
 )
 from app.schemas import AssetOut, FinancialChatRequest, MarketUpdateRequest, NewsOut, NewsUpdateRequest, SemanticSearchRequest, SignalRunRequest
@@ -136,8 +145,17 @@ from app.services.reasoning_core import (
     meta_learning_event_list,
     model_reliability_overview,
     reasoning_core_status,
-    run_reasoning_core_cycle,
     thesis_lifecycle_records,
+)
+from app.services.reasoning_precision import (
+    BenchmarkRelativeEvaluator,
+    ConvictionDecayEngine,
+    EnsembleEvolutionEngine,
+    ReasoningCoreOrchestrator,
+    ReliabilityByRegimeEngine,
+    ThesisCompetitionEngine,
+    ThesisSurvivalEngine,
+    TrainingDatasetQualityService,
 )
 from app.services.semantic import SemanticService
 from app.services.stock import stock_radar, update_stock_radar
@@ -243,6 +261,13 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "reasoning_dataset_export": True,
             "financial_knowledge_graph": True,
             "reasoning_core_lifecycle_calibration": True,
+            "reasoning_precision_core": True,
+            "thesis_survival_engine": True,
+            "conviction_decay_engine": True,
+            "regime_aware_reliability": True,
+            "thesis_competition_engine": True,
+            "ensemble_evolution_engine": True,
+            "benchmark_relative_intelligence": True,
             "portfolio_scenario": True,
             "watchlist": True,
             "multilingual_financial_chat": True,
@@ -305,6 +330,15 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "model_reliability_matrix": int(db.scalar(select(func.count(ModelReliabilityMatrix.id))) or 0),
             "confidence_calibration_buckets": int(db.scalar(select(func.count(ConfidenceCalibrationBucket.id))) or 0),
             "meta_learning_events": int(db.scalar(select(func.count(MetaLearningEvent.id))) or 0),
+            "thesis_survival_metrics": int(db.scalar(select(func.count(ThesisSurvivalMetric.id))) or 0),
+            "thesis_conviction_history": int(db.scalar(select(func.count(ThesisConvictionHistory.id))) or 0),
+            "model_reliability_by_regime": int(db.scalar(select(func.count(ModelReliabilityByRegime.id))) or 0),
+            "thesis_competitions": int(db.scalar(select(func.count(ThesisCompetition.id))) or 0),
+            "competing_theses": int(db.scalar(select(func.count(CompetingThesis.id))) or 0),
+            "engine_votes": int(db.scalar(select(func.count(EngineVote.id))) or 0),
+            "ensemble_weight_versions": int(db.scalar(select(func.count(EnsembleWeightVersion.id))) or 0),
+            "training_example_quality_scores": int(db.scalar(select(func.count(TrainingExampleQualityScore.id))) or 0),
+            "benchmark_relative_outcomes": int(db.scalar(select(func.count(BenchmarkRelativeOutcome.id))) or 0),
             "blum_graph_nodes": int(db.scalar(select(func.count(BlumKnowledgeGraphNode.id))) or 0),
             "blum_graph_edges": int(db.scalar(select(func.count(BlumKnowledgeGraphEdge.id))) or 0),
             "blum_dataset_exports": int(db.scalar(select(func.count(BlumDatasetExport.id))) or 0),
@@ -319,7 +353,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "Hugging Face serves the previous image until the Docker build finishes successfully.",
             "The finance-domain 7B model is disabled by default unless BLUM_ENABLE_FINANCIAL_BRAIN_MODEL=true.",
             "Existing snapshots are refreshed by the autonomous engine after a successful deployment.",
-            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.12.0.",
+            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.13.0.",
         ],
     }
 
@@ -687,12 +721,206 @@ def blum_model_graph(limit: int = Query(default=160, ge=10, le=1000), db: Sessio
 
 @router.get("/model/reasoning-core/status")
 def blum_reasoning_core_status(db: Session = Depends(get_db)) -> dict:
-    return reasoning_core_status(db)
+    legacy = reasoning_core_status(db)
+    precision = ReasoningCoreOrchestrator().status(db)
+    return {"legacy": legacy, "precision_core": precision}
 
 
 @router.post("/model/reasoning-core/run")
 def blum_reasoning_core_run(limit: int = Query(default=250, ge=1, le=3000), db: Session = Depends(get_db)) -> dict:
-    return run_reasoning_core_cycle(db, limit=limit)
+    return ReasoningCoreOrchestrator().run(db, limit=limit)
+
+
+@router.get("/model/reasoning-core/latest")
+def blum_reasoning_core_latest(db: Session = Depends(get_db)) -> dict | None:
+    return ReasoningCoreOrchestrator().latest(db)
+
+
+@router.get("/model/reasoning-core/diagnostics")
+def blum_reasoning_core_diagnostics(db: Session = Depends(get_db)) -> dict:
+    return ReasoningCoreOrchestrator().diagnostics(db)
+
+
+@router.get("/model/thesis-survival")
+def blum_thesis_survival(
+    ticker: str | None = Query(default=None),
+    limit: int = Query(default=80, ge=1, le=500),
+    db: Session = Depends(get_db),
+) -> dict:
+    return ThesisSurvivalEngine().list(db, ticker=ticker, limit=limit)
+
+
+@router.post("/model/thesis-survival/evaluate")
+def blum_thesis_survival_evaluate(
+    thesis_id: int | None = Query(default=None),
+    limit: int = Query(default=250, ge=1, le=3000),
+    db: Session = Depends(get_db),
+) -> dict:
+    return ThesisSurvivalEngine().evaluate(db, thesis_id=thesis_id, limit=limit)
+
+
+@router.get("/model/thesis-survival/{thesis_id}")
+def blum_thesis_survival_detail(thesis_id: int, db: Session = Depends(get_db)) -> dict:
+    payload = ThesisSurvivalEngine().list(db, thesis_id=thesis_id, limit=1)
+    if not payload["rows"]:
+        raise HTTPException(status_code=404, detail=f"No thesis survival metric for thesis: {thesis_id}")
+    return payload["rows"][0]
+
+
+@router.get("/model/conviction-decay")
+def blum_conviction_decay(
+    thesis_id: int | None = Query(default=None),
+    limit: int = Query(default=80, ge=1, le=500),
+    db: Session = Depends(get_db),
+) -> dict:
+    return ConvictionDecayEngine().list(db, thesis_id=thesis_id, limit=limit)
+
+
+@router.post("/model/conviction-decay/evaluate")
+def blum_conviction_decay_evaluate(
+    thesis_id: int | None = Query(default=None),
+    limit: int = Query(default=250, ge=1, le=3000),
+    db: Session = Depends(get_db),
+) -> dict:
+    return ConvictionDecayEngine().evaluate(db, thesis_id=thesis_id, limit=limit)
+
+
+@router.get("/model/conviction-decay/{thesis_id}")
+def blum_conviction_decay_detail(thesis_id: int, db: Session = Depends(get_db)) -> dict:
+    return ConvictionDecayEngine().list(db, thesis_id=thesis_id, limit=20)
+
+
+@router.get("/model/reliability-by-regime")
+def blum_reliability_by_regime(
+    engine_name: str | None = Query(default=None),
+    limit: int = Query(default=80, ge=1, le=500),
+    db: Session = Depends(get_db),
+) -> dict:
+    return ReliabilityByRegimeEngine().list(db, engine_name=engine_name, limit=limit)
+
+
+@router.post("/model/reliability-by-regime/recalculate")
+def blum_reliability_by_regime_recalculate(
+    limit: int = Query(default=1000, ge=1, le=5000),
+    db: Session = Depends(get_db),
+) -> dict:
+    return ReliabilityByRegimeEngine().recalculate(db, limit=limit)
+
+
+@router.get("/model/reliability-by-regime/{engine_name}")
+def blum_reliability_by_regime_engine(
+    engine_name: str,
+    limit: int = Query(default=80, ge=1, le=500),
+    db: Session = Depends(get_db),
+) -> dict:
+    return ReliabilityByRegimeEngine().list(db, engine_name=engine_name, limit=limit)
+
+
+@router.get("/model/thesis-competitions")
+def blum_thesis_competitions(
+    ticker: str | None = Query(default=None),
+    limit: int = Query(default=60, ge=1, le=250),
+    db: Session = Depends(get_db),
+) -> dict:
+    return ThesisCompetitionEngine().list(db, ticker=ticker, limit=limit)
+
+
+@router.get("/model/thesis-competitions/{ticker}")
+def blum_thesis_competitions_ticker(ticker: str, db: Session = Depends(get_db)) -> dict:
+    return ThesisCompetitionEngine().list(db, ticker=ticker, limit=20)
+
+
+@router.post("/model/thesis-competitions/run/{ticker}")
+def blum_thesis_competitions_run(ticker: str, db: Session = Depends(get_db)) -> dict:
+    return ThesisCompetitionEngine().run_for_ticker(db, ticker=ticker)
+
+
+@router.post("/model/thesis-competitions/evaluate")
+def blum_thesis_competitions_evaluate(
+    limit: int = Query(default=120, ge=1, le=1000),
+    db: Session = Depends(get_db),
+) -> dict:
+    return ThesisCompetitionEngine().evaluate(db, limit=limit)
+
+
+@router.get("/model/ensemble/status")
+def blum_ensemble_status(db: Session = Depends(get_db)) -> dict:
+    return EnsembleEvolutionEngine().status(db)
+
+
+@router.post("/model/ensemble/vote/{ticker}")
+def blum_ensemble_vote(ticker: str, db: Session = Depends(get_db)) -> dict:
+    return EnsembleEvolutionEngine().vote_ticker(db, ticker=ticker)
+
+
+@router.post("/model/ensemble/recalculate")
+def blum_ensemble_recalculate(
+    min_sample: int = Query(default=30, ge=5, le=1000),
+    db: Session = Depends(get_db),
+) -> dict:
+    return EnsembleEvolutionEngine().recalculate(db, min_sample=min_sample)
+
+
+@router.get("/model/ensemble/weights")
+def blum_ensemble_weights(db: Session = Depends(get_db)) -> dict:
+    return {"weights": EnsembleEvolutionEngine().active_weights(db)}
+
+
+@router.get("/model/ensemble/disagreements")
+def blum_ensemble_disagreements(
+    limit: int = Query(default=80, ge=1, le=500),
+    db: Session = Depends(get_db),
+) -> dict:
+    return EnsembleEvolutionEngine().disagreements(db, limit=limit)
+
+
+@router.post("/model/training/quality/evaluate")
+def blum_training_quality_evaluate(
+    limit: int = Query(default=500, ge=1, le=3000),
+    db: Session = Depends(get_db),
+) -> dict:
+    return TrainingDatasetQualityService().evaluate(db, limit=limit)
+
+
+@router.get("/model/training/quality")
+def blum_training_quality(
+    limit: int = Query(default=80, ge=1, le=500),
+    db: Session = Depends(get_db),
+) -> dict:
+    return TrainingDatasetQualityService().list(db, limit=limit)
+
+
+@router.post("/model/training/export/high-quality")
+def blum_training_export_high_quality(
+    limit: int = Query(default=1000, ge=1, le=10000),
+    min_score: float = Query(default=65.0, ge=0.0, le=100.0),
+    db: Session = Depends(get_db),
+) -> dict:
+    return TrainingDatasetQualityService().export_high_quality(db, limit=limit, min_score=min_score)
+
+
+@router.get("/model/benchmark-relative")
+def blum_benchmark_relative(
+    ticker: str | None = Query(default=None),
+    limit: int = Query(default=80, ge=1, le=500),
+    db: Session = Depends(get_db),
+) -> dict:
+    return BenchmarkRelativeEvaluator().list(db, ticker=ticker, limit=limit)
+
+
+@router.post("/model/benchmark-relative/evaluate")
+def blum_benchmark_relative_evaluate(
+    object_id: int | None = Query(default=None),
+    ticker: str | None = Query(default=None),
+    limit: int = Query(default=250, ge=1, le=3000),
+    db: Session = Depends(get_db),
+) -> dict:
+    return BenchmarkRelativeEvaluator().evaluate(db, object_id=object_id, ticker=ticker, limit=limit)
+
+
+@router.get("/model/benchmark-relative/{ticker}")
+def blum_benchmark_relative_ticker(ticker: str, db: Session = Depends(get_db)) -> dict:
+    return BenchmarkRelativeEvaluator().list(db, ticker=ticker, limit=40)
 
 
 @router.get("/model/thesis-lifecycle")
