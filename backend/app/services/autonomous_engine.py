@@ -18,6 +18,7 @@ from app.models import (
     NewsArticle,
     PriceHistory,
     SignalSnapshot,
+    SniperScore,
 )
 from app.services.accuracy import run_accuracy_audit
 from app.services.blum_financial_model import run_model_learning_cycle
@@ -29,6 +30,7 @@ from app.services.ipo import update_ipo_radar
 from app.services.learning_loop import LearningLoopService
 from app.services.macro import update_macro_snapshots
 from app.services.market_data import MarketDataService
+from app.services.market_sniper import MarketSniperEngine
 from app.services.persistence import backup_embedded_postgres_if_configured
 from app.signals.engine import SignalEngine
 
@@ -83,6 +85,7 @@ class AutonomousResearchEngine:
         if settings.enable_learning_loop:
             stage("blum_financial_model", lambda: run_model_learning_cycle(db, limit=settings.blum_model_cycle_limit))
             stage("blum_learning_loop", lambda: LearningLoopService().run_batch(db, batch_size=settings.learning_batch_size, trigger="autonomous_engine"))
+        stage("market_sniper_engine", lambda: MarketSniperEngine().evaluate(db, limit=min(settings.max_update_assets, 48)))
         stage("persistence_backup", lambda: backup_embedded_postgres_if_configured(reason="autonomous_engine_cycle"))
 
         readiness = self.readiness(db, stage_results)
@@ -154,6 +157,7 @@ class AutonomousResearchEngine:
         reasoning_records = int(db.scalar(select(func.count(BlumKnowledgeRecord.id))) or 0)
         dataset_sources = int(db.scalar(select(func.count(ExternalDatasetSource.id))) or 0)
         learning_stage = stage_results.get("blum_learning_loop", {}).get("result", {})
+        sniper_count = int(db.scalar(select(func.count(SniperScore.id))) or 0)
         coverage = (priced_assets / active_assets * 100) if active_assets else 0.0
         evidence_components = [
             min(100.0, coverage),
@@ -161,6 +165,7 @@ class AutonomousResearchEngine:
             min(100.0, news_count / 100 * 100),
             min(100.0, reasoning_records / 100 * 100),
             min(100.0, dataset_sources / max(1, settings.hf_dataset_max_sources) * 100),
+            min(100.0, sniper_count / max(1, active_assets) * 100),
         ]
         errors = {name: result for name, result in stage_results.items() if result.get("status") == "error"}
         warnings = sum(1 for result in stage_results.values() if result.get("status") != "ok")
@@ -172,6 +177,7 @@ class AutonomousResearchEngine:
             "news_count": news_count,
             "reasoning_records": reasoning_records,
             "dataset_sources": dataset_sources,
+            "sniper_scores": sniper_count,
             "data_coverage_score": round(coverage, 2),
             "readiness_score": round(sum(evidence_components) / len(evidence_components), 2),
             "reasoning_memory_created": int(model_stage.get("knowledge_records_created", 0) or 0),

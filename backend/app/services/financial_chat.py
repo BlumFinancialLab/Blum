@@ -19,6 +19,7 @@ from app.services.fundamentals import fundamentals_for_asset
 from app.services.live import market_sentiment
 from app.services.learning_loop import LearningDashboardService
 from app.services.market_data import market_snapshot_for_asset
+from app.services.market_sniper import MarketSniperEngine
 from app.services.semantic import SemanticService
 from app.services.strategic_intelligence import community_sentiment, market_narrative, opportunity_radar
 from app.services.dashboard import signal_payload
@@ -283,6 +284,7 @@ def financial_chat_response(
     sentiment = market_sentiment(db, hours=48)
     memory_hits = BlumTrainingMemoryService().semantic_memory(db, message, limit=6)
     learning_loop_context = LearningDashboardService().chat_memory(db, message, assets[:5], limit=8)
+    sniper_context = sniper_context_for_assets(db, assets[:5])
     semantic_hits = SemanticService().search(db, message, limit=8) if include_semantic_search else []
     asset_packets = dedupe_context_blocks([asset_context(db, asset) for asset in assets[:12]])
     validation = validate_asset_contexts(intent, entities, asset_packets, detected_language)
@@ -316,6 +318,7 @@ def financial_chat_response(
         sentiment=sentiment,
         memory_hits=memory_hits,
         learning_loop_context=learning_loop_context,
+        sniper_context=sniper_context,
         horizon=horizon,
         risk_profile=risk_profile,
     )
@@ -338,6 +341,7 @@ def financial_chat_response(
         "semantic_evidence": semantic_hits,
         "training_memory": memory_hits,
         "learning_loop_context": learning_loop_context,
+        "sniper_context": sniper_context if is_debug_mode(mode) else {"top": sniper_context[:3], "policy": "Detailed sniper diagnostics are available in debug mode."},
         "rag_pipeline": rag_pipeline(detected_language, intent),
         "sources_used": sources_used(asset_packets, semantic_hits, memory_hits, narrative, sentiment, learning_loop_context),
         "context_coverage": context_coverage(asset_packets, semantic_hits, memory_hits, learning_loop_context),
@@ -415,6 +419,17 @@ def chat_history(db: Session, limit: int = 80) -> list[dict]:
         }
         for message, session in rows
     ]
+
+
+def sniper_context_for_assets(db: Session, assets: list[Asset], limit: int = 5) -> list[dict]:
+    engine = MarketSniperEngine()
+    output = []
+    for asset in assets[:limit]:
+        try:
+            output.append(engine.evaluate_asset(db, asset, persist=False))
+        except Exception as exc:
+            output.append({"ticker": asset.ticker, "status": "unavailable", "error": f"{type(exc).__name__}: {exc}"})
+    return output
 
 
 def resolve_entities(db: Session, message: str, tickers: list[str] | None = None) -> list[ChatEntity]:
@@ -877,9 +892,12 @@ def build_answer(
     sentiment: dict,
     memory_hits: list[dict],
     learning_loop_context: dict,
+    sniper_context: list[dict],
     horizon: str,
     risk_profile: str,
 ) -> dict:
+    if intent == "market_sniper":
+        return build_market_sniper_response(language, sniper_context, candidates, validation)
     if intent == "technical_analysis" and len(candidates) == 1:
         return build_technical_analysis_response(language, candidates[0], validation)
     if intent == "fundamental_analysis" and len(candidates) == 1:
@@ -905,7 +923,7 @@ def build_answer(
     technical = technical_block(top)
     fundamental = fundamental_block(top)
     learning_points = learning_loop_points(learning_loop_context, language)
-    sniper = market_sniper_mode(top, horizon, risk_profile, enabled=intent == "market_sniper")
+    sniper = market_sniper_mode(top, horizon, risk_profile, enabled=intent == "market_sniper", sniper_context=sniper_context)
     sections = dedupe_response_sections([
         {"key": "summary", "title": labels["summary"], "bullets": [thesis]},
         {"key": "observed", "title": labels["observed"], "bullets": observed_data(top, narrative, sentiment)},
@@ -1199,6 +1217,84 @@ def build_opportunity_search_response(language: str, candidates: list[dict], nar
             {"key": "risk", "title": "Risk", "bullets": ["Conviction is reduced or rejected when updated price, volume, sector confirmation or high-quality news are missing."]},
         ]
     return response_contract(render_sections(sections, labels["disclaimer"]), dedupe_response_sections(sections), sections[0]["bullets"][0], supporting=rows, contradictions=sections[-1]["bullets"], conclusion=sections[0]["bullets"][0], style="opportunity_search")
+
+
+def build_market_sniper_response(language: str, sniper_context: list[dict], candidates: list[dict], validation: dict) -> dict:
+    labels = LABELS[language]
+    item = sniper_context[0] if sniper_context else {}
+    if not item:
+        message = "I do not have enough reliable data to build a Sniper plan right now." if language == "en" else "Non ho dati sufficienti per costruire un piano Sniper affidabile ora."
+        return build_error_response(language, message, [])
+    ticker = item.get("ticker")
+    plan = item.get("trade_plan") or {}
+    setup = item.get("setup") or {}
+    risk = item.get("risk") or {}
+    actionability = item.get("actionability")
+    no_trade = item.get("no_trade_reasons") or []
+    exits = item.get("exit_signals") or []
+    rr = (plan.get("risk_reward_estimate") or {}).get("reward_to_risk")
+    entry = plan.get("entry_zone") or {}
+    latest = item.get("price_context") or {}
+
+    if language == "it":
+        if actionability == "avoid":
+            thesis = f"{ticker}: no-trade. BLUM preferisce evitare o aspettare; Sniper Score {item.get('sniper_score')}/100."
+        elif actionability == "wait_for_trigger":
+            thesis = f"{ticker}: interessante, ma non ancora entrabile. BLUM lo classifica come wait_for_trigger."
+        elif actionability == "active_setup":
+            thesis = f"{ticker}: setup condizionale attivo, valido solo finche conferma e invalidazione restano coerenti."
+        else:
+            thesis = f"{ticker}: setup da monitorare, actionability {actionability}."
+        sections = [
+            {"key": "summary", "title": "Sintesi", "bullets": [thesis, f"Ultimo dato disponibile: {latest.get('latest_date') or 'n/a'}; prezzo {latest.get('latest_price') or 'n/a'}."]},
+            {"key": "setup", "title": "Setup", "bullets": [f"Tipo: {setup.get('setup_type')}", f"Qualita setup: {setup.get('setup_quality_score')}/100", f"Affidabilita storica: {setup.get('historical_reliability')}/100"]},
+            {"key": "entry", "title": "Ingresso condizionale", "bullets": [f"Zona informativa: {entry.get('low')} - {entry.get('high')}", f"Trigger: {plan.get('entry_trigger')}", f"Conferma richiesta: {plan.get('confirmation_condition')}"]},
+            {"key": "risk", "title": "Rischio e invalidazione", "bullets": [f"Invalidazione: {plan.get('invalidation_level')}", f"Stop logic: {plan.get('stop_logic')}", f"Risk/reward stimato: {rr or 'n/a'}R", f"Classe rischio: {risk.get('position_risk_class')}"]},
+            {"key": "targets", "title": "Target ed exit", "bullets": [f"Target 1: {plan.get('target_1')}", f"Target 2: {plan.get('target_2')}", f"Trailing: {plan.get('trailing_exit_logic')}", *[f"{row.get('action')}: {row.get('reason')}" for row in exits[:2]]]},
+            {"key": "avoid", "title": "Quando evitare", "bullets": [row.get("reason") for row in no_trade[:5]] or ["Nessun blocco forte, ma serve sempre conferma del trigger."]},
+            {"key": "final", "title": "Vista BLUM", "bullets": [item.get("explanation", "Scenario informativo da monitorare, non raccomandazione operativa.")]},
+        ]
+    else:
+        if actionability == "avoid":
+            thesis = f"{ticker}: no-trade. BLUM prefers to avoid or wait; Sniper Score {item.get('sniper_score')}/100."
+        elif actionability == "wait_for_trigger":
+            thesis = f"{ticker}: interesting, but not actionable yet. BLUM classifies it as wait_for_trigger."
+        elif actionability == "active_setup":
+            thesis = f"{ticker}: active conditional setup, valid only while confirmation and invalidation remain coherent."
+        else:
+            thesis = f"{ticker}: monitored setup, actionability {actionability}."
+        sections = [
+            {"key": "summary", "title": "Summary", "bullets": [thesis, f"Latest available data: {latest.get('latest_date') or 'n/a'}; price {latest.get('latest_price') or 'n/a'}."]},
+            {"key": "setup", "title": "Setup", "bullets": [f"Type: {setup.get('setup_type')}", f"Setup quality: {setup.get('setup_quality_score')}/100", f"Historical reliability: {setup.get('historical_reliability')}/100"]},
+            {"key": "entry", "title": "Conditional Entry", "bullets": [f"Informational zone: {entry.get('low')} - {entry.get('high')}", f"Trigger: {plan.get('entry_trigger')}", f"Required confirmation: {plan.get('confirmation_condition')}"]},
+            {"key": "risk", "title": "Risk and Invalidation", "bullets": [f"Invalidation: {plan.get('invalidation_level')}", f"Stop logic: {plan.get('stop_logic')}", f"Estimated risk/reward: {rr or 'n/a'}R", f"Risk class: {risk.get('position_risk_class')}"]},
+            {"key": "targets", "title": "Targets and Exit", "bullets": [f"Target 1: {plan.get('target_1')}", f"Target 2: {plan.get('target_2')}", f"Trailing: {plan.get('trailing_exit_logic')}", *[f"{row.get('action')}: {row.get('reason')}" for row in exits[:2]]]},
+            {"key": "avoid", "title": "When To Avoid", "bullets": [row.get("reason") for row in no_trade[:5]] or ["No hard block, but trigger confirmation is still required."]},
+            {"key": "final", "title": "BLUM View", "bullets": [item.get("explanation", "Informational scenario to monitor, not an operating recommendation.")]},
+        ]
+    sections = dedupe_response_sections(sections)
+    return {
+        "response_style": "market_sniper",
+        "composed_response": render_sections(sections, labels["disclaimer"]),
+        "standard_sections": sections,
+        "executive_view": thesis,
+        "risk_reward_view": f"{rr or 'n/a'}R with actionability {actionability}.",
+        "market_sniper_mode": {
+            "enabled": True,
+            "ticker": ticker,
+            "sniper_score": item.get("sniper_score"),
+            "actionability": actionability,
+            "setup_type": setup.get("setup_type"),
+            "entry_zone": plan.get("entry_zone"),
+            "invalidation": plan.get("invalidation_level"),
+            "target_1": plan.get("target_1"),
+            "target_2": plan.get("target_2"),
+            "risk_reward": plan.get("risk_reward_estimate"),
+            "no_trade_reasons": no_trade,
+        },
+        "data_quality": {"latest_date": latest.get("latest_date"), "price_rows": latest.get("rows"), "validation": validation},
+        "answer_to_user": thesis,
+    }
 
 
 def response_contract(
@@ -1596,8 +1692,8 @@ def infer_intent(message: str, mode: str | None = None) -> str:
         return "technical_analysis"
     if any(term in normalized for term in ["analisi fondamentale", "fundamental analysis", "fondamentali", "bilancio", "revenue", "eps", "cash flow", "valuation", "multipli"]):
         return "fundamental_analysis"
-    if any(term in normalized for term in ["sniper", "ingresso", "entry", "risk/reward", "uscita", "target", "invalidazione"]):
-        return "technical_analysis"
+    if any(term in normalized for term in ["sniper", "entrabile", "meglio aspettare", "ingresso", "entry", "risk/reward", "uscita", "exit", "target", "invalidazione", "invalidation", "profitto", "take profit"]):
+        return "market_sniper"
     if any(term in text for term in ["confronta", "compare", "vs", "versus"]):
         return "compare_assets"
     if any(term in normalized for term in ["trova", "find", "watchlist", "opportunit", "opportunity", "etf", "candidati", "titoli interessanti"]):
@@ -2188,7 +2284,28 @@ def market_may_be_missing(top: list[dict], narrative: dict, sentiment: dict, lan
     return points
 
 
-def market_sniper_mode(top: list[dict], horizon: str, risk_profile: str, enabled: bool) -> dict:
+def market_sniper_mode(top: list[dict], horizon: str, risk_profile: str, enabled: bool, sniper_context: list[dict] | None = None) -> dict:
+    if sniper_context:
+        item = sniper_context[0]
+        plan = item.get("trade_plan") or {}
+        setup = item.get("setup") or {}
+        return {
+            "enabled": enabled,
+            "selection_policy": "Extremely selective informational setup detection. It does not generate orders.",
+            "asset": item.get("ticker"),
+            "setup_type": setup.get("setup_type"),
+            "sniper_score": item.get("sniper_score"),
+            "actionability": item.get("actionability"),
+            "entry_zone_informational": plan.get("entry_zone"),
+            "invalidation": plan.get("invalidation_level"),
+            "target_zone_informational": {"target_1": plan.get("target_1"), "target_2": plan.get("target_2")},
+            "timeframe": plan.get("timeframe") or horizon,
+            "risk_profile": risk_profile,
+            "risk_reward_estimated": plan.get("risk_reward_estimate"),
+            "confidence": plan.get("confidence"),
+            "why_now": item.get("explanation"),
+            "what_could_go_wrong": [row.get("reason") for row in (item.get("no_trade_reasons") or [])],
+        }
     candidate = top[0] if top else {}
     setup = candidate.get("sniper_setup") or {}
     return {

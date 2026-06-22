@@ -132,6 +132,15 @@ class LearningLoopService:
             except Exception as exc:
                 errors.append({"stage": "sample", "error": f"{type(exc).__name__}: {exc}", "traceback": traceback.format_exc(limit=4)})
 
+        sniper_learning = {"status": "skipped", "reason": "No reports created."}
+        if reports:
+            try:
+                from app.services.market_sniper import MarketSniperEngine
+
+                sniper_learning = MarketSniperEngine().simulate(db, limit=min(300, max(60, len(reports) * len(TIMEFRAMES) * 6)))
+            except Exception as exc:
+                sniper_learning = {"status": "degraded", "error": f"{type(exc).__name__}: {exc}"}
+
         metrics = LearningDashboardService().aggregate_metrics(db)
         model_version = self.model_scores.recalculate(db)
         anti_overfitting = self.model_scores.anti_overfitting_report(db)
@@ -147,6 +156,7 @@ class LearningLoopService:
             "latest_reports": reports[-5:],
             "dashboard_metrics": metrics,
             "model_version": model_version,
+            "market_sniper_learning": sniper_learning,
         }
         run.anti_overfitting_report = anti_overfitting
         run.error_payload = {"errors": errors}
@@ -155,8 +165,8 @@ class LearningLoopService:
                 event_type="blum_learning_loop",
                 severity="Info" if reports else "Warning",
                 title="BLUM Learning Loop completed",
-                description="Point-in-time historical simulations updated prediction outcomes, mistakes, strategy memory and adaptive signal scores.",
-                payload={"run_id": run_id, "reports_created": len(reports), "errors": errors[:8], "anti_overfitting": anti_overfitting},
+                description="Point-in-time historical simulations updated prediction outcomes, mistakes, strategy memory, adaptive signal scores and Market Sniper R-multiple memory.",
+                payload={"run_id": run_id, "reports_created": len(reports), "errors": errors[:8], "anti_overfitting": anti_overfitting, "market_sniper_learning": sniper_learning},
             )
         )
         db.commit()
@@ -168,6 +178,7 @@ class LearningLoopService:
             "errors": errors[:8],
             "metrics": metrics,
             "model_version": model_version,
+            "market_sniper_learning": sniper_learning,
             "anti_overfitting": anti_overfitting,
             "disclaimer": "Research learning loop only. It improves calibration and robustness; it does not create guaranteed market predictions.",
         }

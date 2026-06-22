@@ -44,6 +44,7 @@ from app.models import (
     LearningEvent,
     LearningMetric,
     LearningRun,
+    MarketRegimeSnapshot,
     MacroSnapshot,
     MistakeAnalysis,
     ModelWeightVersion,
@@ -54,12 +55,15 @@ from app.models import (
     PredictionOutcome,
     PriceHistory,
     PriceProviderCheck,
+    RMultipleMetric,
     SectorAccuracyProfile,
     SentimentAnalysis,
     SignalEvaluation,
     SignalOutcome,
     SignalPerformance,
+    SignalReliabilityMatrix,
     SignalSnapshot,
+    SniperScore,
     SourceReliabilityScore,
     StrategyMemory,
     TechnicalLevel,
@@ -115,6 +119,7 @@ from app.services.live import live_news, market_sentiment
 from app.services.macro import macro_overview, update_macro_snapshots
 from app.services.market_brain import build_market_brain, latest_market_brain, market_brain_history
 from app.services.market_data import MarketDataService, market_snapshot_for_asset
+from app.services.market_sniper import MarketSniperEngine
 from app.services.persistence import backup_embedded_postgres_if_configured, database_persistence_status
 from app.services.pipeline import PipelineService
 from app.services.realtime import realtime_status
@@ -151,7 +156,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
     return {
         "service": "blum-ai-financial-intelligence",
         "app_version": settings.app_version,
-        "feature_set": "humanized-chat-entity-validation-v0.9.1",
+        "feature_set": "market-sniper-engine-v1",
         "environment": settings.environment,
         "generated_at": datetime.utcnow().isoformat(),
         "hugging_face": {
@@ -220,6 +225,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "autonomous_research_engine": True,
             "huggingface_dataset_catalog": True,
             "blum_learning_loop": True,
+            "market_sniper_engine": True,
         },
         "database_counts": {
             "assets": int(db.scalar(select(func.count(Asset.id))) or 0),
@@ -244,6 +250,10 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "strategy_memory": int(db.scalar(select(func.count(StrategyMemory.id))) or 0),
             "model_versions": int(db.scalar(select(func.count(ModelVersion.id))) or 0),
             "learning_metrics": int(db.scalar(select(func.count(LearningMetric.id))) or 0),
+            "market_regime_snapshots": int(db.scalar(select(func.count(MarketRegimeSnapshot.id))) or 0),
+            "sniper_scores": int(db.scalar(select(func.count(SniperScore.id))) or 0),
+            "r_multiple_metrics": int(db.scalar(select(func.count(RMultipleMetric.id))) or 0),
+            "signal_reliability_matrix": int(db.scalar(select(func.count(SignalReliabilityMatrix.id))) or 0),
             "model_weight_versions": int(db.scalar(select(func.count(ModelWeightVersion.id))) or 0),
             "historical_similarity_cases": int(db.scalar(select(func.count(HistoricalSimilarityCase.id))) or 0),
             "confidence_adjustments": int(db.scalar(select(func.count(ConfidenceAdjustment.id))) or 0),
@@ -276,7 +286,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "Hugging Face serves the previous image until the Docker build finishes successfully.",
             "The finance-domain 7B model is disabled by default unless BLUM_ENABLE_FINANCIAL_BRAIN_MODEL=true.",
             "Existing snapshots are refreshed by the autonomous engine after a successful deployment.",
-            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.9.1.",
+            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.10.0.",
         ],
     }
 
@@ -398,6 +408,65 @@ def blum_learning_run_cycle(
     db: Session = Depends(get_db),
 ) -> dict:
     return LearningLoopService().run_batch(db, batch_size=batch_size, trigger="manual_api_diagnostic")
+
+
+@router.get("/api/sniper/status")
+def sniper_status(db: Session = Depends(get_db)) -> dict:
+    return MarketSniperEngine().status(db)
+
+
+@router.get("/api/sniper/candidates")
+def sniper_candidates(
+    limit: int = Query(default=40, ge=1, le=120),
+    persist: bool = Query(default=False),
+    db: Session = Depends(get_db),
+) -> dict:
+    return MarketSniperEngine().candidates(db, limit=limit, persist=persist)
+
+
+@router.get("/api/sniper/candidates/{ticker}")
+def sniper_candidate(ticker: str, persist: bool = Query(default=False), db: Session = Depends(get_db)) -> dict:
+    asset = require_asset(db, ticker)
+    return MarketSniperEngine().evaluate_asset(db, asset, persist=persist)
+
+
+@router.post("/api/sniper/evaluate")
+def sniper_evaluate(
+    tickers: str | None = Query(default=None),
+    limit: int = Query(default=40, ge=1, le=120),
+    db: Session = Depends(get_db),
+) -> dict:
+    parsed = [item.strip().upper() for item in tickers.split(",") if item.strip()] if tickers else None
+    return MarketSniperEngine().evaluate(db, tickers=parsed, limit=limit)
+
+
+@router.post("/api/sniper/simulate")
+def sniper_simulate(
+    ticker: str | None = Query(default=None),
+    limit: int = Query(default=120, ge=1, le=1000),
+    db: Session = Depends(get_db),
+) -> dict:
+    return MarketSniperEngine().simulate(db, ticker=ticker, limit=limit)
+
+
+@router.get("/api/sniper/setups")
+def sniper_setups(db: Session = Depends(get_db)) -> list[dict]:
+    return MarketSniperEngine().setups(db)
+
+
+@router.get("/api/sniper/regimes")
+def sniper_regimes(limit: int = Query(default=80, ge=1, le=300), db: Session = Depends(get_db)) -> list[dict]:
+    return MarketSniperEngine().regimes(db, limit=limit)
+
+
+@router.get("/api/sniper/metrics")
+def sniper_metrics(db: Session = Depends(get_db)) -> dict:
+    return MarketSniperEngine().metrics(db)
+
+
+@router.get("/api/sniper/lessons")
+def sniper_lessons(limit: int = Query(default=40, ge=1, le=200), db: Session = Depends(get_db)) -> list[dict]:
+    return MarketSniperEngine().lessons(db, limit=limit)
 
 
 @router.get("/model/status")

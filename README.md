@@ -35,6 +35,7 @@ This is not a consumer trading app and not a simple dashboard. The project is a 
 | Reasoning | lightweight Qwen-compatible LLM evidence-only explanation layer |
 | Financial Brain | finance-domain open model adapter, default `AdaptLLM/finance-chat` when enabled |
 | BLUM Learning Loop | point-in-time historical simulation lab, outcome evaluation, mistake taxonomy, adaptive signal reliability and strategy memory |
+| Market Sniper Engine | market regime detection, setup classification, conditional entry/exit planning, no-trade filtering, execution simulation and R-multiple learning |
 | Time-series intelligence | statistical fallback compatible with future Chronos, TimesFM or PatchTST adapters |
 | Deployment | Hugging Face Docker Space |
 
@@ -78,7 +79,8 @@ Blum does not use one generic AI model for everything.
 22. Run BLUM Learning Loop point-in-time simulations on random historical asset/date samples.
 23. Hide future prices during prediction generation, then reveal future OHLCV only during outcome evaluation.
 24. Classify mistakes, update strategy memory, recalibrate signal reliability and persist reversible model-weight versions.
-25. Produce AI explanations using only retrieved evidence.
+25. Convert prediction memory into execution-quality R-multiple learning through the Market Sniper Engine.
+26. Produce AI explanations using only retrieved evidence.
 
 ## Live Runtime
 
@@ -94,6 +96,7 @@ When the FastAPI application starts, APScheduler launches a background intellige
 - `fundamentals_refresh`: SEC companyfacts refresh every 720 minutes by default.
 - `financial_brain_learning`: self-learning evaluation, memory refresh and confidence calibration every 360 minutes by default.
 - `blum_point_in_time_learning_loop`: random historical point-in-time simulation, outcome evaluation and strategy-memory refresh every 360 minutes by default.
+- `market_sniper_engine`: conditional setup actionability, entry/exit plans, no-trade decisions, execution simulations and R-multiple reliability memory during each autonomous research cycle.
 
 The dashboard polls live JSON endpoints every 30 seconds and shows worker state, latest public news, sentiment distribution, source/model diagnostics and signal readiness. No generated headlines, generated prices or fabricated sentiment are shown.
 
@@ -271,6 +274,74 @@ The loop includes anti-overfitting controls:
 - no autonomous trading.
 
 The chatbot reads BLUM Learning Loop memory when answering setup-quality questions such as: “This setup has worked in the past?”, “What is the historical false-positive risk?”, “What has BLUM learned about this pattern?” and “Which factor should reduce confidence?”.
+
+## Market Sniper Engine
+
+The **Market Sniper Engine** upgrades BLUM from “interesting asset” detection to conditional actionability analysis. It does not issue orders and does not claim certainty. Its job is to answer whether a setup is actionable, should wait for confirmation, should be avoided, or should be reduced/invalidated.
+
+Core modules:
+
+- `MarketRegimeService`: classifies risk appetite, trend, volatility, breadth and sector rotation from stored public OHLCV.
+- `SetupClassifierService`: maps evidence into setup types such as `momentum_breakout`, `pullback_to_trend`, `trend_continuation`, `volatility_squeeze`, `reversal_from_support` or `avoid_no_edge`.
+- `EntryExitEngine`: creates informational entry zones, confirmation triggers, invalidation levels, stop logic, target zones, trailing logic and no-trade conditions.
+- `RiskEngine`: scores ATR risk, invalidation distance, volatility, liquidity, gap risk, regime risk and risk/reward.
+- `ExecutionSimulatorService`: tests historical execution feasibility using persisted point-in-time predictions and outcomes.
+- `NoTradeFilter`: rejects setups with poor risk/reward, wide invalidation, hostile regime, weak volume, extended RSI, low reliability or poor data quality.
+- `ExitEngine`: monitors stop/invalidation, partial-profit, trailing, momentum-decay, volume-climax and thesis-invalidation exit signals.
+
+The final **Sniper Score** measures actionability, not generic attractiveness. An asset can have a strong Opportunity Score and still receive a low Sniper Score if the entry is late, invalidation is too wide, the regime is hostile or historical expectancy is weak.
+
+Actionability states:
+
+- `avoid`
+- `watch`
+- `wait_for_trigger`
+- `actionable_if_confirmed`
+- `active_setup`
+- `exit_or_reduce`
+
+New persistence tables:
+
+- `market_regime_snapshots`
+- `setup_library`
+- `sniper_scores`
+- `trade_plans`
+- `trade_plan_outcomes`
+- `execution_simulations`
+- `r_multiple_metrics`
+- `signal_reliability_matrix`
+- `no_trade_decisions`
+- `exit_signals`
+- `portfolio_risk_context`
+
+API endpoints:
+
+- `GET /api/sniper/status`
+- `GET /api/sniper/candidates`
+- `GET /api/sniper/candidates/{ticker}`
+- `POST /api/sniper/evaluate`
+- `POST /api/sniper/simulate`
+- `GET /api/sniper/setups`
+- `GET /api/sniper/regimes`
+- `GET /api/sniper/metrics`
+- `GET /api/sniper/lessons`
+
+Frontend:
+
+- `/sniper` shows Market Regime, Top Sniper Candidates, Active Setups, Wait For Trigger, Avoid List, Best Risk/Reward, Setup Reliability, Recent Learning Lessons, Entry/Exit Plans, No-Trade Reasons and Execution Simulation Results.
+
+BLUM Chat can now answer questions such as “È entrabile adesso?”, “Meglio aspettare?”, “Dove si invalida il setup?”, “Dove avrebbe senso prendere profitto?” and “Perché BLUM dice wait invece di active setup?” using conditional, risk-aware language.
+
+Guardrails:
+
+- no guaranteed profit;
+- no direct financial advice;
+- no active setup without confirmation;
+- no entry plan without invalidation;
+- no target without risk/reward;
+- no real-time claim without timestamp;
+- R-multiple expectancy is preferred over raw win rate;
+- insufficient samples lower reliability.
 
 ## Blum Financial Model
 
