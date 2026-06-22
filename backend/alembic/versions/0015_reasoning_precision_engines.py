@@ -206,7 +206,6 @@ def upgrade() -> None:
     )
     add_indexes("competing_theses", ["competition_id", "thesis_side", "confidence", "judge_score", "expected_horizon", "outcome_status", "created_at", "evaluated_at"])
     op.create_index("ix_competing_theses_competition_side", "competing_theses", ["competition_id", "thesis_side"])
-    op.create_index("ix_competing_theses_judge_score", "competing_theses", ["judge_score"])
     op.create_foreign_key("fk_thesis_competitions_winning_thesis", "thesis_competitions", "competing_theses", ["winning_thesis_id"], ["id"], ondelete="SET NULL")
     op.create_foreign_key("fk_thesis_competitions_runner_up_thesis", "thesis_competitions", "competing_theses", ["runner_up_thesis_id"], ["id"], ondelete="SET NULL")
 
