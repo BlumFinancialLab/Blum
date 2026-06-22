@@ -28,12 +28,17 @@ from app.models import (
     BlumThesisOutcome,
     BlumThesisQualityScore,
     BlumTrainingExample,
+    ConfidenceCalibrationBucket,
     LearningEvent,
+    MetaLearningEvent,
+    ModelReliabilityMatrix,
     PriceHistory,
     SignalSnapshot,
+    ThesisLifecycleEvent,
 )
 from app.services.thesis_engine import build_asset_thesis
 from app.services.persistence import backup_embedded_postgres_if_configured
+from app.services.reasoning_core import run_reasoning_core_cycle
 
 
 HORIZONS = (1, 3, 7, 14, 30)
@@ -60,6 +65,10 @@ def model_status(db: Session) -> dict:
             "self_critiques": count(db, BlumSelfCritique.id),
             "narrative_memories": count(db, BlumNarrativeMemory.id),
             "regime_memories": count(db, BlumRegimeMemory.id),
+            "thesis_lifecycle_events": count(db, ThesisLifecycleEvent.id),
+            "model_reliability_rows": count(db, ModelReliabilityMatrix.id),
+            "confidence_calibration_buckets": count(db, ConfidenceCalibrationBucket.id),
+            "meta_learning_events": count(db, MetaLearningEvent.id),
             "graph_nodes": count(db, BlumKnowledgeGraphNode.id),
             "graph_edges": count(db, BlumKnowledgeGraphEdge.id),
             "dataset_exports": count(db, BlumDatasetExport.id),
@@ -87,17 +96,19 @@ def run_model_learning_cycle(db: Session, limit: int = 120) -> dict:
     captured = max(0, count(db, BlumKnowledgeRecord.id) - before_count)
     outcome_result = evaluate_thesis_outcomes(db, limit=limit)
     dataset_result = build_training_dataset(db, limit=limit, min_quality=55.0)
+    reasoning_core_result = run_reasoning_core_cycle(db, limit=limit, commit=False)
     event = LearningEvent(
         event_type="blum_model_autonomous_cycle",
         severity="Info",
         title="Blum Financial Model autonomous cycle completed",
-        description="Captured latest reasoning, evaluated matured thesis outcomes and refreshed proprietary training examples.",
+        description="Captured latest reasoning, evaluated matured thesis outcomes, refreshed training examples and updated reasoning calibration.",
         payload={
             "signals_seen": len(signals),
             "knowledge_records_created": captured,
             "signals_skipped": skipped,
             "outcomes": outcome_result,
             "dataset": dataset_result,
+            "reasoning_core": reasoning_core_result,
         },
     )
     db.add(event)
@@ -110,6 +121,7 @@ def run_model_learning_cycle(db: Session, limit: int = 120) -> dict:
         "signals_skipped": skipped,
         "outcomes": outcome_result,
         "dataset": dataset_result,
+        "reasoning_core": reasoning_core_result,
         "learning_event_id": event.id,
         "persistence_backup": backup_result,
         "disclaimer": DISCLAIMER,

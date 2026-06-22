@@ -922,6 +922,96 @@ class BlumRegimeMemory(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
 
 
+class ThesisLifecycleEvent(Base):
+    __tablename__ = "thesis_lifecycle_events"
+    __table_args__ = (
+        Index("ix_thesis_lifecycle_events_ticker_status", "ticker", "new_status"),
+        Index("ix_thesis_lifecycle_events_record_created", "knowledge_record_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    knowledge_record_id: Mapped[int] = mapped_column(ForeignKey("blum_knowledge_records.id", ondelete="CASCADE"), index=True)
+    ticker: Mapped[str] = mapped_column(String(32), index=True)
+    previous_status: Mapped[str] = mapped_column(String(40), default="NEW", index=True)
+    new_status: Mapped[str] = mapped_column(String(40), default="ACTIVE", index=True)
+    status_reason: Mapped[str] = mapped_column(Text, default="")
+    confidence: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    conviction_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    outcome_summary: Mapped[dict] = mapped_column(JsonType, default=dict)
+    evidence_delta: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    knowledge_record = relationship("BlumKnowledgeRecord")
+
+
+class ModelReliabilityMatrix(Base):
+    __tablename__ = "model_reliability_matrix"
+    __table_args__ = (
+        UniqueConstraint("engine_name", "sector", "market_regime", "timeframe", name="uq_model_reliability_context"),
+        Index("ix_model_reliability_matrix_score", "reliability_score"),
+        Index("ix_model_reliability_matrix_engine_updated", "engine_name", "updated_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    engine_name: Mapped[str] = mapped_column(String(100), index=True)
+    sector: Mapped[str] = mapped_column(String(120), default="All", index=True)
+    market_regime: Mapped[str] = mapped_column(String(120), default="All", index=True)
+    timeframe: Mapped[str] = mapped_column(String(40), default="All", index=True)
+    sample_count: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    correct_count: Mapped[int] = mapped_column(Integer, default=0)
+    wrong_count: Mapped[int] = mapped_column(Integer, default=0)
+    neutral_count: Mapped[int] = mapped_column(Integer, default=0)
+    inconclusive_count: Mapped[int] = mapped_column(Integer, default=0)
+    reliability_score: Mapped[float] = mapped_column(Float, default=50.0, index=True)
+    weight_adjustment: Mapped[float] = mapped_column(Float, default=0.0)
+    calibration_error: Mapped[float | None] = mapped_column(Float)
+    evidence: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
+class ConfidenceCalibrationBucket(Base):
+    __tablename__ = "confidence_calibration_buckets"
+    __table_args__ = (
+        UniqueConstraint("bucket_label", name="uq_confidence_calibration_bucket_label"),
+        Index("ix_confidence_calibration_buckets_error", "calibration_error"),
+        Index("ix_confidence_calibration_buckets_updated", "updated_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    bucket_label: Mapped[str] = mapped_column(String(40), unique=True, index=True)
+    min_confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    max_confidence: Mapped[float] = mapped_column(Float, default=100.0)
+    sample_count: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    average_confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    empirical_success_rate: Mapped[float] = mapped_column(Float, default=0.0)
+    calibration_error: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    suggested_adjustment: Mapped[float] = mapped_column(Float, default=0.0)
+    evidence: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
+class MetaLearningEvent(Base):
+    __tablename__ = "meta_learning_events"
+    __table_args__ = (
+        Index("ix_meta_learning_events_type_created", "event_type", "created_at"),
+        Index("ix_meta_learning_events_engine_status", "engine_name", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    event_type: Mapped[str] = mapped_column(String(100), index=True)
+    engine_name: Mapped[str | None] = mapped_column(String(100), index=True)
+    ticker: Mapped[str | None] = mapped_column(String(32), index=True)
+    severity: Mapped[str] = mapped_column(String(40), default="Info", index=True)
+    lesson: Mapped[str] = mapped_column(Text, default="")
+    root_cause: Mapped[str] = mapped_column(String(160), default="", index=True)
+    proposed_change: Mapped[dict] = mapped_column(JsonType, default=dict)
+    trigger_payload: Mapped[dict] = mapped_column(JsonType, default=dict)
+    status: Mapped[str] = mapped_column(String(40), default="open", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
 class BlumKnowledgeGraphNode(Base):
     __tablename__ = "blum_knowledge_graph_nodes"
     __table_args__ = (UniqueConstraint("canonical_key", name="uq_blum_graph_node_key"),)

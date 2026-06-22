@@ -422,6 +422,10 @@ New persistence tables include:
 - `blum_self_critiques`
 - `blum_narrative_memory`
 - `blum_regime_memory`
+- `thesis_lifecycle_events`
+- `model_reliability_matrix`
+- `confidence_calibration_buckets`
+- `meta_learning_events`
 - `blum_knowledge_graph_nodes`
 - `blum_knowledge_graph_edges`
 - `blum_dataset_exports`
@@ -446,12 +450,28 @@ The reasoning model APIs are backend-only:
 - `GET /model/narratives`
 - `GET /model/regimes`
 - `GET /model/graph`
+- `GET /model/reasoning-core/status`
+- `POST /model/reasoning-core/run`
+- `GET /model/thesis-lifecycle`
+- `GET /model/reliability-matrix`
+- `GET /model/confidence-calibration`
+- `GET /model/meta-learning`
 
 Training export uses JSONL and targets future Hugging Face training workflows for Qwen, Llama or Mistral with LoRA, full fine-tuning, DPO or preference learning. The Space only creates dataset and job-plan records; it does not launch fine-tuning automatically.
 
 The objective is not to predict stock prices. The objective is to learn how Blum reasons: explain, contextualize, compare, critique, calibrate confidence and improve future thesis quality.
 
-The autonomous Blum Financial Model cycle is server-side and evidence-bound. When `BLUM_ENABLE_LEARNING_LOOP=true`, it runs on startup, during market refresh and on its own interval controlled by `BLUM_MODEL_CYCLE_MINUTES` and `BLUM_MODEL_CYCLE_LIMIT`. Each cycle captures recent signal reasoning, evaluates matured thesis outcomes, refreshes training examples and logs a `blum_model_autonomous_cycle` learning event. It updates database memory only; it does not self-modify source code and it does not execute trades.
+The autonomous Blum Financial Model cycle is server-side and evidence-bound. When `BLUM_ENABLE_LEARNING_LOOP=true`, it runs on startup, during market refresh and on its own interval controlled by `BLUM_MODEL_CYCLE_MINUTES` and `BLUM_MODEL_CYCLE_LIMIT`. Each cycle captures recent signal reasoning, evaluates matured thesis outcomes, refreshes training examples and logs a `blum_model_autonomous_cycle` learning event.
+
+The **Reasoning Core** extends this cycle from static score memory to thesis memory:
+
+- every thesis receives a lifecycle status: `ACTIVE`, `STRENGTHENING`, `WEAKENING`, `INVALIDATED` or `COMPLETED`;
+- the self-critique process is preserved as Analyst, Skeptic, Historian and Judge views;
+- model reliability is measured by engine, sector, market regime and horizon;
+- confidence is calibrated in historical buckets so 70% confidence can be compared with realized thesis outcomes;
+- meta-learning events explain repeated reasoning errors, overconfidence, underconfidence and engine reliability changes.
+
+It updates database memory only; it does not self-modify source code, it does not execute trades and it does not claim guaranteed market outperformance.
 
 ## Autonomous Research Engine
 

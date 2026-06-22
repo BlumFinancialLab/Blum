@@ -34,6 +34,7 @@ from app.models import (
     ChartPatternMemory,
     ChatMessage,
     ChatSession,
+    ConfidenceCalibrationBucket,
     ConfidenceAdjustment,
     EmbeddingVector,
     ExternalDatasetSource,
@@ -49,6 +50,7 @@ from app.models import (
     MistakeAnalysis,
     ModelWeightVersion,
     ModelVersion,
+    ModelReliabilityMatrix,
     NewsArticle,
     NewsAssetLink,
     PortfolioScenario,
@@ -73,6 +75,8 @@ from app.models import (
     TradingGameEquityCurve,
     TradingGameFailure,
     TradingGameTrade,
+    MetaLearningEvent,
+    ThesisLifecycleEvent,
     WatchlistItem,
 )
 from app.schemas import AssetOut, FinancialChatRequest, MarketUpdateRequest, NewsOut, NewsUpdateRequest, SemanticSearchRequest, SignalRunRequest
@@ -127,6 +131,14 @@ from app.services.market_sniper import MarketSniperEngine
 from app.services.persistence import backup_embedded_postgres_if_configured, database_persistence_status
 from app.services.pipeline import PipelineService
 from app.services.realtime import realtime_status
+from app.services.reasoning_core import (
+    confidence_calibration_overview,
+    meta_learning_event_list,
+    model_reliability_overview,
+    reasoning_core_status,
+    run_reasoning_core_cycle,
+    thesis_lifecycle_records,
+)
 from app.services.semantic import SemanticService
 from app.services.stock import stock_radar, update_stock_radar
 from app.services.strategic_intelligence import (
@@ -230,6 +242,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "proprietary_blum_financial_model": True,
             "reasoning_dataset_export": True,
             "financial_knowledge_graph": True,
+            "reasoning_core_lifecycle_calibration": True,
             "portfolio_scenario": True,
             "watchlist": True,
             "multilingual_financial_chat": True,
@@ -288,6 +301,10 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "blum_self_critiques": int(db.scalar(select(func.count(BlumSelfCritique.id))) or 0),
             "blum_narrative_memory": int(db.scalar(select(func.count(BlumNarrativeMemory.id))) or 0),
             "blum_regime_memory": int(db.scalar(select(func.count(BlumRegimeMemory.id))) or 0),
+            "thesis_lifecycle_events": int(db.scalar(select(func.count(ThesisLifecycleEvent.id))) or 0),
+            "model_reliability_matrix": int(db.scalar(select(func.count(ModelReliabilityMatrix.id))) or 0),
+            "confidence_calibration_buckets": int(db.scalar(select(func.count(ConfidenceCalibrationBucket.id))) or 0),
+            "meta_learning_events": int(db.scalar(select(func.count(MetaLearningEvent.id))) or 0),
             "blum_graph_nodes": int(db.scalar(select(func.count(BlumKnowledgeGraphNode.id))) or 0),
             "blum_graph_edges": int(db.scalar(select(func.count(BlumKnowledgeGraphEdge.id))) or 0),
             "blum_dataset_exports": int(db.scalar(select(func.count(BlumDatasetExport.id))) or 0),
@@ -302,7 +319,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "Hugging Face serves the previous image until the Docker build finishes successfully.",
             "The finance-domain 7B model is disabled by default unless BLUM_ENABLE_FINANCIAL_BRAIN_MODEL=true.",
             "Existing snapshots are refreshed by the autonomous engine after a successful deployment.",
-            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.11.0.",
+            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.12.0.",
         ],
     }
 
@@ -666,6 +683,50 @@ def blum_model_regimes(limit: int = Query(default=80, ge=1, le=500), db: Session
 @router.get("/model/graph")
 def blum_model_graph(limit: int = Query(default=160, ge=10, le=1000), db: Session = Depends(get_db)) -> dict:
     return graph_snapshot(db, limit=limit)
+
+
+@router.get("/model/reasoning-core/status")
+def blum_reasoning_core_status(db: Session = Depends(get_db)) -> dict:
+    return reasoning_core_status(db)
+
+
+@router.post("/model/reasoning-core/run")
+def blum_reasoning_core_run(limit: int = Query(default=250, ge=1, le=3000), db: Session = Depends(get_db)) -> dict:
+    return run_reasoning_core_cycle(db, limit=limit)
+
+
+@router.get("/model/thesis-lifecycle")
+def blum_thesis_lifecycle(
+    ticker: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    limit: int = Query(default=80, ge=1, le=500),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    return thesis_lifecycle_records(db, ticker=ticker, status=status, limit=limit)
+
+
+@router.get("/model/reliability-matrix")
+def blum_model_reliability_matrix(
+    engine_name: str | None = Query(default=None),
+    limit: int = Query(default=80, ge=1, le=500),
+    order: str = Query(default="desc", pattern="^(asc|desc)$"),
+    db: Session = Depends(get_db),
+) -> dict:
+    return model_reliability_overview(db, engine_name=engine_name, limit=limit, order=order)
+
+
+@router.get("/model/confidence-calibration")
+def blum_confidence_calibration(db: Session = Depends(get_db)) -> dict:
+    return confidence_calibration_overview(db)
+
+
+@router.get("/model/meta-learning")
+def blum_meta_learning_events(
+    limit: int = Query(default=80, ge=1, le=500),
+    status: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    return meta_learning_event_list(db, limit=limit, status=status)
 
 
 @router.post("/chart/analyze-image")
