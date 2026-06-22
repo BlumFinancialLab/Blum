@@ -36,6 +36,7 @@ This is not a consumer trading app and not a simple dashboard. The project is a 
 | Financial Brain | finance-domain open model adapter, default `AdaptLLM/finance-chat` when enabled |
 | BLUM Learning Loop | point-in-time historical simulation lab, outcome evaluation, mistake taxonomy, adaptive signal reliability and strategy memory |
 | Market Sniper Engine | market regime detection, setup classification, conditional entry/exit planning, no-trade filtering, execution simulation and R-multiple learning |
+| Reproducible Trading Game | 100 EUR paper bankroll, position sizing, P/L learning, benchmark comparison, risk of ruin and capital management lessons |
 | Time-series intelligence | statistical fallback compatible with future Chronos, TimesFM or PatchTST adapters |
 | Deployment | Hugging Face Docker Space |
 
@@ -80,7 +81,8 @@ Blum does not use one generic AI model for everything.
 23. Hide future prices during prediction generation, then reveal future OHLCV only during outcome evaluation.
 24. Classify mistakes, update strategy memory, recalibrate signal reliability and persist reversible model-weight versions.
 25. Convert prediction memory into execution-quality R-multiple learning through the Market Sniper Engine.
-26. Produce AI explanations using only retrieved evidence.
+26. Run the Reproducible Trading Game with 100 EUR paper capital, risk-managed sizing, P/L tracking and benchmark comparison.
+27. Produce AI explanations using only retrieved evidence.
 
 ## Live Runtime
 
@@ -342,6 +344,59 @@ Guardrails:
 - no real-time claim without timestamp;
 - R-multiple expectancy is preferred over raw win rate;
 - insufficient samples lower reliability.
+
+## Reproducible Trading Game
+
+The **Reproducible Trading Game** turns Sniper and Learning Loop evidence into paper P/L learning. It starts with a virtual 100 EUR bankroll and evaluates whether BLUM's setups are repeatable, risk-managed and benchmark-aware. It is not an execution bot and it never claims guaranteed market outperformance.
+
+Core modules:
+
+- `TradingKnowledgeBase`: structured rules for market structure, technical analysis, professional setups, risk management, performance metrics and behavioral filters.
+- `ReproducibleTradePlanEngine`: converts Sniper candidates into reproducible plans with entry condition, confirmation, invalidation, stop, target, holding period, no-trade conditions and data timestamp.
+- `CapitalManagementEngine`: applies fixed-fractional, volatility/reproducibility/drawdown-adjusted sizing. Default risk is 1% and capped at 2%.
+- `TradingGameSimulator`: consumes point-in-time execution simulations, applies realistic R-multiple P/L, tracks equity, drawdown, benchmark comparison, failure modes and capital lessons.
+
+The simulator explicitly rejects or penalizes low-reproducibility logic:
+
+- no 10-second scalping;
+- no tick-level, latency-arbitrage or HFT assumptions;
+- no trade without invalidation;
+- no trade without position sizing;
+- no full-capital risk;
+- no benchmark outperformance claim from a small sample.
+
+New persistence tables:
+
+- `trading_games`
+- `trading_game_trades`
+- `trading_game_equity_curve`
+- `trading_game_failures`
+- `capital_management_lessons`
+
+API endpoints:
+
+- `GET /api/trading-game/status`
+- `POST /api/trading-game/run`
+- `POST /api/trading-game/reset`
+- `GET /api/trading-game/equity`
+- `GET /api/trading-game/trades`
+- `GET /api/trading-game/failures`
+- `GET /api/trading-game/lessons`
+- `GET /api/trading-game/benchmark`
+- `GET /api/trading-game/reproducibility`
+
+Configuration:
+
+- `TRADING_MIN_TIMEFRAME=4h`
+- `TRADING_DEFAULT_TIMEFRAME=daily`
+- `TRADING_ALLOW_MICROSCALPING=false`
+- `TRADING_REQUIRE_REPRODUCIBLE_SETUP=true`
+- `TRADING_GAME_INITIAL_CAPITAL=100`
+- `TRADING_GAME_DEFAULT_RISK_PERCENT=1`
+- `TRADING_GAME_MAX_RISK_PERCENT=2`
+- `TRADING_GAME_BENCHMARK=SPY`
+
+The Learning Loop dashboard shows current game capital, equity curve, benchmark equity curve, recent trade decisions, expectancy, profit factor, drawdown, risk of ruin, reproducibility score and capital management lessons.
 
 ## Blum Financial Model
 

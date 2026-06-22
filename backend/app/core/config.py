@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     app_name: str = "Blum AI Financial Intelligence"
-    app_version: str = "0.10.0"
+    app_version: str = "0.11.0"
     environment: str = Field(default="demo", alias="ENVIRONMENT")
     database_url: str = Field(
         default="postgresql+psycopg2://postgres:postgres@127.0.0.1:5432/blum",
@@ -66,6 +66,16 @@ class Settings(BaseSettings):
     enable_hf_dataset_catalog: bool = Field(default=True, alias="BLUM_ENABLE_HF_DATASET_CATALOG")
     hf_dataset_refresh_hours: int = Field(default=24, alias="BLUM_HF_DATASET_REFRESH_HOURS")
     hf_dataset_max_sources: int = Field(default=40, alias="BLUM_HF_DATASET_MAX_SOURCES")
+    trading_min_timeframe: str = Field(default="4h", alias="TRADING_MIN_TIMEFRAME")
+    trading_default_timeframe: str = Field(default="daily", alias="TRADING_DEFAULT_TIMEFRAME")
+    trading_allow_microscalping: bool = Field(default=False, alias="TRADING_ALLOW_MICROSCALPING")
+    trading_require_reproducible_setup: bool = Field(default=True, alias="TRADING_REQUIRE_REPRODUCIBLE_SETUP")
+    trading_game_enabled: bool = Field(default=True, alias="TRADING_GAME_ENABLED")
+    trading_game_initial_capital: float = Field(default=100.0, alias="TRADING_GAME_INITIAL_CAPITAL")
+    trading_game_batch_size: int = Field(default=60, alias="TRADING_GAME_BATCH_SIZE")
+    trading_game_max_risk_percent: float = Field(default=2.0, alias="TRADING_GAME_MAX_RISK_PERCENT")
+    trading_game_default_risk_percent: float = Field(default=1.0, alias="TRADING_GAME_DEFAULT_RISK_PERCENT")
+    trading_game_benchmark: str = Field(default="SPY", alias="TRADING_GAME_BENCHMARK")
 
     class Config:
         env_file = ".env"

@@ -848,6 +848,9 @@ class LearningDashboardService:
     def dashboard(self, db: Session) -> dict:
         latest_run = db.scalar(select(LearningRun).order_by(desc(LearningRun.started_at)).limit(1))
         metrics = self.aggregate_metrics(db)
+        from app.services.trading_game import TradingGameSimulator
+
+        trading_game = TradingGameSimulator().status(db)
         return {
             "status": "active" if settings.enable_learning_loop else "passive",
             "configuration": {
@@ -863,6 +866,7 @@ class LearningDashboardService:
             "strategy_memory": self.strategy_memory(db),
             "mistakes": self.mistake_summary(db),
             "model_versions": [serialize_model_version(row) for row in db.scalars(select(ModelVersion).order_by(desc(ModelVersion.created_at)).limit(8)).all()],
+            "trading_game": trading_game,
             "policy": "BLUM Learning Loop optimizes calibration and robustness, not artificial 100% winrate.",
         }
 

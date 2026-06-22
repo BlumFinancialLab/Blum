@@ -13,24 +13,41 @@ export default function LearningPage() {
   const [runs, setRuns] = useState<any[]>([]);
   const [predictions, setPredictions] = useState<any[]>([]);
   const [memory, setMemory] = useState<any | null>(null);
+  const [trading, setTrading] = useState<any | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
     let mounted = true;
     async function load() {
       setError("");
-      const [dashResult, runsResult, predictionsResult, memoryResult] = await Promise.allSettled([
+      const [dashResult, runsResult, predictionsResult, memoryResult, tradingStatusResult, equityResult, tradesResult, failuresResult, lessonsResult, benchmarkResult, reproducibilityResult] = await Promise.allSettled([
         api.learningDashboard(),
         api.learningRuns(20),
         api.learningPredictions(36),
-        api.learningMemory(32)
+        api.learningMemory(32),
+        api.tradingGameStatus(),
+        api.tradingGameEquity(240),
+        api.tradingGameTrades(80),
+        api.tradingGameFailures(24),
+        api.tradingGameLessons(24),
+        api.tradingGameBenchmark(),
+        api.tradingGameReproducibility(160)
       ] as const);
       if (!mounted) return;
       if (dashResult.status === "fulfilled") setDashboard(dashResult.value);
       if (runsResult.status === "fulfilled") setRuns(runsResult.value);
       if (predictionsResult.status === "fulfilled") setPredictions(predictionsResult.value);
       if (memoryResult.status === "fulfilled") setMemory(memoryResult.value);
-      const failed = [dashResult, runsResult, predictionsResult, memoryResult].find(isRejected);
+      setTrading({
+        status: tradingStatusResult.status === "fulfilled" ? tradingStatusResult.value : null,
+        equity: equityResult.status === "fulfilled" ? equityResult.value : [],
+        trades: tradesResult.status === "fulfilled" ? tradesResult.value : [],
+        failures: failuresResult.status === "fulfilled" ? failuresResult.value : [],
+        lessons: lessonsResult.status === "fulfilled" ? lessonsResult.value : [],
+        benchmark: benchmarkResult.status === "fulfilled" ? benchmarkResult.value : null,
+        reproducibility: reproducibilityResult.status === "fulfilled" ? reproducibilityResult.value : null
+      });
+      const failed = [dashResult, runsResult, predictionsResult, memoryResult, tradingStatusResult].find(isRejected);
       if (failed) setError((failed.reason as Error).message);
     }
     load();
@@ -47,6 +64,12 @@ export default function LearningPage() {
   const strategyRows = memory?.strategy_memory ?? dashboard?.strategy_memory ?? [];
   const mistakeRows = memory?.mistakes ?? dashboard?.mistakes ?? [];
   const latestRun = dashboard?.latest_run;
+  const game = trading?.status?.current_game ?? dashboard?.trading_game?.current_game;
+  const equityRows = trading?.equity ?? [];
+  const gameTrades = trading?.trades ?? [];
+  const tradingLessons = trading?.lessons ?? [];
+  const tradingBenchmark = trading?.benchmark ?? {};
+  const reproducibility = trading?.reproducibility ?? {};
 
   const accuracyChart = useMemo(() => {
     const labels = ["short", "mid", "long"];
@@ -57,6 +80,14 @@ export default function LearningPage() {
       marker: { color: ["#55aaff", "#20e070", "#ffb000"] }
     }];
   }, [byTimeframe]);
+
+  const equityChart = useMemo(() => {
+    const x = equityRows.map((row: any) => row.equity_date || row.created_at);
+    return [
+      { x, y: equityRows.map((row: any) => row.equity), type: "scatter", mode: "lines", name: "BLUM", line: { color: "#ffb000", width: 3 } },
+      { x, y: equityRows.map((row: any) => row.benchmark_equity), type: "scatter", mode: "lines", name: "Benchmark", line: { color: "#55aaff", width: 2 } }
+    ];
+  }, [equityRows]);
 
   if (error && !dashboard) return <div className="empty-state">API error: {error}</div>;
   if (!dashboard) return <LoadingState label="Loading BLUM Learning Loop" />;
@@ -80,6 +111,70 @@ export default function LearningPage() {
         <LearningMetric icon={<Gauge size={18} />} label="Short Accuracy" value={formatPct(byTimeframe.short?.accuracy)} subvalue="5-20 trading days" />
         <LearningMetric icon={<LineChart size={18} />} label="Mid Accuracy" value={formatPct(byTimeframe.mid?.accuracy)} subvalue="1-3 months" />
         <LearningMetric icon={<AlertTriangle size={18} />} label="Calibration Error" value={formatNumber(metrics.confidence_calibration?.mean_absolute_error)} subvalue={metrics.confidence_calibration?.status ?? "insufficient sample"} />
+      </section>
+
+      <section className="grid-2" style={{ marginTop: 12 }}>
+        <PlotPanel
+          title="Trading Game Equity Curve"
+          data={equityChart as any}
+          layout={{ yaxis: { title: "Capital EUR" }, xaxis: { title: "Simulation date" } }}
+        />
+        <div className="panel">
+          <div className="panel-head">
+            <span>Paper P/L and capital discipline</span>
+            <strong>{game?.status ?? "No game"}</strong>
+          </div>
+          {game ? (
+            <div className="brain-list dense">
+              <div className="evidence-grid">
+                <SmallDatum label="Capital" value={formatCurrency(game.current_capital)} />
+                <SmallDatum label="Realized P/L" value={formatCurrency(game.realized_pl)} />
+                <SmallDatum label="Max Drawdown" value={`${formatNumber(game.max_drawdown)}%`} />
+                <SmallDatum label="Expectancy" value={`${formatNumber(game.expectancy_r)}R`} />
+                <SmallDatum label="Profit Factor" value={formatNumber(game.profit_factor)} />
+                <SmallDatum label="Risk of Ruin" value={`${formatNumber(game.risk_of_ruin)}%`} />
+                <SmallDatum label="Benchmark Alpha" value={`${formatNumber(tradingBenchmark?.alpha)}%`} />
+                <SmallDatum label="Reproducibility" value={`${formatNumber(reproducibility?.average_reproducibility)}/100`} />
+              </div>
+              <p>BLUM starts each paper game at 100 EUR, risks fractionally, rejects non-reproducible setups and compares the equity curve against {tradingBenchmark?.benchmark ?? game.benchmark_ticker}. Small samples never qualify as proof of outperformance.</p>
+            </div>
+          ) : (
+            <div className="empty-state">No trading game has been created yet. The autonomous engine will start it after Sniper simulations are available.</div>
+          )}
+        </div>
+      </section>
+
+      <section className="grid-2" style={{ marginTop: 12 }}>
+        <div className="panel">
+          <div className="panel-head"><span>Recent reproducible trade decisions</span><strong>{gameTrades.length}</strong></div>
+          <div className="learning-table">
+            <div className="learning-row head"><span>Ticker</span><span>Setup</span><span>Decision</span><span>R</span><span>P/L</span><span>Capital</span></div>
+            {gameTrades.slice(0, 12).map((row: any) => (
+              <div className="learning-row" key={row.id}>
+                <strong>{row.ticker}</strong>
+                <span>{String(row.setup_type).replaceAll("_", " ")}</span>
+                <span>{String(row.decision_state).replaceAll("_", " ")}</span>
+                <span className={Number(row.realized_r_multiple) >= 0 ? "positive-text" : "negative-text"}>{formatNumber(row.realized_r_multiple)}</span>
+                <span className={Number(row.realized_pl) >= 0 ? "positive-text" : "negative-text"}>{formatCurrency(row.realized_pl)}</span>
+                <span>{formatCurrency(row.capital_after)}</span>
+              </div>
+            ))}
+            {gameTrades.length === 0 && <div className="empty-state">No P/L decisions yet. BLUM needs stored execution simulations before the game can score trades.</div>}
+          </div>
+        </div>
+        <div className="panel">
+          <div className="panel-head"><span>Capital management lessons</span><strong>{tradingLessons.length}</strong></div>
+          <div className="brain-list dense">
+            {tradingLessons.slice(0, 8).map((row: any) => (
+              <div key={row.id}>
+                <StatusBadge label={String(row.category).replaceAll("_", " ")} />
+                <strong>{row.lesson}</strong>
+                <p>Reliability {formatNumber(row.reliability_score)}/100 | samples {row.sample_count}</p>
+              </div>
+            ))}
+            {tradingLessons.length === 0 && <div className="empty-state">No capital management lessons yet.</div>}
+          </div>
+        </div>
       </section>
 
       <section className="grid-2" style={{ marginTop: 12 }}>
@@ -229,6 +324,11 @@ function percentToNumber(value: any) {
 function formatNumber(value: any) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return "n/a";
   return Number(value).toFixed(2);
+}
+
+function formatCurrency(value: any) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "n/a";
+  return `${Number(value).toFixed(2)} EUR`;
 }
 
 function formatTime(value: string | null | undefined) {

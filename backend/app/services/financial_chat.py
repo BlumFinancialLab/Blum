@@ -24,6 +24,7 @@ from app.services.semantic import SemanticService
 from app.services.strategic_intelligence import community_sentiment, market_narrative, opportunity_radar
 from app.services.dashboard import signal_payload
 from app.services.technical_analysis_engine import TechnicalAnalysisEngine
+from app.services.trading_game import TradingGameSimulator
 
 
 DISCLAIMER = "Analisi informativa, non consulenza finanziaria. I livelli sono tecnici e probabilistici, non garanzie."
@@ -285,6 +286,7 @@ def financial_chat_response(
     memory_hits = BlumTrainingMemoryService().semantic_memory(db, message, limit=6)
     learning_loop_context = LearningDashboardService().chat_memory(db, message, assets[:5], limit=8)
     sniper_context = sniper_context_for_assets(db, assets[:5])
+    trading_game_context = trading_game_context_for_chat(db)
     semantic_hits = SemanticService().search(db, message, limit=8) if include_semantic_search else []
     asset_packets = dedupe_context_blocks([asset_context(db, asset) for asset in assets[:12]])
     validation = validate_asset_contexts(intent, entities, asset_packets, detected_language)
@@ -319,6 +321,7 @@ def financial_chat_response(
         memory_hits=memory_hits,
         learning_loop_context=learning_loop_context,
         sniper_context=sniper_context,
+        trading_game_context=trading_game_context,
         horizon=horizon,
         risk_profile=risk_profile,
     )
@@ -342,6 +345,7 @@ def financial_chat_response(
         "training_memory": memory_hits,
         "learning_loop_context": learning_loop_context,
         "sniper_context": sniper_context if is_debug_mode(mode) else {"top": sniper_context[:3], "policy": "Detailed sniper diagnostics are available in debug mode."},
+        "trading_game_context": trading_game_context,
         "rag_pipeline": rag_pipeline(detected_language, intent),
         "sources_used": sources_used(asset_packets, semantic_hits, memory_hits, narrative, sentiment, learning_loop_context),
         "context_coverage": context_coverage(asset_packets, semantic_hits, memory_hits, learning_loop_context),
@@ -430,6 +434,22 @@ def sniper_context_for_assets(db: Session, assets: list[Asset], limit: int = 5) 
         except Exception as exc:
             output.append({"ticker": asset.ticker, "status": "unavailable", "error": f"{type(exc).__name__}: {exc}"})
     return output
+
+
+def trading_game_context_for_chat(db: Session) -> dict:
+    engine = TradingGameSimulator()
+    try:
+        return {
+            "status": engine.status(db),
+            "benchmark": engine.benchmark(db),
+            "equity": engine.equity(db, limit=80),
+            "trades": engine.trades(db, limit=40),
+            "failures": engine.failures(db, limit=12),
+            "lessons": engine.lessons(db, limit=12),
+            "reproducibility": engine.reproducibility(db, limit=120),
+        }
+    except Exception as exc:
+        return {"status": {"status": "unavailable", "error": f"{type(exc).__name__}: {exc}"}, "policy": "Trading Game context is unavailable; do not invent P/L."}
 
 
 def resolve_entities(db: Session, message: str, tickers: list[str] | None = None) -> list[ChatEntity]:
@@ -893,9 +913,12 @@ def build_answer(
     memory_hits: list[dict],
     learning_loop_context: dict,
     sniper_context: list[dict],
+    trading_game_context: dict,
     horizon: str,
     risk_profile: str,
 ) -> dict:
+    if intent == "trading_game":
+        return build_trading_game_response(language, trading_game_context)
     if intent == "market_sniper":
         return build_market_sniper_response(language, sniper_context, candidates, validation)
     if intent == "technical_analysis" and len(candidates) == 1:
@@ -1297,6 +1320,144 @@ def build_market_sniper_response(language: str, sniper_context: list[dict], cand
     }
 
 
+def build_trading_game_response(language: str, context: dict) -> dict:
+    labels = LABELS[language]
+    status = context.get("status") or {}
+    game = status.get("current_game") or {}
+    benchmark = context.get("benchmark") or {}
+    reproducibility = context.get("reproducibility") or {}
+    lessons = context.get("lessons") or []
+    failures = context.get("failures") or []
+    trades = context.get("trades") or []
+    if not game:
+        message = "BLUM non ha ancora un Trading Game persistito. Serve almeno un ciclo Sniper/Learning Loop per creare simulazioni P/L reali." if language == "it" else "BLUM does not have a persisted Trading Game yet. It needs at least one Sniper/Learning Loop cycle to create real P/L simulations."
+        return build_error_response(language, message, [])
+
+    sample_warning = game.get("trade_count", 0) < 30
+    if language == "it":
+        summary = f"Il Trading Game e a {format_money(game.get('current_capital'))} da un capitale iniziale di {format_money(game.get('starting_capital'))}. P/L realizzato: {format_money(game.get('realized_pl'))}."
+        if benchmark.get("alpha") is not None:
+            summary += f" Alpha vs {benchmark.get('benchmark')}: {format_signed(benchmark.get('alpha'))}%."
+        sections = [
+            {"key": "summary", "title": "Sintesi", "bullets": [summary, "Questo e paper P/L learning: misura robustezza, drawdown e riproducibilita, non promette performance."]},
+            {"key": "performance", "title": "Performance", "bullets": [
+                f"Trade totali: {game.get('trade_count')}",
+                f"Win rate: {format_pct(game.get('win_rate'))}",
+                f"Expectancy: {format_number(game.get('expectancy_r'))}R",
+                f"Profit factor: {format_number(game.get('profit_factor'))}",
+                f"Max drawdown: {format_signed(game.get('max_drawdown'))}%",
+                f"Risk of ruin stimato: {format_pct_decimal(game.get('risk_of_ruin'))}",
+            ]},
+            {"key": "benchmark", "title": "Benchmark", "bullets": [
+                f"BLUM return: {format_signed(benchmark.get('game_return'))}%",
+                f"{benchmark.get('benchmark') or game.get('benchmark_ticker')} return: {format_signed(benchmark.get('benchmark_return'))}%",
+                "Nessuna dichiarazione di outperformance e valida se il campione e piccolo o incompleto.",
+            ]},
+            {"key": "reproducibility", "title": "Riproducibilita", "bullets": [
+                f"Score medio: {format_number(reproducibility.get('average_reproducibility'))}/100",
+                f"Distribuzione: {reproducibility.get('distribution') or {}}",
+                f"Decisioni rifiutate o in wait: {reproducibility.get('rejected_or_waited', 0)}",
+            ]},
+            {"key": "lessons", "title": "Cosa ha imparato", "bullets": [row.get("lesson") for row in lessons[:4]] or ["Non ci sono ancora lezioni statisticamente robuste."]},
+            {"key": "risk", "title": "Rischi e limiti", "bullets": [
+                "Il sistema evita microscalping, fill impossibili e rischio pieno sul capitale.",
+                "Riduce size dopo losing streak, bassa riproducibilita o regime ostile.",
+                "Campione piccolo: conclusioni forti sono bloccate." if sample_warning else "Campione in crescita: continua la validazione walk-forward.",
+            ]},
+        ]
+    else:
+        summary = f"The Trading Game is at {format_money(game.get('current_capital'))} from {format_money(game.get('starting_capital'))} starting capital. Realized P/L: {format_money(game.get('realized_pl'))}."
+        if benchmark.get("alpha") is not None:
+            summary += f" Alpha vs {benchmark.get('benchmark')}: {format_signed(benchmark.get('alpha'))}%."
+        sections = [
+            {"key": "summary", "title": "Summary", "bullets": [summary, "This is paper P/L learning: it measures robustness, drawdown and reproducibility, not guaranteed performance."]},
+            {"key": "performance", "title": "Performance", "bullets": [
+                f"Total trades: {game.get('trade_count')}",
+                f"Win rate: {format_pct(game.get('win_rate'))}",
+                f"Expectancy: {format_number(game.get('expectancy_r'))}R",
+                f"Profit factor: {format_number(game.get('profit_factor'))}",
+                f"Max drawdown: {format_signed(game.get('max_drawdown'))}%",
+                f"Estimated risk of ruin: {format_pct_decimal(game.get('risk_of_ruin'))}",
+            ]},
+            {"key": "benchmark", "title": "Benchmark", "bullets": [
+                f"BLUM return: {format_signed(benchmark.get('game_return'))}%",
+                f"{benchmark.get('benchmark') or game.get('benchmark_ticker')} return: {format_signed(benchmark.get('benchmark_return'))}%",
+                "No outperformance claim is valid when sample size or benchmark coverage is insufficient.",
+            ]},
+            {"key": "reproducibility", "title": "Reproducibility", "bullets": [
+                f"Average score: {format_number(reproducibility.get('average_reproducibility'))}/100",
+                f"Distribution: {reproducibility.get('distribution') or {}}",
+                f"Rejected or wait decisions: {reproducibility.get('rejected_or_waited', 0)}",
+            ]},
+            {"key": "lessons", "title": "What BLUM Learned", "bullets": [row.get("lesson") for row in lessons[:4]] or ["No statistically robust capital lesson yet."]},
+            {"key": "risk", "title": "Risks and Limits", "bullets": [
+                "The system rejects microscalping, impossible fills and full-capital risk.",
+                "It reduces size after losing streaks, low reproducibility or hostile regimes.",
+                "Small sample: strong conclusions are blocked." if sample_warning else "Growing sample: walk-forward validation continues.",
+            ]},
+        ]
+    if failures:
+        latest_failure = failures[0].get("report") or {}
+        title = "Peggior errore recente" if language == "it" else "Recent Worst Error"
+        sections.insert(-1, {"key": "failure", "title": title, "bullets": [f"{latest_failure.get('primary_category', failures[0].get('category'))}: {latest_failure.get('lesson', 'No lesson recorded yet.')}"]})
+    sections = dedupe_response_sections(sections)
+    return {
+        "response_style": "trading_game",
+        "composed_response": render_sections(sections, labels["disclaimer"]),
+        "standard_sections": sections,
+        "executive_view": summary,
+        "risk_reward_view": f"Expectancy {format_number(game.get('expectancy_r'))}R, drawdown {format_signed(game.get('max_drawdown'))}%.",
+        "data_quality": {"sample_warning": sample_warning, "trades": game.get("trade_count"), "reproducibility": reproducibility},
+        "learning_loop_memory": {"trading_game": game, "lessons": lessons[:6], "latest_trades": trades[:6]},
+        "answer_to_user": summary,
+    }
+
+
+def format_money(value: object) -> str:
+    numeric = nullable_float(value)
+    if numeric is None:
+        return "n/a"
+    return f"{numeric:.2f} EUR"
+
+
+def format_signed(value: object) -> str:
+    numeric = nullable_float(value)
+    if numeric is None:
+        return "n/a"
+    return f"{numeric:+.2f}"
+
+
+def format_number(value: object) -> str:
+    numeric = nullable_float(value)
+    if numeric is None:
+        return "n/a"
+    return f"{numeric:.2f}"
+
+
+def format_pct(value: object) -> str:
+    numeric = nullable_float(value)
+    if numeric is None:
+        return "n/a"
+    return f"{numeric * 100:.1f}%"
+
+
+def format_pct_decimal(value: object) -> str:
+    numeric = nullable_float(value)
+    if numeric is None:
+        return "n/a"
+    return f"{numeric:.1f}%"
+
+
+def nullable_float(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+        return numeric if math.isfinite(numeric) else None
+    except (TypeError, ValueError):
+        return None
+
+
 def response_contract(
     composed: str,
     sections: list[dict],
@@ -1376,6 +1537,7 @@ def compact_chat_payload(payload: dict) -> dict:
             "market_sniper_mode": answer.get("market_sniper_mode"),
             "data_quality": answer.get("data_quality"),
             "learning_loop_memory": answer.get("learning_loop_memory"),
+            "trading_game_context": payload.get("trading_game_context", {}),
             "risk_reward_view": answer.get("risk_reward_view"),
             "what_to_monitor": answer.get("what_to_monitor", []),
             "learning_loop_view": answer.get("learning_loop_view", []),
@@ -1476,6 +1638,7 @@ def public_chat_payload(payload: dict) -> dict:
         "semantic_evidence": [] if lightweight else [summarize_semantic_hit(item) for item in payload.get("semantic_evidence", [])[:6]],
         "training_memory": [] if lightweight else summarize_training_memory(payload.get("training_memory", [])[:3]),
         "learning_loop_context": summarize_learning_loop_context(payload.get("learning_loop_context", {})),
+        "trading_game_context": summarize_trading_game_context(payload.get("trading_game_context", {})),
         "sources_used": payload.get("sources_used", []),
         "context_coverage": payload.get("context_coverage", {}),
         "suggested_followups": payload.get("suggested_followups", []),
@@ -1512,6 +1675,25 @@ def public_answer_payload(answer: dict, lightweight: bool) -> dict:
         }
     )
     return base
+
+
+def summarize_trading_game_context(context: dict) -> dict:
+    status = (context or {}).get("status") or {}
+    game = status.get("current_game") or {}
+    benchmark = (context or {}).get("benchmark") or {}
+    reproducibility = (context or {}).get("reproducibility") or {}
+    return {
+        "current_game": {
+            "status": game.get("status"),
+            "current_capital": game.get("current_capital"),
+            "starting_capital": game.get("starting_capital"),
+            "trade_count": game.get("trade_count"),
+            "expectancy_r": game.get("expectancy_r"),
+            "max_drawdown": game.get("max_drawdown"),
+        },
+        "benchmark": benchmark,
+        "reproducibility": reproducibility,
+    }
 
 
 def summarize_candidate(candidate: dict) -> dict:
@@ -1692,6 +1874,8 @@ def infer_intent(message: str, mode: str | None = None) -> str:
         return "technical_analysis"
     if any(term in normalized for term in ["analisi fondamentale", "fundamental analysis", "fondamentali", "bilancio", "revenue", "eps", "cash flow", "valuation", "multipli"]):
         return "fundamental_analysis"
+    if any(term in normalized for term in ["capitale virtuale", "trading game", "sta battendo", "batte il mercato", "benchmark", "drawdown", "profit factor", "expectancy", "p/l", "pl ", "peggior errore", "andato a zero", "rischio per trade", "riproducibil", "reproducib", "win rate"]):
+        return "trading_game"
     if any(term in normalized for term in ["sniper", "entrabile", "meglio aspettare", "ingresso", "entry", "risk/reward", "uscita", "exit", "target", "invalidazione", "invalidation", "profitto", "take profit"]):
         return "market_sniper"
     if any(term in text for term in ["confronta", "compare", "vs", "versus"]):

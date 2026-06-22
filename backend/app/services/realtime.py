@@ -21,6 +21,7 @@ from app.services.learning_loop import LearningLoopService
 from app.services.macro import update_macro_snapshots
 from app.services.market_data import MarketDataService
 from app.services.pipeline import PipelineService
+from app.services.trading_game import TradingGameSimulator
 from app.signals.engine import SignalEngine
 
 
@@ -68,6 +69,8 @@ def start_realtime_services() -> None:
         _scheduler.add_job(run_learning_cycle_job, "interval", minutes=settings.learning_loop_minutes, id="financial_brain_learning", replace_existing=True, max_instances=1)
         _scheduler.add_job(run_blum_model_cycle_job, "interval", minutes=settings.blum_model_cycle_minutes, id="blum_financial_model_cycle", replace_existing=True, max_instances=1)
         _scheduler.add_job(run_blum_learning_loop_job, "interval", minutes=settings.learning_loop_minutes, id="blum_point_in_time_learning_loop", replace_existing=True, max_instances=1)
+        if settings.trading_game_enabled:
+            _scheduler.add_job(run_trading_game_job, "interval", minutes=settings.learning_loop_minutes, id="blum_trading_game", replace_existing=True, max_instances=1)
     _scheduler.start()
     with _state_lock:
         _state["started"] = True
@@ -98,7 +101,8 @@ def run_startup_pipeline() -> None:
         learning = run_learning_cycle(db, limit=settings.max_update_assets * 6) if settings.enable_learning_loop else {}
         model_learning = run_model_learning_cycle(db, limit=settings.blum_model_cycle_limit) if settings.enable_learning_loop else {}
         point_in_time_learning = LearningLoopService().run_batch(db, batch_size=min(settings.learning_batch_size, 25), trigger="startup") if settings.enable_learning_loop else {}
-        return {"pipeline": pipeline, "financial_brain_learning": learning, "blum_financial_model": model_learning, "blum_learning_loop": point_in_time_learning}
+        trading_game = TradingGameSimulator().run(db, batch_size=min(settings.trading_game_batch_size, 40)) if settings.trading_game_enabled else {}
+        return {"pipeline": pipeline, "financial_brain_learning": learning, "blum_financial_model": model_learning, "blum_learning_loop": point_in_time_learning, "trading_game": trading_game}
 
     _run_job("startup_pipeline", work)
 
@@ -115,7 +119,8 @@ def run_market_refresh() -> None:
         learning = run_learning_cycle(db, limit=settings.max_update_assets * 6) if settings.enable_learning_loop else {}
         model_learning = run_model_learning_cycle(db, limit=settings.blum_model_cycle_limit) if settings.enable_learning_loop else {}
         point_in_time_learning = LearningLoopService().run_batch(db, batch_size=min(settings.learning_batch_size, 25), trigger="market_refresh") if settings.enable_learning_loop else {}
-        return {"market_update": market, "signal_run": signals, "etf_update": etf, "financial_brain_learning": learning, "blum_financial_model": model_learning, "blum_learning_loop": point_in_time_learning}
+        trading_game = TradingGameSimulator().run(db, batch_size=min(settings.trading_game_batch_size, 40)) if settings.trading_game_enabled else {}
+        return {"market_update": market, "signal_run": signals, "etf_update": etf, "financial_brain_learning": learning, "blum_financial_model": model_learning, "blum_learning_loop": point_in_time_learning, "trading_game": trading_game}
 
     _run_job("market_refresh", work)
 
@@ -153,6 +158,10 @@ def run_blum_model_cycle_job() -> None:
 
 def run_blum_learning_loop_job() -> None:
     _run_job("blum_point_in_time_learning_loop", lambda db: LearningLoopService().run_batch(db, batch_size=settings.learning_batch_size, trigger="scheduled"))
+
+
+def run_trading_game_job() -> None:
+    _run_job("blum_trading_game", lambda db: TradingGameSimulator().run(db, batch_size=settings.trading_game_batch_size))
 
 
 def run_autonomous_engine_job() -> None:

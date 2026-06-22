@@ -69,6 +69,10 @@ from app.models import (
     TechnicalLevel,
     TechnicalSignal,
     TickerAccuracyProfile,
+    TradingGame,
+    TradingGameEquityCurve,
+    TradingGameFailure,
+    TradingGameTrade,
     WatchlistItem,
 )
 from app.schemas import AssetOut, FinancialChatRequest, MarketUpdateRequest, NewsOut, NewsUpdateRequest, SemanticSearchRequest, SignalRunRequest
@@ -137,6 +141,7 @@ from app.services.strategic_intelligence import (
     list_watchlist,
 )
 from app.services.thesis_engine import build_asset_thesis
+from app.services.trading_game import TradingGameSimulator
 from app.signals.backtest import run_simple_backtest
 from app.signals.engine import SignalEngine
 
@@ -185,6 +190,12 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "learning_min_history_years": settings.learning_min_history_years,
             "learning_asset_universe": settings.learning_asset_universe,
             "learning_evaluation_mode": settings.learning_evaluation_mode,
+            "trading_game_enabled": settings.trading_game_enabled,
+            "trading_min_timeframe": settings.trading_min_timeframe,
+            "trading_default_timeframe": settings.trading_default_timeframe,
+            "trading_allow_microscalping": settings.trading_allow_microscalping,
+            "trading_game_initial_capital": settings.trading_game_initial_capital,
+            "trading_game_batch_size": settings.trading_game_batch_size,
             "blum_model_cycle_minutes": settings.blum_model_cycle_minutes,
             "blum_model_cycle_limit": settings.blum_model_cycle_limit,
             "chart_vision_mode": settings.chart_vision_mode,
@@ -226,6 +237,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "huggingface_dataset_catalog": True,
             "blum_learning_loop": True,
             "market_sniper_engine": True,
+            "reproducible_trading_game": True,
         },
         "database_counts": {
             "assets": int(db.scalar(select(func.count(Asset.id))) or 0),
@@ -254,6 +266,10 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "sniper_scores": int(db.scalar(select(func.count(SniperScore.id))) or 0),
             "r_multiple_metrics": int(db.scalar(select(func.count(RMultipleMetric.id))) or 0),
             "signal_reliability_matrix": int(db.scalar(select(func.count(SignalReliabilityMatrix.id))) or 0),
+            "trading_games": int(db.scalar(select(func.count(TradingGame.id))) or 0),
+            "trading_game_trades": int(db.scalar(select(func.count(TradingGameTrade.id))) or 0),
+            "trading_game_equity_curve": int(db.scalar(select(func.count(TradingGameEquityCurve.id))) or 0),
+            "trading_game_failures": int(db.scalar(select(func.count(TradingGameFailure.id))) or 0),
             "model_weight_versions": int(db.scalar(select(func.count(ModelWeightVersion.id))) or 0),
             "historical_similarity_cases": int(db.scalar(select(func.count(HistoricalSimilarityCase.id))) or 0),
             "confidence_adjustments": int(db.scalar(select(func.count(ConfidenceAdjustment.id))) or 0),
@@ -286,7 +302,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "Hugging Face serves the previous image until the Docker build finishes successfully.",
             "The finance-domain 7B model is disabled by default unless BLUM_ENABLE_FINANCIAL_BRAIN_MODEL=true.",
             "Existing snapshots are refreshed by the autonomous engine after a successful deployment.",
-            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.10.0.",
+            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.11.0.",
         ],
     }
 
@@ -467,6 +483,62 @@ def sniper_metrics(db: Session = Depends(get_db)) -> dict:
 @router.get("/api/sniper/lessons")
 def sniper_lessons(limit: int = Query(default=40, ge=1, le=200), db: Session = Depends(get_db)) -> list[dict]:
     return MarketSniperEngine().lessons(db, limit=limit)
+
+
+@router.get("/api/trading-game/status")
+def trading_game_status(db: Session = Depends(get_db)) -> dict:
+    return TradingGameSimulator().status(db)
+
+
+@router.post("/api/trading-game/run")
+def trading_game_run(
+    batch_size: int = Query(default=settings.trading_game_batch_size, ge=1, le=500),
+    db: Session = Depends(get_db),
+) -> dict:
+    return TradingGameSimulator().run(db, batch_size=batch_size)
+
+
+@router.post("/api/trading-game/reset")
+def trading_game_reset(db: Session = Depends(get_db)) -> dict:
+    return TradingGameSimulator().reset(db)
+
+
+@router.get("/api/trading-game/equity")
+def trading_game_equity(
+    game_id: int | None = Query(default=None),
+    limit: int = Query(default=500, ge=1, le=2000),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    return TradingGameSimulator().equity(db, game_id=game_id, limit=limit)
+
+
+@router.get("/api/trading-game/trades")
+def trading_game_trades(
+    game_id: int | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=1000),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    return TradingGameSimulator().trades(db, game_id=game_id, limit=limit)
+
+
+@router.get("/api/trading-game/failures")
+def trading_game_failures(limit: int = Query(default=80, ge=1, le=500), db: Session = Depends(get_db)) -> list[dict]:
+    return TradingGameSimulator().failures(db, limit=limit)
+
+
+@router.get("/api/trading-game/lessons")
+def trading_game_lessons(limit: int = Query(default=50, ge=1, le=300), db: Session = Depends(get_db)) -> list[dict]:
+    return TradingGameSimulator().lessons(db, limit=limit)
+
+
+@router.get("/api/trading-game/benchmark")
+def trading_game_benchmark(game_id: int | None = Query(default=None), db: Session = Depends(get_db)) -> dict:
+    return TradingGameSimulator().benchmark(db, game_id=game_id)
+
+
+@router.get("/api/trading-game/reproducibility")
+def trading_game_reproducibility(limit: int = Query(default=120, ge=1, le=1000), db: Session = Depends(get_db)) -> dict:
+    return TradingGameSimulator().reproducibility(db, limit=limit)
 
 
 @router.get("/model/status")
