@@ -33,6 +33,7 @@ from app.services.fundamentals import fundamentals_for_asset
 from app.services.live import market_sentiment
 from app.services.learning_loop import LearningDashboardService
 from app.services.learning_intelligence import LearningIntelligenceDashboardService
+from app.services.decision_intelligence import DecisionIntelligenceDashboardService
 from app.services.market_data import market_snapshot_for_asset
 from app.services.market_sniper import MarketSniperEngine
 from app.services.reasoning_precision import (
@@ -483,6 +484,7 @@ def trading_game_context_for_chat(db: Session) -> dict:
             "live_forward": LiveForwardPaperTradingService().status(db),
             "historical_vs_live": HistoricalLiveComparisonService().compare(db),
             "learning_intelligence": LearningIntelligenceDashboardService().dashboard(db),
+            "decision_intelligence": DecisionIntelligenceDashboardService().dashboard(db),
             "pnl_breakdown": PnLBreakdownService().game_breakdown(db),
             "reality_check": TradingGameRealityCheckService().evaluate(db),
             "failures": engine.failures(db, limit=12),
@@ -1469,6 +1471,7 @@ def build_trading_game_response(language: str, context: dict) -> dict:
     pnl_breakdown = context.get("pnl_breakdown") or {}
     reality_check = context.get("reality_check") or {}
     learning_intelligence = context.get("learning_intelligence") or {}
+    decision_intelligence = context.get("decision_intelligence") or {}
     if not game:
         message = "BLUM non ha ancora un Trading Game persistito. Serve almeno un ciclo Sniper/Learning Loop per creare simulazioni P/L reali." if language == "it" else "BLUM does not have a persisted Trading Game yet. It needs at least one Sniper/Learning Loop cycle to create real P/L simulations."
         return build_error_response(language, message, [])
@@ -1495,6 +1498,7 @@ def build_trading_game_response(language: str, context: dict) -> dict:
                 "Nessuna dichiarazione di outperformance e valida se il campione e piccolo o incompleto.",
             ]},
             {"key": "learning_intelligence", "title": "Learning Intelligence", "bullets": learning_intelligence_lines(learning_intelligence, language)},
+            {"key": "decision_intelligence", "title": "Decision Intelligence", "bullets": decision_intelligence_lines(decision_intelligence, language)},
             {"key": "trade_ledger", "title": "Trade ledger", "bullets": trade_ledger_lines(ledger_rows, language)},
             {"key": "intelligence_metrics", "title": "Trading intelligence", "bullets": intelligence_metric_lines(intelligence_metrics, rolling_metrics, metrics_by_setup, language)},
             {"key": "live_forward", "title": "Storico vs live paper", "bullets": historical_live_lines(live_forward, historical_vs_live, language)},
@@ -1533,6 +1537,7 @@ def build_trading_game_response(language: str, context: dict) -> dict:
                 "No outperformance claim is valid when sample size or benchmark coverage is insufficient.",
             ]},
             {"key": "learning_intelligence", "title": "Learning Intelligence", "bullets": learning_intelligence_lines(learning_intelligence, language)},
+            {"key": "decision_intelligence", "title": "Decision Intelligence", "bullets": decision_intelligence_lines(decision_intelligence, language)},
             {"key": "trade_ledger", "title": "Trade Ledger", "bullets": trade_ledger_lines(ledger_rows, language)},
             {"key": "intelligence_metrics", "title": "Trading Intelligence", "bullets": intelligence_metric_lines(intelligence_metrics, rolling_metrics, metrics_by_setup, language)},
             {"key": "live_forward", "title": "Historical vs Live Paper", "bullets": historical_live_lines(live_forward, historical_vs_live, language)},
@@ -1562,7 +1567,7 @@ def build_trading_game_response(language: str, context: dict) -> dict:
         "executive_view": summary,
         "risk_reward_view": f"Expectancy {format_number(game.get('expectancy_r'))}R, drawdown {format_signed(game.get('max_drawdown'))}%.",
         "data_quality": {"sample_warning": sample_warning, "trades": game.get("trade_count"), "reproducibility": reproducibility, "cycles": cycle_stats, "live_sample_warning": (historical_vs_live.get("sample_warning") if isinstance(historical_vs_live, dict) else None)},
-        "learning_loop_memory": {"trading_game": game, "lessons": lessons[:6], "latest_trades": trades[:6], "ledger": ledger_rows[:8], "reality_check": reality_check, "cycles": cycle_stats, "intelligence_metrics": intelligence_metrics, "historical_vs_live": historical_vs_live, "learning_intelligence": learning_intelligence},
+        "learning_loop_memory": {"trading_game": game, "lessons": lessons[:6], "latest_trades": trades[:6], "ledger": ledger_rows[:8], "reality_check": reality_check, "cycles": cycle_stats, "intelligence_metrics": intelligence_metrics, "historical_vs_live": historical_vs_live, "learning_intelligence": learning_intelligence, "decision_intelligence": decision_intelligence},
         "answer_to_user": summary,
     }
 
@@ -1599,6 +1604,42 @@ def learning_intelligence_lines(payload: dict, language: str) -> list[str]:
     if top_action:
         lines.append(f"Next proposed action: {top_action.get('recommended_action')} | status {top_action.get('status')}.")
     lines.extend(str(item) for item in truth[:2])
+    return dedupe_warnings(lines)
+
+
+def decision_intelligence_lines(payload: dict, language: str) -> list[str]:
+    if not payload or payload.get("status") == "unavailable":
+        return ["Decision Intelligence non disponibile: non invento opportunita mancate o qualita portfolio." if language == "it" else "Decision Intelligence is unavailable; I will not invent missed opportunities or portfolio-quality evidence."]
+    decision = ((payload.get("decision") or {}).get("decision_superiority") or {})
+    business = (payload.get("business_quality") or {}).get("highest_quality_companies") or []
+    portfolio = ((payload.get("portfolio") or {}).get("portfolio_quality") or {})
+    missed = (payload.get("decision") or {}).get("top_missed_opportunities") or []
+    if language == "it":
+        lines = [
+            f"Decision Superiority Score: {format_number(decision.get('score'))}/100 | {decision.get('classification', 'insufficient evidence')} | campione {decision.get('sample_size', 0)}.",
+            f"Opportunity recall {format_pct(decision.get('metrics', {}).get('opportunity_recall'))}; precision {format_pct(decision.get('metrics', {}).get('opportunity_precision'))}; alpha capture {format_pct(decision.get('metrics', {}).get('alpha_capture_rate'))}.",
+            f"Portfolio Quality Score: {format_number(portfolio.get('score'))}/100 | concentrazione {format_number((portfolio.get('components') or {}).get('concentration_risk'))}/100.",
+        ]
+        if missed:
+            top = missed[0]
+            lines.append(f"Possibile opportunita mancata: BLUM ha scelto {top.get('ticker')}, ma {top.get('best_available_ticker')} aveva un outcome migliore nello stesso confronto.")
+        if business:
+            lines.append("Business quality piu alta: " + ", ".join(f"{row.get('ticker')} {format_number(row.get('business_quality_score'))}/100" for row in business[:3]))
+        if decision.get("warnings"):
+            lines.extend(str(item) for item in decision.get("warnings", [])[:2])
+        return dedupe_warnings(lines)
+    lines = [
+        f"Decision Superiority Score: {format_number(decision.get('score'))}/100 | {decision.get('classification', 'insufficient evidence')} | sample {decision.get('sample_size', 0)}.",
+        f"Opportunity recall {format_pct(decision.get('metrics', {}).get('opportunity_recall'))}; precision {format_pct(decision.get('metrics', {}).get('opportunity_precision'))}; alpha capture {format_pct(decision.get('metrics', {}).get('alpha_capture_rate'))}.",
+        f"Portfolio Quality Score: {format_number(portfolio.get('score'))}/100 | concentration {format_number((portfolio.get('components') or {}).get('concentration_risk'))}/100.",
+    ]
+    if missed:
+        top = missed[0]
+        lines.append(f"Possible missed opportunity: BLUM selected {top.get('ticker')}, while {top.get('best_available_ticker')} had a better outcome in the same comparison.")
+    if business:
+        lines.append("Highest business quality: " + ", ".join(f"{row.get('ticker')} {format_number(row.get('business_quality_score'))}/100" for row in business[:3]))
+    if decision.get("warnings"):
+        lines.extend(str(item) for item in decision.get("warnings", [])[:2])
     return dedupe_warnings(lines)
 
 
@@ -2144,6 +2185,7 @@ def summarize_trading_game_context(context: dict) -> dict:
     intelligence = (context or {}).get("intelligence_metrics") or {}
     historical_vs_live = (context or {}).get("historical_vs_live") or {}
     learning_intelligence = (context or {}).get("learning_intelligence") or {}
+    decision_intelligence = (context or {}).get("decision_intelligence") or {}
     return {
         "current_game": {
             "status": game.get("status"),
@@ -2188,6 +2230,12 @@ def summarize_trading_game_context(context: dict) -> dict:
             "benchmarks": (learning_intelligence.get("benchmarks") or {}).get("rows", [])[:8],
             "weakness_map": (learning_intelligence.get("weakness_map") or {}).get("rows", [])[:6],
             "self_improvement": (learning_intelligence.get("self_improvement") or {}).get("actions", [])[:6],
+        },
+        "decision_intelligence": {
+            "decision_superiority": ((decision_intelligence.get("decision") or {}).get("decision_superiority") or {}),
+            "missed_opportunities": ((decision_intelligence.get("decision") or {}).get("top_missed_opportunities") or [])[:6],
+            "business_quality": ((decision_intelligence.get("business_quality") or {}).get("highest_quality_companies") or [])[:6],
+            "portfolio_quality": ((decision_intelligence.get("portfolio") or {}).get("portfolio_quality") or {}),
         },
     }
 
@@ -2388,7 +2436,7 @@ def infer_intent(message: str, mode: str | None = None) -> str:
         return "fundamental_analysis"
     if any(term in normalized for term in ["tesi", "thesis", "convinzione", "conviction", "ancora valida", "still valid", "sopravviss", "survival", "decay", "decad", "bull bear neutral", "tesi bull", "tesi bear", "tesi neutral", "motore", "engine vote", "sta migliorando", "dove ha sbagliato", "reasoning core", "batte spy", "batte qqq", "vs spy", "vs qqq"]):
         return "reasoning_memory_question"
-    if any(term in normalized for term in ["capitale virtuale", "trading game", "sta battendo", "batte il mercato", "benchmark", "drawdown", "profit factor", "expectancy", "p/l", "pl ", "peggior errore", "andato a zero", "rischio per trade", "riproducibil", "reproducib", "win rate", "quali trade", "trade hanno", "dove e entrato", "dove e uscito", "entrato blum", "uscito blum", "per azione", "fortuna", "profitto arriva", "ledger", "trade piu importante", "100 eur", "10,000", "10000", "target cycle", "ciclo capitale", "cicli capitale", "quante volte", "live paper", "forward paper", "storico vs live", "historical vs live", "sta migliorando", "intelligence growth", "missed entry", "stop hit", "target hit", "trading power", "power score", "dove e scarso", "piu scarso", "weakness", "self improvement", "auto miglior", "prossima azione", "baseline semplice", "stiamo battendo spy", "stiamo battendo qqq"]):
+    if any(term in normalized for term in ["capitale virtuale", "trading game", "sta battendo", "batte il mercato", "benchmark", "drawdown", "profit factor", "expectancy", "p/l", "pl ", "peggior errore", "andato a zero", "rischio per trade", "riproducibil", "reproducib", "win rate", "quali trade", "trade hanno", "dove e entrato", "dove e uscito", "entrato blum", "uscito blum", "per azione", "fortuna", "profitto arriva", "ledger", "trade piu importante", "100 eur", "10,000", "10000", "target cycle", "ciclo capitale", "cicli capitale", "quante volte", "live paper", "forward paper", "storico vs live", "historical vs live", "sta migliorando", "intelligence growth", "missed entry", "stop hit", "target hit", "trading power", "power score", "dove e scarso", "piu scarso", "weakness", "self improvement", "auto miglior", "prossima azione", "baseline semplice", "stiamo battendo spy", "stiamo battendo qqq", "best opportunity", "migliore opportunita", "opportunita migliore", "ha scelto il migliore", "decision superiority", "superiorita decisionale", "alpha capture", "opportunita mancata", "missed opportunity", "business quality", "qualita business", "moat", "management quality", "portfolio quality", "qualita portafoglio", "contribuisce piu alpha", "contribution", "concentrazione portfolio"]):
         return "trading_game"
     if any(term in normalized for term in ["sniper", "entrabile", "meglio aspettare", "ingresso", "entry", "risk/reward", "uscita", "exit", "target", "invalidazione", "invalidation", "profitto", "take profit"]):
         return "market_sniper"

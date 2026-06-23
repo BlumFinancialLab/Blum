@@ -2420,3 +2420,284 @@ class SelfImprovementAction(Base):
     after_metric: Mapped[float | None] = mapped_column(Float)
     improvement_observed: Mapped[bool | None] = mapped_column(Boolean, index=True)
     notes_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+
+
+class DecisionUniverseSnapshot(Base):
+    __tablename__ = "decision_universe_snapshots"
+    __table_args__ = (
+        Index("ix_decision_universe_selected_created", "selected_asset", "timestamp"),
+        Index("ix_decision_universe_regime_created", "market_regime", "timestamp"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    market_regime: Mapped[str | None] = mapped_column(String(120), index=True)
+    volatility_regime: Mapped[str | None] = mapped_column(String(120), index=True)
+    selected_asset: Mapped[str] = mapped_column(String(32), index=True)
+    selected_rank: Mapped[int | None] = mapped_column(Integer)
+    selected_score: Mapped[float | None] = mapped_column(Float)
+    total_candidates: Mapped[int] = mapped_column(Integer, default=0)
+    candidates_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    benchmark_snapshot: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class OpportunityRecallMetric(Base):
+    __tablename__ = "opportunity_recall_metrics"
+    __table_args__ = (Index("ix_opportunity_recall_scope", "sector", "setup", "regime", "timeframe"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    calculated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    sector: Mapped[str | None] = mapped_column(String(120), index=True)
+    setup: Mapped[str | None] = mapped_column(String(120), index=True)
+    regime: Mapped[str | None] = mapped_column(String(120), index=True)
+    timeframe: Mapped[str | None] = mapped_column(String(80), index=True)
+    captured_outperformers: Mapped[int] = mapped_column(Integer, default=0)
+    total_outperformers: Mapped[int] = mapped_column(Integer, default=0)
+    opportunity_recall: Mapped[float | None] = mapped_column(Float, index=True)
+    evidence_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+
+
+class OpportunityPrecisionMetric(Base):
+    __tablename__ = "opportunity_precision_metrics"
+    __table_args__ = (Index("ix_opportunity_precision_scope", "sector", "setup", "regime", "timeframe"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    calculated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    sector: Mapped[str | None] = mapped_column(String(120), index=True)
+    setup: Mapped[str | None] = mapped_column(String(120), index=True)
+    regime: Mapped[str | None] = mapped_column(String(120), index=True)
+    timeframe: Mapped[str | None] = mapped_column(String(80), index=True)
+    successful_opportunities: Mapped[int] = mapped_column(Integer, default=0)
+    selected_opportunities: Mapped[int] = mapped_column(Integer, default=0)
+    opportunity_precision: Mapped[float | None] = mapped_column(Float, index=True)
+    evidence_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+
+
+class AlphaCaptureMetric(Base):
+    __tablename__ = "alpha_capture_metrics"
+    __table_args__ = (Index("ix_alpha_capture_scope", "ticker", "sector", "regime", "timeframe"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    calculated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    ticker: Mapped[str | None] = mapped_column(String(32), index=True)
+    sector: Mapped[str | None] = mapped_column(String(120), index=True)
+    regime: Mapped[str | None] = mapped_column(String(120), index=True)
+    timeframe: Mapped[str | None] = mapped_column(String(80), index=True)
+    available_alpha: Mapped[float | None] = mapped_column(Float)
+    captured_alpha: Mapped[float | None] = mapped_column(Float)
+    alpha_capture_rate: Mapped[float | None] = mapped_column(Float, index=True)
+    evidence_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+
+
+class RankingAccuracyMetric(Base):
+    __tablename__ = "ranking_accuracy_metrics"
+    __table_args__ = (Index("ix_ranking_accuracy_scope", "sector", "setup", "regime", "timeframe"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    calculated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    sector: Mapped[str | None] = mapped_column(String(120), index=True)
+    setup: Mapped[str | None] = mapped_column(String(120), index=True)
+    regime: Mapped[str | None] = mapped_column(String(120), index=True)
+    timeframe: Mapped[str | None] = mapped_column(String(80), index=True)
+    sample_size: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    top1_accuracy: Mapped[float | None] = mapped_column(Float)
+    top3_accuracy: Mapped[float | None] = mapped_column(Float)
+    top5_accuracy: Mapped[float | None] = mapped_column(Float)
+    ranking_correlation: Mapped[float | None] = mapped_column(Float)
+    ranking_decay: Mapped[float | None] = mapped_column(Float)
+    evidence_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+
+
+class DecisionSuperiorityScore(Base):
+    __tablename__ = "decision_superiority_scores"
+    __table_args__ = (
+        Index("ix_decision_superiority_mode_created", "mode", "calculated_at"),
+        Index("ix_decision_superiority_score", "score", "classification"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    calculated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    mode: Mapped[str] = mapped_column(String(80), default="historical_plus_live", index=True)
+    scope: Mapped[str] = mapped_column(String(120), default="global", index=True)
+    score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    classification: Mapped[str] = mapped_column(String(120), default="Weak", index=True)
+    opportunity_recall: Mapped[float | None] = mapped_column(Float)
+    opportunity_precision: Mapped[float | None] = mapped_column(Float)
+    alpha_capture: Mapped[float | None] = mapped_column(Float)
+    ranking_accuracy: Mapped[float | None] = mapped_column(Float)
+    benchmark_excess: Mapped[float | None] = mapped_column(Float)
+    live_validation: Mapped[float | None] = mapped_column(Float)
+    regime_consistency: Mapped[float | None] = mapped_column(Float)
+    reproducibility: Mapped[float | None] = mapped_column(Float)
+    drawdown_control: Mapped[float | None] = mapped_column(Float)
+    explanation: Mapped[str] = mapped_column(Text, default="")
+    warnings_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+
+
+class BusinessQualityProfile(Base):
+    __tablename__ = "business_quality_profiles"
+    __table_args__ = (Index("ix_business_quality_profiles_ticker_created", "ticker", "calculated_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    calculated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    asset_id: Mapped[int | None] = mapped_column(ForeignKey("assets.id", ondelete="SET NULL"), index=True)
+    ticker: Mapped[str] = mapped_column(String(32), index=True)
+    growth_quality: Mapped[float | None] = mapped_column(Float)
+    profitability_quality: Mapped[float | None] = mapped_column(Float)
+    cash_flow_quality: Mapped[float | None] = mapped_column(Float)
+    balance_sheet_quality: Mapped[float | None] = mapped_column(Float)
+    capital_allocation_quality: Mapped[float | None] = mapped_column(Float)
+    moat_quality: Mapped[float | None] = mapped_column(Float)
+    evidence_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+
+    asset = relationship("Asset")
+
+
+class ManagementQualityProfile(Base):
+    __tablename__ = "management_quality_profiles"
+    __table_args__ = (Index("ix_management_quality_profiles_ticker_created", "ticker", "calculated_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    calculated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    asset_id: Mapped[int | None] = mapped_column(ForeignKey("assets.id", ondelete="SET NULL"), index=True)
+    ticker: Mapped[str] = mapped_column(String(32), index=True)
+    insider_alignment: Mapped[float | None] = mapped_column(Float)
+    execution_consistency: Mapped[float | None] = mapped_column(Float)
+    earnings_delivery: Mapped[float | None] = mapped_column(Float)
+    management_quality: Mapped[float | None] = mapped_column(Float, index=True)
+    evidence_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+
+    asset = relationship("Asset")
+
+
+class FundamentalAlphaPattern(Base):
+    __tablename__ = "fundamental_alpha_patterns"
+    __table_args__ = (Index("ix_fundamental_alpha_pattern_scope", "pattern_name", "sector", "timeframe"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    calculated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    pattern_name: Mapped[str] = mapped_column(String(160), index=True)
+    sector: Mapped[str | None] = mapped_column(String(120), index=True)
+    timeframe: Mapped[str | None] = mapped_column(String(80), index=True)
+    sample_size: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    average_forward_return: Mapped[float | None] = mapped_column(Float)
+    hit_rate: Mapped[float | None] = mapped_column(Float)
+    evidence_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+
+
+class BusinessQualityScore(Base):
+    __tablename__ = "business_quality_scores"
+    __table_args__ = (
+        Index("ix_business_quality_scores_ticker_created", "ticker", "calculated_at"),
+        Index("ix_business_quality_scores_score", "business_quality_score"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    calculated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    asset_id: Mapped[int | None] = mapped_column(ForeignKey("assets.id", ondelete="SET NULL"), index=True)
+    ticker: Mapped[str] = mapped_column(String(32), index=True)
+    sector: Mapped[str | None] = mapped_column(String(120), index=True)
+    business_quality_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    growth_quality: Mapped[float | None] = mapped_column(Float)
+    profitability_quality: Mapped[float | None] = mapped_column(Float)
+    cash_flow_quality: Mapped[float | None] = mapped_column(Float)
+    balance_sheet_quality: Mapped[float | None] = mapped_column(Float)
+    capital_allocation_quality: Mapped[float | None] = mapped_column(Float)
+    moat_quality: Mapped[float | None] = mapped_column(Float)
+    management_quality: Mapped[float | None] = mapped_column(Float)
+    data_quality_score: Mapped[float] = mapped_column(Float, default=0.0)
+    evidence_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+
+    asset = relationship("Asset")
+
+
+class PortfolioContribution(Base):
+    __tablename__ = "portfolio_contributions"
+    __table_args__ = (Index("ix_portfolio_contributions_scope", "game_id", "ticker", "calculated_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    calculated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    game_id: Mapped[int | None] = mapped_column(ForeignKey("trading_games.id", ondelete="CASCADE"), index=True)
+    ticker: Mapped[str] = mapped_column(String(32), index=True)
+    sector: Mapped[str | None] = mapped_column(String(120), index=True)
+    return_contribution: Mapped[float | None] = mapped_column(Float)
+    risk_contribution: Mapped[float | None] = mapped_column(Float)
+    drawdown_contribution: Mapped[float | None] = mapped_column(Float)
+    alpha_contribution: Mapped[float | None] = mapped_column(Float)
+    evidence_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+
+    game = relationship("TradingGame")
+
+
+class PortfolioCorrelation(Base):
+    __tablename__ = "portfolio_correlations"
+    __table_args__ = (
+        UniqueConstraint("scope", "asset_a", "asset_b", name="uq_portfolio_correlation_pair"),
+        Index("ix_portfolio_correlations_scope", "scope", "correlation"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    calculated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    scope: Mapped[str] = mapped_column(String(120), default="active_game", index=True)
+    asset_a: Mapped[str] = mapped_column(String(32), index=True)
+    asset_b: Mapped[str] = mapped_column(String(32), index=True)
+    correlation: Mapped[float | None] = mapped_column(Float, index=True)
+    correlation_type: Mapped[str] = mapped_column(String(80), default="price_return", index=True)
+    evidence_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+
+
+class PortfolioAlphaScore(Base):
+    __tablename__ = "portfolio_alpha_scores"
+    __table_args__ = (Index("ix_portfolio_alpha_scores_ticker_created", "ticker", "calculated_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    calculated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    game_id: Mapped[int | None] = mapped_column(ForeignKey("trading_games.id", ondelete="CASCADE"), index=True)
+    ticker: Mapped[str] = mapped_column(String(32), index=True)
+    portfolio_alpha_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    marginal_return_score: Mapped[float | None] = mapped_column(Float)
+    marginal_risk_score: Mapped[float | None] = mapped_column(Float)
+    diversification_score: Mapped[float | None] = mapped_column(Float)
+    benchmark_excess_score: Mapped[float | None] = mapped_column(Float)
+    evidence_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+
+    game = relationship("TradingGame")
+
+
+class PositionSizingOutcome(Base):
+    __tablename__ = "position_sizing_outcomes"
+    __table_args__ = (Index("ix_position_sizing_outcomes_logic", "sizing_logic", "timeframe"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    calculated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    sizing_logic: Mapped[str] = mapped_column(String(120), index=True)
+    timeframe: Mapped[str | None] = mapped_column(String(80), index=True)
+    sample_size: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    average_r: Mapped[float | None] = mapped_column(Float)
+    drawdown_impact: Mapped[float | None] = mapped_column(Float)
+    capital_efficiency: Mapped[float | None] = mapped_column(Float)
+    evidence_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+
+
+class PortfolioQualityScore(Base):
+    __tablename__ = "portfolio_quality_scores"
+    __table_args__ = (
+        Index("ix_portfolio_quality_game_created", "game_id", "calculated_at"),
+        Index("ix_portfolio_quality_score", "portfolio_quality_score"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    calculated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    game_id: Mapped[int | None] = mapped_column(ForeignKey("trading_games.id", ondelete="CASCADE"), index=True)
+    portfolio_quality_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    diversification: Mapped[float | None] = mapped_column(Float)
+    concentration_risk: Mapped[float | None] = mapped_column(Float)
+    drawdown_control: Mapped[float | None] = mapped_column(Float)
+    alpha_generation: Mapped[float | None] = mapped_column(Float)
+    benchmark_excess: Mapped[float | None] = mapped_column(Float)
+    capital_efficiency: Mapped[float | None] = mapped_column(Float)
+    explanation: Mapped[str] = mapped_column(Text, default="")
+    warnings_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+
+    game = relationship("TradingGame")

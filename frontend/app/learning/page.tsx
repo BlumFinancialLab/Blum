@@ -23,7 +23,7 @@ export default function LearningPage() {
     let mounted = true;
     async function load() {
       setError("");
-      const [dashResult, runsResult, predictionsResult, memoryResult, tradingStatusResult, equityResult, annotatedEquityResult, tradesResult, ledgerResult, ledgerSummaryResult, cyclesResult, currentCycleResult, cycleStatsResult, intelligenceMetricsResult, rollingMetricsResult, metricsBySetupResult, metricsByRegimeResult, metricsBySectorResult, historicalVsLiveResult, liveStatusResult, livePositionsResult, liveMetricsResult, learningIntelligenceResult, learningEvidenceResult, realityCheckResult, pnlBreakdownResult, failuresResult, lessonsResult, benchmarkResult, reproducibilityResult, reasoningStatusResult, survivalResult, convictionResult, reliabilityResult, competitionResult, ensembleResult, benchmarkRelativeResult, trainingQualityResult] = await Promise.allSettled([
+      const [dashResult, runsResult, predictionsResult, memoryResult, tradingStatusResult, equityResult, annotatedEquityResult, tradesResult, ledgerResult, ledgerSummaryResult, cyclesResult, currentCycleResult, cycleStatsResult, intelligenceMetricsResult, rollingMetricsResult, metricsBySetupResult, metricsByRegimeResult, metricsBySectorResult, historicalVsLiveResult, liveStatusResult, livePositionsResult, liveMetricsResult, learningIntelligenceResult, decisionIntelligenceResult, learningEvidenceResult, realityCheckResult, pnlBreakdownResult, failuresResult, lessonsResult, benchmarkResult, reproducibilityResult, reasoningStatusResult, survivalResult, convictionResult, reliabilityResult, competitionResult, ensembleResult, benchmarkRelativeResult, trainingQualityResult] = await Promise.allSettled([
         api.learningDashboard(),
         api.learningRuns(20),
         api.learningPredictions(36),
@@ -47,6 +47,7 @@ export default function LearningPage() {
         api.liveTradingGamePositions(),
         api.liveTradingGameMetrics(),
         api.learningIntelligenceDashboard(),
+        api.decisionIntelligenceDashboard(),
         api.tradingGameLearningEvidence(60),
         api.tradingGameRealityCheck(),
         api.tradingGamePnlBreakdown(),
@@ -88,6 +89,7 @@ export default function LearningPage() {
         livePositions: livePositionsResult.status === "fulfilled" ? livePositionsResult.value : null,
         liveMetrics: liveMetricsResult.status === "fulfilled" ? liveMetricsResult.value : null,
         learningIntelligence: learningIntelligenceResult.status === "fulfilled" ? learningIntelligenceResult.value : null,
+        decisionIntelligence: decisionIntelligenceResult.status === "fulfilled" ? decisionIntelligenceResult.value : null,
         learningEvidence: learningEvidenceResult.status === "fulfilled" ? learningEvidenceResult.value : null,
         realityCheck: realityCheckResult.status === "fulfilled" ? realityCheckResult.value : null,
         pnlBreakdown: pnlBreakdownResult.status === "fulfilled" ? pnlBreakdownResult.value : null,
@@ -145,6 +147,13 @@ export default function LearningPage() {
   const livePositions = Array.isArray(livePositionRows) ? livePositionRows : [];
   const liveMetrics = trading?.liveMetrics?.metrics ?? {};
   const learningIntelligence = trading?.learningIntelligence ?? {};
+  const decisionIntelligence = trading?.decisionIntelligence ?? {};
+  const decisionSuperiority = decisionIntelligence?.decision?.decision_superiority ?? {};
+  const missedOpportunityRows = decisionIntelligence?.decision?.top_missed_opportunities ?? [];
+  const businessQualityRows = decisionIntelligence?.business_quality?.highest_quality_companies ?? [];
+  const portfolioQuality = decisionIntelligence?.portfolio?.portfolio_quality ?? {};
+  const portfolioContributionRows = decisionIntelligence?.portfolio?.contributions ?? [];
+  const portfolioCorrelationRows = decisionIntelligence?.portfolio?.correlations ?? [];
   const tradingPower = learningIntelligence?.trading_power ?? {};
   const tradingPowerComponents = tradingPower?.components ?? {};
   const benchmarkArenaRows = learningIntelligence?.benchmarks?.rows ?? [];
@@ -267,6 +276,51 @@ export default function LearningPage() {
             <SmallDatum label="Benchmark Excess" value={formatPctRaw(learningProgress?.current?.benchmark_excess)} />
           </div>
           <p>{learningProgress?.summary ?? "BLUM cannot claim improvement until rolling windows and live validation are meaningful."}</p>
+        </div>
+      </section>
+
+      <section className="grid-3" style={{ marginTop: 12 }}>
+        <div className="panel lab-command-panel">
+          <div className="panel-head"><span>Decision Superiority</span><strong>{formatNumber(decisionSuperiority?.score)}/100</strong></div>
+          <div className="cycle-progress-track"><span style={{ width: `${Math.max(0, Math.min(100, Number(decisionSuperiority?.score ?? 0)))}%` }} /></div>
+          <div className="evidence-grid">
+            <SmallDatum label="Classification" value={decisionSuperiority?.classification ?? "insufficient evidence"} />
+            <SmallDatum label="Recall" value={formatPct(decisionSuperiority?.metrics?.opportunity_recall)} />
+            <SmallDatum label="Precision" value={formatPct(decisionSuperiority?.metrics?.opportunity_precision)} />
+            <SmallDatum label="Alpha Capture" value={formatPct(decisionSuperiority?.metrics?.alpha_capture_rate)} />
+            <SmallDatum label="Ranking" value={formatPct(decisionSuperiority?.metrics?.ranking_accuracy)} />
+            <SmallDatum label="Comparable Decisions" value={decisionSuperiority?.sample_size ?? 0} />
+          </div>
+          <p>{decisionSuperiority?.explanation ?? "BLUM needs comparable decision snapshots before it can claim it selected superior opportunities."}</p>
+          {missedOpportunityRows.length > 0 && <div className="tag-row">{missedOpportunityRows.slice(0, 4).map((row: any) => <span key={`${row.trade_id}-${row.best_available_ticker}`}>Missed {row.best_available_ticker} vs {row.ticker}</span>)}</div>}
+        </div>
+
+        <div className="panel lab-command-panel">
+          <div className="panel-head"><span>Business Quality Lab</span><strong>{businessQualityRows.length}</strong></div>
+          <div className="brain-list dense">
+            {(businessQualityRows.length ? businessQualityRows : []).slice(0, 5).map((row: any) => (
+              <div key={row.ticker}>
+                <StatusBadge label={`${row.ticker} | ${row.status}`} />
+                <div className="opportunity-line"><strong>{row.name}</strong><span>{formatNumber(row.business_quality_score)}/100</span></div>
+                <p>Growth {formatNumber(row.growth_quality)} | FCF {formatNumber(row.cash_flow_quality)} | moat {formatNumber(row.moat_quality)} | data {formatNumber(row.data_quality_score)}</p>
+              </div>
+            ))}
+            {businessQualityRows.length === 0 && <div className="empty-state compact">No business-quality evidence yet. Stored fundamental snapshots are required.</div>}
+          </div>
+        </div>
+
+        <div className="panel lab-command-panel">
+          <div className="panel-head"><span>Portfolio Intelligence</span><strong>{formatNumber(portfolioQuality?.score)}/100</strong></div>
+          <div className="evidence-grid">
+            <SmallDatum label="Diversification" value={formatNumber(portfolioQuality?.components?.diversification)} />
+            <SmallDatum label="Concentration Risk" value={formatNumber(portfolioQuality?.components?.concentration_risk)} />
+            <SmallDatum label="Drawdown Control" value={formatNumber(portfolioQuality?.components?.drawdown_control)} />
+            <SmallDatum label="Alpha Generation" value={formatNumber(portfolioQuality?.components?.alpha_generation)} />
+            <SmallDatum label="Contributors" value={portfolioContributionRows.length} />
+            <SmallDatum label="Correlations" value={portfolioCorrelationRows.length} />
+          </div>
+          <p>{portfolioQuality?.explanation ?? "BLUM needs portfolio trade evidence before contribution, concentration and portfolio-alpha quality can be measured."}</p>
+          {(portfolioQuality?.warnings ?? []).length > 0 && <div className="tag-row">{portfolioQuality.warnings.slice(0, 4).map((item: string) => <span key={item}>{item}</span>)}</div>}
         </div>
       </section>
 

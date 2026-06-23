@@ -16,6 +16,7 @@ from app.ingestion.news_ingestor import NewsIngestor
 from app.models import (
     AIInsight,
     AccuracySnapshot,
+    AlphaCaptureMetric,
     Asset,
     AutonomousEngineRun,
     BenchmarkRelativeOutcome,
@@ -32,6 +33,8 @@ from app.models import (
     BlumThesisOutcome,
     BlumThesisQualityScore,
     BlumTrainingExample,
+    BusinessQualityProfile,
+    BusinessQualityScore,
     ChartAnalysis,
     ChartPatternMemory,
     ChatMessage,
@@ -39,10 +42,13 @@ from app.models import (
     CompetingThesis,
     ConfidenceCalibrationBucket,
     ConfidenceAdjustment,
+    DecisionSuperiorityScore,
+    DecisionUniverseSnapshot,
     EmbeddingVector,
     EngineVote,
     EnsembleWeightVersion,
     ExternalDatasetSource,
+    FundamentalAlphaPattern,
     FundamentalSnapshot,
     HistoricalPrediction,
     HistoricalSimilarityCase,
@@ -95,6 +101,15 @@ from app.models import (
     MetaLearningEvent,
     LearningProgressSnapshot,
     LearningStrengthWeaknessMap,
+    ManagementQualityProfile,
+    OpportunityPrecisionMetric,
+    OpportunityRecallMetric,
+    PortfolioAlphaScore,
+    PortfolioContribution,
+    PortfolioCorrelation,
+    PortfolioQualityScore,
+    PositionSizingOutcome,
+    RankingAccuracyMetric,
     SelfImprovementAction,
     ThesisCompetition,
     ThesisConvictionHistory,
@@ -154,6 +169,12 @@ from app.services.learning_intelligence import (
     LearningProgressEvaluator,
     LearningWeaknessMapService,
     SelfImprovementActionEngine,
+)
+from app.services.decision_intelligence import (
+    BusinessQualityEngine,
+    DecisionIntelligenceDashboardService,
+    DecisionSuperiorityEngine,
+    PortfolioIntelligenceEngine,
 )
 from app.services.live import live_news, market_sentiment
 from app.services.macro import macro_overview, update_macro_snapshots
@@ -339,6 +360,9 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "official_benchmark_comparison": True,
             "learning_weakness_map": True,
             "self_improvement_action_engine": True,
+            "decision_superiority_engine": True,
+            "business_quality_engine": True,
+            "portfolio_intelligence_engine": True,
         },
         "database_counts": {
             "assets": int(db.scalar(select(func.count(Asset.id))) or 0),
@@ -386,6 +410,21 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "learning_progress_snapshots": int(db.scalar(select(func.count(LearningProgressSnapshot.id))) or 0),
             "learning_strength_weakness_map": int(db.scalar(select(func.count(LearningStrengthWeaknessMap.id))) or 0),
             "self_improvement_actions": int(db.scalar(select(func.count(SelfImprovementAction.id))) or 0),
+            "decision_universe_snapshots": int(db.scalar(select(func.count(DecisionUniverseSnapshot.id))) or 0),
+            "opportunity_recall_metrics": int(db.scalar(select(func.count(OpportunityRecallMetric.id))) or 0),
+            "opportunity_precision_metrics": int(db.scalar(select(func.count(OpportunityPrecisionMetric.id))) or 0),
+            "alpha_capture_metrics": int(db.scalar(select(func.count(AlphaCaptureMetric.id))) or 0),
+            "ranking_accuracy_metrics": int(db.scalar(select(func.count(RankingAccuracyMetric.id))) or 0),
+            "decision_superiority_scores": int(db.scalar(select(func.count(DecisionSuperiorityScore.id))) or 0),
+            "business_quality_profiles": int(db.scalar(select(func.count(BusinessQualityProfile.id))) or 0),
+            "management_quality_profiles": int(db.scalar(select(func.count(ManagementQualityProfile.id))) or 0),
+            "fundamental_alpha_patterns": int(db.scalar(select(func.count(FundamentalAlphaPattern.id))) or 0),
+            "business_quality_scores": int(db.scalar(select(func.count(BusinessQualityScore.id))) or 0),
+            "portfolio_contributions": int(db.scalar(select(func.count(PortfolioContribution.id))) or 0),
+            "portfolio_correlations": int(db.scalar(select(func.count(PortfolioCorrelation.id))) or 0),
+            "portfolio_alpha_scores": int(db.scalar(select(func.count(PortfolioAlphaScore.id))) or 0),
+            "position_sizing_outcomes": int(db.scalar(select(func.count(PositionSizingOutcome.id))) or 0),
+            "portfolio_quality_scores": int(db.scalar(select(func.count(PortfolioQualityScore.id))) or 0),
             "model_weight_versions": int(db.scalar(select(func.count(ModelWeightVersion.id))) or 0),
             "historical_similarity_cases": int(db.scalar(select(func.count(HistoricalSimilarityCase.id))) or 0),
             "confidence_adjustments": int(db.scalar(select(func.count(ConfidenceAdjustment.id))) or 0),
@@ -431,7 +470,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "Hugging Face serves the previous image until the Docker build finishes successfully.",
             "The finance-domain 7B model is disabled by default unless BLUM_ENABLE_FINANCIAL_BRAIN_MODEL=true.",
             "Existing snapshots are refreshed by the autonomous engine after a successful deployment.",
-            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.16.0.",
+            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.17.0.",
         ],
     }
 
@@ -1031,6 +1070,74 @@ def learning_intelligence_apply_self_improvement(action_id: int, db: Session = D
 @router.post("/api/learning-intelligence/self-improvement/evaluate/{action_id}")
 def learning_intelligence_evaluate_self_improvement(action_id: int, db: Session = Depends(get_db)) -> dict:
     return SelfImprovementActionEngine().evaluate(db, action_id=action_id)
+
+
+@router.get("/api/decision-intelligence/dashboard")
+def decision_intelligence_dashboard(db: Session = Depends(get_db)) -> dict:
+    return DecisionIntelligenceDashboardService().dashboard(db)
+
+
+@router.get("/api/decision-intelligence/superiority")
+def decision_intelligence_superiority(db: Session = Depends(get_db)) -> dict:
+    return DecisionSuperiorityEngine().score(db, persist=False)
+
+
+@router.post("/api/decision-intelligence/superiority/recalculate")
+def decision_intelligence_superiority_recalculate(db: Session = Depends(get_db)) -> dict:
+    return DecisionSuperiorityEngine().score(db, persist=True)
+
+
+@router.get("/api/decision-intelligence/universe-snapshots")
+def decision_intelligence_universe_snapshots(db: Session = Depends(get_db)) -> dict:
+    return DecisionSuperiorityEngine().universe_snapshots(db, persist=False)
+
+
+@router.post("/api/decision-intelligence/universe-snapshots/recalculate")
+def decision_intelligence_universe_snapshots_recalculate(db: Session = Depends(get_db)) -> dict:
+    return DecisionSuperiorityEngine().universe_snapshots(db, persist=True)
+
+
+@router.get("/api/decision-intelligence/missed-opportunities")
+def decision_intelligence_missed_opportunities(db: Session = Depends(get_db)) -> list[dict]:
+    return DecisionSuperiorityEngine().top_missed_opportunities(db)
+
+
+@router.get("/api/business-quality/dashboard")
+def business_quality_dashboard(db: Session = Depends(get_db)) -> dict:
+    return BusinessQualityEngine().dashboard(db)
+
+
+@router.get("/api/business-quality/scores")
+def business_quality_scores(limit: int = Query(default=80, ge=1, le=300), db: Session = Depends(get_db)) -> dict:
+    return BusinessQualityEngine().scores(db, limit=limit, persist=False)
+
+
+@router.post("/api/business-quality/recalculate")
+def business_quality_recalculate(limit: int = Query(default=80, ge=1, le=300), db: Session = Depends(get_db)) -> dict:
+    return BusinessQualityEngine().scores(db, limit=limit, persist=True)
+
+
+@router.get("/api/portfolio-intelligence/dashboard")
+def portfolio_intelligence_dashboard(db: Session = Depends(get_db)) -> dict:
+    return PortfolioIntelligenceEngine().dashboard(db)
+
+
+@router.get("/api/portfolio-intelligence/quality")
+def portfolio_intelligence_quality(db: Session = Depends(get_db)) -> dict:
+    return PortfolioIntelligenceEngine().quality_score(db, persist=False)
+
+
+@router.post("/api/portfolio-intelligence/recalculate")
+def portfolio_intelligence_recalculate(db: Session = Depends(get_db)) -> dict:
+    engine = PortfolioIntelligenceEngine()
+    return {
+        "status": "ok",
+        "quality": engine.quality_score(db, persist=True),
+        "contributions": engine.contributions(db, persist=True),
+        "correlations": engine.correlations(db, persist=True),
+        "portfolio_alpha": engine.alpha_scores(db, persist=True),
+        "position_sizing": engine.position_sizing_outcomes(db, persist=True),
+    }
 
 
 @router.get("/model/status")

@@ -935,6 +935,90 @@ export SELF_IMPROVEMENT_ROLLBACK_ENABLED=true
 
 The learning loops only update database memory, confidence adjustments, proprietary reasoning examples and reversible scoring-weight versions.
 
+## Decision Superiority, Business Quality and Portfolio Intelligence
+
+This release upgrades BLUM from trade-outcome analysis to decision-quality analysis.
+
+The core question is no longer only:
+
+> Did this trade work?
+
+The new question is:
+
+> Was this the best available decision at that moment, considering alternative opportunities, business quality, portfolio context and benchmark alternatives?
+
+### Decision Superiority Engine
+
+`DecisionSuperiorityEngine` evaluates every comparable BLUM decision against the opportunity set available in the same decision window.
+
+It measures:
+
+- Opportunity Recall: how many future outperformers BLUM identified before they outperformed.
+- Opportunity Precision: how many selected opportunities became outperformers.
+- Alpha Capture Rate: how much available alpha BLUM captured versus what was available.
+- Ranking Accuracy: whether BLUM ranked the best future performers near the top.
+- Missed Opportunities: candidates BLUM ignored that later performed better.
+- Best Decisions and Worst Decisions: auditable evidence, not narrative claims.
+
+Main API:
+
+- `GET /api/decision-intelligence/dashboard`
+- `GET /api/decision-intelligence/superiority`
+- `POST /api/decision-intelligence/superiority/recalculate`
+- `GET /api/decision-intelligence/universe-snapshots`
+- `POST /api/decision-intelligence/universe-snapshots/recalculate`
+- `GET /api/decision-intelligence/missed-opportunities`
+
+### Business Quality Engine
+
+`BusinessQualityEngine` scores company quality from stored fundamental evidence. If fundamentals are missing, BLUM explicitly marks the company as `insufficient_fundamental_evidence` and penalizes the score.
+
+It evaluates:
+
+- growth quality;
+- profitability quality;
+- cash-flow quality;
+- balance-sheet quality;
+- capital-allocation quality;
+- moat quality;
+- management-quality proxies;
+- fundamental alpha patterns from historical outcomes.
+
+Main API:
+
+- `GET /api/business-quality/dashboard`
+- `GET /api/business-quality/scores`
+- `POST /api/business-quality/recalculate`
+
+### Portfolio Intelligence Engine
+
+`PortfolioIntelligenceEngine` measures whether a position improves the simulated portfolio, not only whether the position made money.
+
+It evaluates:
+
+- return contribution;
+- risk contribution;
+- drawdown contribution;
+- alpha contribution;
+- portfolio concentration;
+- correlation between positions;
+- position-sizing outcomes;
+- portfolio quality score.
+
+Main API:
+
+- `GET /api/portfolio-intelligence/dashboard`
+- `GET /api/portfolio-intelligence/quality`
+- `POST /api/portfolio-intelligence/recalculate`
+
+### Guardrails
+
+- No decision-superiority claim is valid with insufficient comparable samples.
+- BLUM must say when a better opportunity existed.
+- Business quality is not inferred as fact when fundamentals are missing.
+- Portfolio quality is penalized when P/L is concentrated in too few positions.
+- Chat responses use stored dashboard evidence only. If the evidence is missing, BLUM must answer `Insufficient evidence`.
+
 ## Docker
 
 ```bash
