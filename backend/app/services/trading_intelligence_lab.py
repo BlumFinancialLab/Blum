@@ -241,6 +241,7 @@ class TradingCapitalCycleService:
         game = TradeLedgerService().game(db, game_id)
         if game:
             self.ensure_current_cycle(db, game)
+            db.commit()
             query = select(TradingCapitalCycle).where(TradingCapitalCycle.game_id == game.id)
         else:
             query = select(TradingCapitalCycle)
@@ -250,6 +251,8 @@ class TradingCapitalCycleService:
     def current(self, db: Session, game_id: int | None = None) -> dict:
         game = TradeLedgerService().game(db, game_id)
         cycle = self.ensure_current_cycle(db, game) if game else None
+        if cycle:
+            db.commit()
         return {"status": "ok" if cycle else "no_cycle", "game": serialize_game_lab(game) if game else None, "cycle": serialize_cycle(cycle) if cycle else None, "policy": LAB_POLICY}
 
     def get(self, db: Session, cycle_id: int) -> dict:

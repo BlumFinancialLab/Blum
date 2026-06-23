@@ -1,25 +1,13 @@
 ---
 title: Blum AI Financial Intelligence
 emoji: 📈
-colorFrom: green
-colorTo: green
+colorFrom: yellow
+colorTo: gray
 sdk: docker
 app_port: 7860
 short_description: Open-source AI market intelligence case study.
-tags:
-- financial-analysis
-- finance
-- stock-market
-- ai
-- fastapi
-- nextjs
-- postgresql
-- sentiment-analysis
-- time-series
-- data-visualization
-pinned: true
-thumbnail: >-
-  https://cdn-uploads.huggingface.co/production/uploads/69afbae24b6fc5d0f42f3d6d/skMTlPVOtZHMtQEv8QLTA.png
+tags: [financial-analysis, finance, stock-market, ai, fastapi, nextjs, postgresql, sentiment-analysis, time-series, data-visualization]
+pinned: false
 ---
 
 # Blum AI Financial Intelligence
