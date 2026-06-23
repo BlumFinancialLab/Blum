@@ -1114,7 +1114,12 @@ def business_quality_scores(limit: int = Query(default=80, ge=1, le=300), db: Se
 
 @router.post("/api/business-quality/recalculate")
 def business_quality_recalculate(limit: int = Query(default=80, ge=1, le=300), db: Session = Depends(get_db)) -> dict:
-    return BusinessQualityEngine().scores(db, limit=limit, persist=True)
+    engine = BusinessQualityEngine()
+    return {
+        "status": "ok",
+        "scores": engine.scores(db, limit=limit, persist=True),
+        "fundamental_alpha_patterns": engine.fundamental_alpha_patterns(db, persist=True),
+    }
 
 
 @router.get("/api/portfolio-intelligence/dashboard")
