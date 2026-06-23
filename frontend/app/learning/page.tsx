@@ -23,7 +23,7 @@ export default function LearningPage() {
     let mounted = true;
     async function load() {
       setError("");
-      const [dashResult, runsResult, predictionsResult, memoryResult, tradingStatusResult, equityResult, annotatedEquityResult, tradesResult, ledgerResult, ledgerSummaryResult, cyclesResult, currentCycleResult, cycleStatsResult, intelligenceMetricsResult, rollingMetricsResult, metricsBySetupResult, metricsByRegimeResult, metricsBySectorResult, historicalVsLiveResult, liveStatusResult, livePositionsResult, liveMetricsResult, learningEvidenceResult, realityCheckResult, pnlBreakdownResult, failuresResult, lessonsResult, benchmarkResult, reproducibilityResult, reasoningStatusResult, survivalResult, convictionResult, reliabilityResult, competitionResult, ensembleResult, benchmarkRelativeResult, trainingQualityResult] = await Promise.allSettled([
+      const [dashResult, runsResult, predictionsResult, memoryResult, tradingStatusResult, equityResult, annotatedEquityResult, tradesResult, ledgerResult, ledgerSummaryResult, cyclesResult, currentCycleResult, cycleStatsResult, intelligenceMetricsResult, rollingMetricsResult, metricsBySetupResult, metricsByRegimeResult, metricsBySectorResult, historicalVsLiveResult, liveStatusResult, livePositionsResult, liveMetricsResult, learningIntelligenceResult, learningEvidenceResult, realityCheckResult, pnlBreakdownResult, failuresResult, lessonsResult, benchmarkResult, reproducibilityResult, reasoningStatusResult, survivalResult, convictionResult, reliabilityResult, competitionResult, ensembleResult, benchmarkRelativeResult, trainingQualityResult] = await Promise.allSettled([
         api.learningDashboard(),
         api.learningRuns(20),
         api.learningPredictions(36),
@@ -46,6 +46,7 @@ export default function LearningPage() {
         api.liveTradingGameStatus(),
         api.liveTradingGamePositions(),
         api.liveTradingGameMetrics(),
+        api.learningIntelligenceDashboard(),
         api.tradingGameLearningEvidence(60),
         api.tradingGameRealityCheck(),
         api.tradingGamePnlBreakdown(),
@@ -86,6 +87,7 @@ export default function LearningPage() {
         liveStatus: liveStatusResult.status === "fulfilled" ? liveStatusResult.value : null,
         livePositions: livePositionsResult.status === "fulfilled" ? livePositionsResult.value : null,
         liveMetrics: liveMetricsResult.status === "fulfilled" ? liveMetricsResult.value : null,
+        learningIntelligence: learningIntelligenceResult.status === "fulfilled" ? learningIntelligenceResult.value : null,
         learningEvidence: learningEvidenceResult.status === "fulfilled" ? learningEvidenceResult.value : null,
         realityCheck: realityCheckResult.status === "fulfilled" ? realityCheckResult.value : null,
         pnlBreakdown: pnlBreakdownResult.status === "fulfilled" ? pnlBreakdownResult.value : null,
@@ -142,6 +144,14 @@ export default function LearningPage() {
   const livePositionRows = trading?.livePositions?.positions ?? liveStatus?.open_positions ?? [];
   const livePositions = Array.isArray(livePositionRows) ? livePositionRows : [];
   const liveMetrics = trading?.liveMetrics?.metrics ?? {};
+  const learningIntelligence = trading?.learningIntelligence ?? {};
+  const tradingPower = learningIntelligence?.trading_power ?? {};
+  const tradingPowerComponents = tradingPower?.components ?? {};
+  const benchmarkArenaRows = learningIntelligence?.benchmarks?.rows ?? [];
+  const learningProgress = learningIntelligence?.progress ?? {};
+  const weaknessRows = learningIntelligence?.weakness_map?.rows ?? [];
+  const improvementActions = learningIntelligence?.self_improvement?.actions ?? [];
+  const truthPanelRows = learningIntelligence?.truth_panel ?? tradingPower?.truth_panel ?? [];
   const learningEvidenceRows = trading?.learningEvidence?.rows ?? [];
   const realityCheck = trading?.realityCheck ?? {};
   const pnlBreakdown = trading?.pnlBreakdown ?? {};
@@ -216,6 +226,98 @@ export default function LearningPage() {
         <LearningMetric icon={<Gauge size={18} />} label="Short Accuracy" value={formatPct(byTimeframe.short?.accuracy)} subvalue="5-20 trading days" />
         <LearningMetric icon={<LineChart size={18} />} label="Mid Accuracy" value={formatPct(byTimeframe.mid?.accuracy)} subvalue="1-3 months" />
         <LearningMetric icon={<AlertTriangle size={18} />} label="Calibration Error" value={formatNumber(metrics.confidence_calibration?.mean_absolute_error)} subvalue={metrics.confidence_calibration?.status ?? "insufficient sample"} />
+      </section>
+
+      <section className="grid-3" style={{ marginTop: 12 }}>
+        <div className="panel lab-command-panel">
+          <div className="panel-head"><span>BLUM Trading Power Score</span><strong>{formatNumber(tradingPower?.score)}/100</strong></div>
+          <div className="cycle-progress-track"><span style={{ width: `${Math.max(0, Math.min(100, Number(tradingPower?.score ?? 0)))}%` }} /></div>
+          <div className="evidence-grid">
+            <SmallDatum label="Classification" value={tradingPower?.classification ?? "not calculated"} />
+            <SmallDatum label="Evidence" value={tradingPower?.statistical_confidence ?? "n/a"} />
+            <SmallDatum label="Sample" value={tradingPower?.sample_size ?? 0} />
+            <SmallDatum label="Live sample" value={tradingPower?.live_sample_size ?? 0} />
+            <SmallDatum label="Benchmark score" value={formatNumber(tradingPowerComponents?.benchmark_relative_score)} />
+            <SmallDatum label="Live validation" value={formatNumber(tradingPowerComponents?.live_forward_validation_score)} />
+          </div>
+          <p>{tradingPower?.explanation ?? "The score appears after the Trading Intelligence ledger has evidence to evaluate."}</p>
+          {(tradingPower?.warnings ?? []).length > 0 && <div className="tag-row">{tradingPower.warnings.slice(0, 5).map((item: string) => <span key={item}>{item}</span>)}</div>}
+        </div>
+
+        <div className="panel lab-command-panel">
+          <div className="panel-head"><span>Truth Panel</span><strong>no hype</strong></div>
+          <div className="brain-list dense">
+            {(truthPanelRows.length ? truthPanelRows : ["Not enough evidence yet."]).slice(0, 6).map((item: string, index: number) => (
+              <div key={`${index}-${item}`}>
+                <StatusBadge label={index === 0 ? "current state" : "evidence"} />
+                <strong>{item}</strong>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="panel lab-command-panel">
+          <div className="panel-head"><span>Learning Progress</span><strong>{learningProgress?.trend_label ?? "inconclusive"}</strong></div>
+          <div className="evidence-grid">
+            <SmallDatum label="Growth Score" value={`${formatNumber(learningProgress?.intelligence_growth_score)}/100`} />
+            <SmallDatum label="Current Trades" value={learningProgress?.current?.trades_count ?? 0} />
+            <SmallDatum label="Win Rate" value={formatPct(learningProgress?.current?.win_rate)} />
+            <SmallDatum label="Expectancy" value={`${formatNumber(learningProgress?.current?.expectancy_r)}R`} />
+            <SmallDatum label="Missed Entry" value={formatPct(learningProgress?.current?.missed_entry_rate)} />
+            <SmallDatum label="Benchmark Excess" value={formatPctRaw(learningProgress?.current?.benchmark_excess)} />
+          </div>
+          <p>{learningProgress?.summary ?? "BLUM cannot claim improvement until rolling windows and live validation are meaningful."}</p>
+        </div>
+      </section>
+
+      <section className="grid-3" style={{ marginTop: 12 }}>
+        <div className="panel">
+          <div className="panel-head"><span>Benchmark Arena</span><strong>{benchmarkArenaRows.length}</strong></div>
+          <div className="learning-table">
+            <div className="learning-row head"><span>Benchmark</span><span>Type</span><span>Result</span><span>Excess</span><span>Sample</span><span>Evidence</span></div>
+            {benchmarkArenaRows.slice(0, 10).map((row: any) => (
+              <div className="learning-row" key={`${row.benchmark_name}-${row.benchmark_type}`}>
+                <strong>{row.benchmark_name}</strong>
+                <span>{row.benchmark_type}</span>
+                <span className={benchmarkTone(row.result_label)}>{String(row.result_label).replaceAll("_", " ")}</span>
+                <span className={Number(row.excess_return) >= 0 ? "positive-text" : "negative-text"}>{formatPctRaw(row.excess_return)}</span>
+                <span>{row.sample_size}</span>
+                <span>{row.statistical_confidence}</span>
+              </div>
+            ))}
+            {benchmarkArenaRows.length === 0 && <div className="empty-state">No benchmark comparison is available yet.</div>}
+          </div>
+        </div>
+
+        <div className="panel">
+          <div className="panel-head"><span>Strength / Weakness Map</span><strong>{weaknessRows.length}</strong></div>
+          <div className="brain-list dense">
+            {weaknessRows.slice(0, 6).map((row: any) => (
+              <div key={`${row.dimension}-${row.entity}`}>
+                <StatusBadge label={`${row.dimension}: ${String(row.entity).replaceAll("_", " ")}`} />
+                <div className="opportunity-line"><strong>{row.main_problem}</strong><span>{formatNumber(row.weakness_score)}/100 weak</span></div>
+                <p>{row.recommended_action}</p>
+                <p>Samples {row.sample_size} | strength {formatNumber(row.strength_score)} | priority {row.priority}</p>
+              </div>
+            ))}
+            {weaknessRows.length === 0 && <div className="empty-state compact">No weakness map yet. BLUM needs trade outcomes and attribution samples.</div>}
+          </div>
+        </div>
+
+        <div className="panel">
+          <div className="panel-head"><span>Self-Improvement Queue</span><strong>{improvementActions.length}</strong></div>
+          <div className="brain-list dense">
+            {improvementActions.slice(0, 6).map((row: any) => (
+              <div key={row.id ?? `${row.source_dimension}-${row.affected_module}`}>
+                <StatusBadge label={`${row.priority} | ${row.status}`} />
+                <strong>{row.detected_problem}</strong>
+                <p>{row.recommended_action}</p>
+                <p>Module {row.affected_module} | impact: {row.expected_impact}</p>
+              </div>
+            ))}
+            {improvementActions.length === 0 && <div className="empty-state compact">No self-improvement action has been proposed yet.</div>}
+          </div>
+        </div>
       </section>
 
       <section className="grid-3" style={{ marginTop: 12 }}>
@@ -785,6 +887,13 @@ function scoreTone(value: any) {
   const numeric = Number(value);
   if (numeric >= 65) return "positive-text";
   if (numeric <= 42) return "negative-text";
+  return "";
+}
+
+function benchmarkTone(label: any) {
+  const value = String(label ?? "");
+  if (value === "outperforming") return "positive-text";
+  if (value === "underperforming") return "negative-text";
   return "";
 }
 

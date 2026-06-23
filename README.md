@@ -830,6 +830,51 @@ Important constraints:
 - Every performance number must be read with sample-size and realism context.
 - BLUM does not execute real trades, does not provide financial advice and does not claim guaranteed outperformance.
 
+## Learning Intelligence Benchmark Dashboard
+
+BLUM now adds a Learning Intelligence Control Room on top of the Trading Intelligence Lab. This release is deliberately truth-first: BLUM does not assume it is good, does not hide benchmark underperformance and does not treat historical simulation as proof of alpha.
+
+The dashboard measures whether BLUM is becoming a better trading-reasoning system through:
+
+- Trading Power Score: a strict 0-100 composite score with classification from `Not usable` to `Exceptional, requires external validation`. It combines benchmark-relative evidence, expectancy, drawdown control, win/loss quality, missed-entry penalty, risk management, capital-cycle behavior, live paper validation, regime robustness, setup diversity, statistical confidence, reproducibility, decision quality and learning velocity.
+- Official Benchmark Comparison: BLUM is compared against SPY, QQQ, VTI, DIA, IWM, sector ETFs and simple practical baselines such as cash/no-trade, random-selection proxy, random-entry/random-exit proxy, momentum proxy, moving-average proxy and sector-rotation proxy.
+- Learning Progress: rolling 30/100/250-action views for win rate, expectancy, benchmark excess, missed entries, stop hits, target hits and overall intelligence growth.
+- Strength and Weakness Map: setup, regime, sector and engine-level weakness detection, including high missed-entry rate, excessive stop hits, benchmark underperformance, low sample size and weak evidence coverage.
+- Self-Improvement Action Engine: measured weaknesses are converted into auditable improvement proposals such as increasing Learning Loop sampling, testing pullback-retest entries, penalizing late breakout entries or comparing against passive benchmarks before confidence increases.
+- Live vs Historical Validation: historical results are marked as backtest-like evidence; live forward paper results are treated as stronger evidence only when enough timestamp-frozen trades close.
+- Truth Panel: a short, blunt explanation of whether BLUM is currently outperforming or underperforming relevant benchmarks, whether the sample is reliable and what the system should study next.
+
+Important safeguards:
+
+- Every performance claim is benchmarked, sample-size aware and statistically cautious.
+- If BLUM underperforms SPY, QQQ, VTI or a simple baseline, the dashboard says so.
+- If live forward evidence is immature, the dashboard says `not reliable yet`.
+- Self-improvement actions are logged, reversible and do not modify source code.
+- Low-risk actions can be queued for testing, but risky changes require review.
+- BLUM does not claim guaranteed outperformance, does not provide financial advice and does not execute real trades.
+
+API surface:
+
+- `GET /api/learning-intelligence/dashboard`
+- `GET /api/learning-intelligence/trading-power`
+- `POST /api/learning-intelligence/trading-power/recalculate`
+- `GET /api/learning-intelligence/benchmarks`
+- `GET /api/learning-intelligence/benchmarks/{benchmark_name}`
+- `POST /api/learning-intelligence/benchmarks/recalculate`
+- `GET /api/learning-intelligence/progress`
+- `GET /api/learning-intelligence/progress/rolling`
+- `GET /api/learning-intelligence/progress/by-setup`
+- `GET /api/learning-intelligence/progress/by-regime`
+- `GET /api/learning-intelligence/weakness-map`
+- `GET /api/learning-intelligence/weakness-map/by-setup`
+- `GET /api/learning-intelligence/weakness-map/by-regime`
+- `GET /api/learning-intelligence/weakness-map/by-sector`
+- `GET /api/learning-intelligence/weakness-map/by-engine`
+- `GET /api/learning-intelligence/self-improvement/actions`
+- `POST /api/learning-intelligence/self-improvement/generate`
+- `POST /api/learning-intelligence/self-improvement/apply/{action_id}`
+- `POST /api/learning-intelligence/self-improvement/evaluate/{action_id}`
+
 ## Local Setup
 
 ```bash
@@ -879,6 +924,13 @@ export LIVE_TRADING_GAME_MAX_RISK_PER_TRADE=1
 export LIVE_TRADING_GAME_REQUIRE_ACTIONABLE_SETUP=true
 export LIVE_TRADING_GAME_ALLOW_FRACTIONAL_SHARES=true
 export LIVE_TRADING_GAME_BENCHMARK=SPY
+export SELF_IMPROVEMENT_ENABLED=true
+export SELF_IMPROVEMENT_AUTO_APPLY=false
+export SELF_IMPROVEMENT_AUTO_APPLY_LOW_RISK=true
+export SELF_IMPROVEMENT_MIN_SAMPLE_SIZE=50
+export SELF_IMPROVEMENT_REQUIRE_BENCHMARK_CHECK=true
+export SELF_IMPROVEMENT_REQUIRE_LIVE_CONFIRMATION=false
+export SELF_IMPROVEMENT_ROLLBACK_ENABLED=true
 ```
 
 The learning loops only update database memory, confidence adjustments, proprietary reasoning examples and reversible scoring-weight versions.

@@ -32,6 +32,7 @@ from app.services.blum_training_memory import BlumTrainingMemoryService
 from app.services.fundamentals import fundamentals_for_asset
 from app.services.live import market_sentiment
 from app.services.learning_loop import LearningDashboardService
+from app.services.learning_intelligence import LearningIntelligenceDashboardService
 from app.services.market_data import market_snapshot_for_asset
 from app.services.market_sniper import MarketSniperEngine
 from app.services.reasoning_precision import (
@@ -481,6 +482,7 @@ def trading_game_context_for_chat(db: Session) -> dict:
             "metrics_by_setup": TradingIntelligenceMetricsService().by_dimension(db, "setup"),
             "live_forward": LiveForwardPaperTradingService().status(db),
             "historical_vs_live": HistoricalLiveComparisonService().compare(db),
+            "learning_intelligence": LearningIntelligenceDashboardService().dashboard(db),
             "pnl_breakdown": PnLBreakdownService().game_breakdown(db),
             "reality_check": TradingGameRealityCheckService().evaluate(db),
             "failures": engine.failures(db, limit=12),
@@ -1466,6 +1468,7 @@ def build_trading_game_response(language: str, context: dict) -> dict:
     historical_vs_live = context.get("historical_vs_live") or {}
     pnl_breakdown = context.get("pnl_breakdown") or {}
     reality_check = context.get("reality_check") or {}
+    learning_intelligence = context.get("learning_intelligence") or {}
     if not game:
         message = "BLUM non ha ancora un Trading Game persistito. Serve almeno un ciclo Sniper/Learning Loop per creare simulazioni P/L reali." if language == "it" else "BLUM does not have a persisted Trading Game yet. It needs at least one Sniper/Learning Loop cycle to create real P/L simulations."
         return build_error_response(language, message, [])
@@ -1491,6 +1494,7 @@ def build_trading_game_response(language: str, context: dict) -> dict:
                 f"{benchmark.get('benchmark') or game.get('benchmark_ticker')} return: {format_signed(benchmark.get('benchmark_return'))}%",
                 "Nessuna dichiarazione di outperformance e valida se il campione e piccolo o incompleto.",
             ]},
+            {"key": "learning_intelligence", "title": "Learning Intelligence", "bullets": learning_intelligence_lines(learning_intelligence, language)},
             {"key": "trade_ledger", "title": "Trade ledger", "bullets": trade_ledger_lines(ledger_rows, language)},
             {"key": "intelligence_metrics", "title": "Trading intelligence", "bullets": intelligence_metric_lines(intelligence_metrics, rolling_metrics, metrics_by_setup, language)},
             {"key": "live_forward", "title": "Storico vs live paper", "bullets": historical_live_lines(live_forward, historical_vs_live, language)},
@@ -1528,6 +1532,7 @@ def build_trading_game_response(language: str, context: dict) -> dict:
                 f"{benchmark.get('benchmark') or game.get('benchmark_ticker')} return: {format_signed(benchmark.get('benchmark_return'))}%",
                 "No outperformance claim is valid when sample size or benchmark coverage is insufficient.",
             ]},
+            {"key": "learning_intelligence", "title": "Learning Intelligence", "bullets": learning_intelligence_lines(learning_intelligence, language)},
             {"key": "trade_ledger", "title": "Trade Ledger", "bullets": trade_ledger_lines(ledger_rows, language)},
             {"key": "intelligence_metrics", "title": "Trading Intelligence", "bullets": intelligence_metric_lines(intelligence_metrics, rolling_metrics, metrics_by_setup, language)},
             {"key": "live_forward", "title": "Historical vs Live Paper", "bullets": historical_live_lines(live_forward, historical_vs_live, language)},
@@ -1557,9 +1562,44 @@ def build_trading_game_response(language: str, context: dict) -> dict:
         "executive_view": summary,
         "risk_reward_view": f"Expectancy {format_number(game.get('expectancy_r'))}R, drawdown {format_signed(game.get('max_drawdown'))}%.",
         "data_quality": {"sample_warning": sample_warning, "trades": game.get("trade_count"), "reproducibility": reproducibility, "cycles": cycle_stats, "live_sample_warning": (historical_vs_live.get("sample_warning") if isinstance(historical_vs_live, dict) else None)},
-        "learning_loop_memory": {"trading_game": game, "lessons": lessons[:6], "latest_trades": trades[:6], "ledger": ledger_rows[:8], "reality_check": reality_check, "cycles": cycle_stats, "intelligence_metrics": intelligence_metrics, "historical_vs_live": historical_vs_live},
+        "learning_loop_memory": {"trading_game": game, "lessons": lessons[:6], "latest_trades": trades[:6], "ledger": ledger_rows[:8], "reality_check": reality_check, "cycles": cycle_stats, "intelligence_metrics": intelligence_metrics, "historical_vs_live": historical_vs_live, "learning_intelligence": learning_intelligence},
         "answer_to_user": summary,
     }
+
+
+def learning_intelligence_lines(payload: dict, language: str) -> list[str]:
+    if not payload or payload.get("status") == "unavailable":
+        return ["Learning Intelligence non disponibile: non invento benchmark o score." if language == "it" else "Learning Intelligence is unavailable; I will not invent benchmark or score evidence."]
+    power = payload.get("trading_power") or {}
+    benchmarks = (payload.get("benchmarks") or {}).get("rows") or []
+    weakness = (payload.get("weakness_map") or {}).get("rows") or []
+    actions = (payload.get("self_improvement") or {}).get("actions") or []
+    truth = payload.get("truth_panel") or power.get("truth_panel") or []
+    spy = next((item for item in benchmarks if item.get("benchmark_name") == "SPY"), None)
+    qqq = next((item for item in benchmarks if item.get("benchmark_name") == "QQQ"), None)
+    top_weakness = weakness[0] if weakness else {}
+    top_action = actions[0] if actions else {}
+    if language == "it":
+        lines = [
+            f"Trading Power Score: {format_number(power.get('score'))}/100 | {power.get('classification', 'n/a')} | evidenza {power.get('statistical_confidence', 'n/a')}.",
+            f"SPY: {(spy or {}).get('result_label', 'n/a')} con excess {(spy or {}).get('excess_return', 'n/a')}%; QQQ: {(qqq or {}).get('result_label', 'n/a')} con excess {(qqq or {}).get('excess_return', 'n/a')}%.",
+        ]
+        if top_weakness:
+            lines.append(f"Debolezza principale: {top_weakness.get('main_problem')} Azione: {top_weakness.get('recommended_action')}")
+        if top_action:
+            lines.append(f"Prossima azione proposta: {top_action.get('recommended_action')} | stato {top_action.get('status')}.")
+        lines.extend(str(item) for item in truth[:2])
+        return dedupe_warnings(lines)
+    lines = [
+        f"Trading Power Score: {format_number(power.get('score'))}/100 | {power.get('classification', 'n/a')} | evidence {power.get('statistical_confidence', 'n/a')}.",
+        f"SPY: {(spy or {}).get('result_label', 'n/a')} with excess {(spy or {}).get('excess_return', 'n/a')}%; QQQ: {(qqq or {}).get('result_label', 'n/a')} with excess {(qqq or {}).get('excess_return', 'n/a')}%.",
+    ]
+    if top_weakness:
+        lines.append(f"Main weakness: {top_weakness.get('main_problem')} Action: {top_weakness.get('recommended_action')}")
+    if top_action:
+        lines.append(f"Next proposed action: {top_action.get('recommended_action')} | status {top_action.get('status')}.")
+    lines.extend(str(item) for item in truth[:2])
+    return dedupe_warnings(lines)
 
 
 def trade_ledger_lines(rows: list[dict], language: str) -> list[str]:
@@ -2103,6 +2143,7 @@ def summarize_trading_game_context(context: dict) -> dict:
     current_cycle = (context or {}).get("current_cycle") or {}
     intelligence = (context or {}).get("intelligence_metrics") or {}
     historical_vs_live = (context or {}).get("historical_vs_live") or {}
+    learning_intelligence = (context or {}).get("learning_intelligence") or {}
     return {
         "current_game": {
             "status": game.get("status"),
@@ -2140,6 +2181,13 @@ def summarize_trading_game_context(context: dict) -> dict:
             "sample_warning": historical_vs_live.get("sample_warning"),
             "historical": historical_vs_live.get("historical"),
             "live": historical_vs_live.get("live"),
+        },
+        "learning_intelligence": {
+            "trading_power": learning_intelligence.get("trading_power") or {},
+            "truth_panel": (learning_intelligence.get("truth_panel") or [])[:5],
+            "benchmarks": (learning_intelligence.get("benchmarks") or {}).get("rows", [])[:8],
+            "weakness_map": (learning_intelligence.get("weakness_map") or {}).get("rows", [])[:6],
+            "self_improvement": (learning_intelligence.get("self_improvement") or {}).get("actions", [])[:6],
         },
     }
 
@@ -2340,7 +2388,7 @@ def infer_intent(message: str, mode: str | None = None) -> str:
         return "fundamental_analysis"
     if any(term in normalized for term in ["tesi", "thesis", "convinzione", "conviction", "ancora valida", "still valid", "sopravviss", "survival", "decay", "decad", "bull bear neutral", "tesi bull", "tesi bear", "tesi neutral", "motore", "engine vote", "sta migliorando", "dove ha sbagliato", "reasoning core", "batte spy", "batte qqq", "vs spy", "vs qqq"]):
         return "reasoning_memory_question"
-    if any(term in normalized for term in ["capitale virtuale", "trading game", "sta battendo", "batte il mercato", "benchmark", "drawdown", "profit factor", "expectancy", "p/l", "pl ", "peggior errore", "andato a zero", "rischio per trade", "riproducibil", "reproducib", "win rate", "quali trade", "trade hanno", "dove e entrato", "dove e uscito", "entrato blum", "uscito blum", "per azione", "fortuna", "profitto arriva", "ledger", "trade piu importante", "100 eur", "10,000", "10000", "target cycle", "ciclo capitale", "cicli capitale", "quante volte", "live paper", "forward paper", "storico vs live", "historical vs live", "sta migliorando", "intelligence growth", "missed entry", "stop hit", "target hit"]):
+    if any(term in normalized for term in ["capitale virtuale", "trading game", "sta battendo", "batte il mercato", "benchmark", "drawdown", "profit factor", "expectancy", "p/l", "pl ", "peggior errore", "andato a zero", "rischio per trade", "riproducibil", "reproducib", "win rate", "quali trade", "trade hanno", "dove e entrato", "dove e uscito", "entrato blum", "uscito blum", "per azione", "fortuna", "profitto arriva", "ledger", "trade piu importante", "100 eur", "10,000", "10000", "target cycle", "ciclo capitale", "cicli capitale", "quante volte", "live paper", "forward paper", "storico vs live", "historical vs live", "sta migliorando", "intelligence growth", "missed entry", "stop hit", "target hit", "trading power", "power score", "dove e scarso", "piu scarso", "weakness", "self improvement", "auto miglior", "prossima azione", "baseline semplice", "stiamo battendo spy", "stiamo battendo qqq"]):
         return "trading_game"
     if any(term in normalized for term in ["sniper", "entrabile", "meglio aspettare", "ingresso", "entry", "risk/reward", "uscita", "exit", "target", "invalidazione", "invalidation", "profitto", "take profit"]):
         return "market_sniper"

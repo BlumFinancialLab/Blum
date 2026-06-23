@@ -2283,3 +2283,140 @@ class HistoricalLiveComparison(Base):
     live_profit_factor: Mapped[float | None] = mapped_column(Float)
     sample_warning: Mapped[str | None] = mapped_column(Text)
     comparison_payload: Mapped[dict] = mapped_column(JsonType, default=dict)
+
+
+class BlumTradingPowerScore(Base):
+    __tablename__ = "blum_trading_power_scores"
+    __table_args__ = (
+        Index("ix_blum_trading_power_scores_mode_created", "mode", "calculated_at"),
+        Index("ix_blum_trading_power_scores_scope_score", "scope", "score"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    calculated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    mode: Mapped[str] = mapped_column(String(80), default="historical_plus_live", index=True)
+    scope: Mapped[str] = mapped_column(String(120), default="global", index=True)
+    score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    classification: Mapped[str] = mapped_column(String(120), default="Not usable", index=True)
+    benchmark_relative_score: Mapped[float] = mapped_column(Float, default=0.0)
+    expectancy_score: Mapped[float] = mapped_column(Float, default=0.0)
+    drawdown_control_score: Mapped[float] = mapped_column(Float, default=0.0)
+    win_loss_quality_score: Mapped[float] = mapped_column(Float, default=0.0)
+    missed_entry_penalty: Mapped[float] = mapped_column(Float, default=0.0)
+    risk_management_score: Mapped[float] = mapped_column(Float, default=0.0)
+    capital_cycle_score: Mapped[float] = mapped_column(Float, default=0.0)
+    live_forward_validation_score: Mapped[float] = mapped_column(Float, default=0.0)
+    regime_robustness_score: Mapped[float] = mapped_column(Float, default=0.0)
+    setup_diversity_score: Mapped[float] = mapped_column(Float, default=0.0)
+    statistical_confidence_score: Mapped[float] = mapped_column(Float, default=0.0)
+    reproducibility_score: Mapped[float] = mapped_column(Float, default=0.0)
+    decision_quality_score: Mapped[float] = mapped_column(Float, default=0.0)
+    learning_velocity_score: Mapped[float] = mapped_column(Float, default=0.0)
+    explanation: Mapped[str] = mapped_column(Text, default="")
+    warnings_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+
+
+class LearningBenchmarkComparison(Base):
+    __tablename__ = "learning_benchmark_comparisons"
+    __table_args__ = (
+        Index("ix_learning_benchmark_mode_name_created", "mode", "benchmark_name", "calculated_at"),
+        Index("ix_learning_benchmark_result", "result_label", "statistical_confidence"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    calculated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    mode: Mapped[str] = mapped_column(String(80), default="historical_simulation", index=True)
+    benchmark_name: Mapped[str] = mapped_column(String(120), index=True)
+    benchmark_type: Mapped[str] = mapped_column(String(80), default="market", index=True)
+    period_start: Mapped[datetime | None] = mapped_column(Date, index=True)
+    period_end: Mapped[datetime | None] = mapped_column(Date, index=True)
+    blum_return: Mapped[float | None] = mapped_column(Float)
+    benchmark_return: Mapped[float | None] = mapped_column(Float)
+    excess_return: Mapped[float | None] = mapped_column(Float, index=True)
+    blum_max_drawdown: Mapped[float | None] = mapped_column(Float)
+    benchmark_max_drawdown: Mapped[float | None] = mapped_column(Float)
+    blum_volatility: Mapped[float | None] = mapped_column(Float)
+    benchmark_volatility: Mapped[float | None] = mapped_column(Float)
+    sharpe_proxy: Mapped[float | None] = mapped_column(Float)
+    sortino_proxy: Mapped[float | None] = mapped_column(Float)
+    calmar_proxy: Mapped[float | None] = mapped_column(Float)
+    information_ratio_proxy: Mapped[float | None] = mapped_column(Float)
+    hit_rate_vs_benchmark: Mapped[float | None] = mapped_column(Float)
+    risk_adjusted_advantage: Mapped[float | None] = mapped_column(Float)
+    sample_size: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    statistical_confidence: Mapped[str] = mapped_column(String(80), default="very low evidence", index=True)
+    result_label: Mapped[str] = mapped_column(String(80), default="insufficient_sample", index=True)
+    explanation: Mapped[str] = mapped_column(Text, default="")
+
+
+class LearningProgressSnapshot(Base):
+    __tablename__ = "learning_progress_snapshots"
+    __table_args__ = (
+        Index("ix_learning_progress_window_created", "window_type", "window_size", "calculated_at"),
+        Index("ix_learning_progress_trend", "trend_label", "intelligence_growth_score"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    calculated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    window_type: Mapped[str] = mapped_column(String(80), default="rolling", index=True)
+    window_size: Mapped[int | None] = mapped_column(Integer, index=True)
+    trades_count: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    win_rate: Mapped[float | None] = mapped_column(Float)
+    missed_entry_rate: Mapped[float | None] = mapped_column(Float)
+    loss_rate: Mapped[float | None] = mapped_column(Float)
+    target_hit_rate: Mapped[float | None] = mapped_column(Float)
+    stop_hit_rate: Mapped[float | None] = mapped_column(Float)
+    expectancy_r: Mapped[float | None] = mapped_column(Float)
+    benchmark_excess: Mapped[float | None] = mapped_column(Float)
+    max_drawdown: Mapped[float | None] = mapped_column(Float)
+    trade_quality_avg: Mapped[float | None] = mapped_column(Float)
+    confidence_calibration_error: Mapped[float | None] = mapped_column(Float)
+    repeated_mistake_rate: Mapped[float | None] = mapped_column(Float)
+    intelligence_growth_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    trend_label: Mapped[str] = mapped_column(String(80), default="inconclusive", index=True)
+    explanation: Mapped[str] = mapped_column(Text, default="")
+
+
+class LearningStrengthWeaknessMap(Base):
+    __tablename__ = "learning_strength_weakness_map"
+    __table_args__ = (
+        Index("ix_learning_strength_dimension_entity", "dimension", "entity"),
+        Index("ix_learning_strength_priority", "priority", "weakness_score"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    calculated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    dimension: Mapped[str] = mapped_column(String(80), index=True)
+    entity: Mapped[str] = mapped_column(String(180), index=True)
+    strength_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    weakness_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    sample_size: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    evidence: Mapped[dict] = mapped_column(JsonType, default=dict)
+    main_problem: Mapped[str] = mapped_column(Text, default="")
+    recommended_action: Mapped[str] = mapped_column(Text, default="")
+    priority: Mapped[str] = mapped_column(String(40), default="medium", index=True)
+    status: Mapped[str] = mapped_column(String(80), default="open", index=True)
+
+
+class SelfImprovementAction(Base):
+    __tablename__ = "self_improvement_actions"
+    __table_args__ = (
+        Index("ix_self_improvement_status_priority", "status", "priority"),
+        Index("ix_self_improvement_source", "source_dimension", "affected_module"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    source_metric: Mapped[str] = mapped_column(String(120), index=True)
+    source_dimension: Mapped[str] = mapped_column(String(120), index=True)
+    detected_problem: Mapped[str] = mapped_column(Text, default="")
+    recommended_action: Mapped[str] = mapped_column(Text, default="")
+    affected_module: Mapped[str] = mapped_column(String(120), index=True)
+    priority: Mapped[str] = mapped_column(String(40), default="medium", index=True)
+    expected_impact: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(80), default="proposed", index=True)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    before_metric: Mapped[float | None] = mapped_column(Float)
+    after_metric: Mapped[float | None] = mapped_column(Float)
+    improvement_observed: Mapped[bool | None] = mapped_column(Boolean, index=True)
+    notes_json: Mapped[dict] = mapped_column(JsonType, default=dict)

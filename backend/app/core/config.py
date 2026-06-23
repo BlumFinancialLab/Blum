@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     app_name: str = "Blum AI Financial Intelligence"
-    app_version: str = "0.15.0"
+    app_version: str = "0.16.0"
     environment: str = Field(default="demo", alias="ENVIRONMENT")
     database_url: str = Field(
         default="postgresql+psycopg2://postgres:postgres@127.0.0.1:5432/blum",
@@ -88,6 +88,13 @@ class Settings(BaseSettings):
     live_trading_game_require_actionable_setup: bool = Field(default=True, alias="LIVE_TRADING_GAME_REQUIRE_ACTIONABLE_SETUP")
     live_trading_game_allow_fractional_shares: bool = Field(default=True, alias="LIVE_TRADING_GAME_ALLOW_FRACTIONAL_SHARES")
     live_trading_game_benchmark: str = Field(default="SPY", alias="LIVE_TRADING_GAME_BENCHMARK")
+    self_improvement_enabled: bool = Field(default=True, alias="SELF_IMPROVEMENT_ENABLED")
+    self_improvement_auto_apply: bool = Field(default=False, alias="SELF_IMPROVEMENT_AUTO_APPLY")
+    self_improvement_auto_apply_low_risk: bool = Field(default=True, alias="SELF_IMPROVEMENT_AUTO_APPLY_LOW_RISK")
+    self_improvement_min_sample_size: int = Field(default=50, alias="SELF_IMPROVEMENT_MIN_SAMPLE_SIZE")
+    self_improvement_require_benchmark_check: bool = Field(default=True, alias="SELF_IMPROVEMENT_REQUIRE_BENCHMARK_CHECK")
+    self_improvement_require_live_confirmation: bool = Field(default=False, alias="SELF_IMPROVEMENT_REQUIRE_LIVE_CONFIRMATION")
+    self_improvement_rollback_enabled: bool = Field(default=True, alias="SELF_IMPROVEMENT_ROLLBACK_ENABLED")
 
     class Config:
         env_file = ".env"

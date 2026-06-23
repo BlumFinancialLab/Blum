@@ -28,6 +28,7 @@ from app.models import (
     BlumReasoningMemory,
     BlumRegimeMemory,
     BlumSelfCritique,
+    BlumTradingPowerScore,
     BlumThesisOutcome,
     BlumThesisQualityScore,
     BlumTrainingExample,
@@ -90,7 +91,11 @@ from app.models import (
     LiveForwardPaperPosition,
     HistoricalLiveComparison,
     EquityCurveAnnotation,
+    LearningBenchmarkComparison,
     MetaLearningEvent,
+    LearningProgressSnapshot,
+    LearningStrengthWeaknessMap,
+    SelfImprovementAction,
     ThesisCompetition,
     ThesisConvictionHistory,
     ThesisLifecycleEvent,
@@ -142,6 +147,14 @@ from app.services.hybrid_chart_intelligence import HybridChartIntelligence
 from app.services.huggingface_datasets import dataset_catalog_status, refresh_huggingface_dataset_catalog
 from app.services.ipo import ipo_radar, sec_company_submissions, update_ipo_radar
 from app.services.learning_loop import LearningDashboardService, LearningLoopService
+from app.services.learning_intelligence import (
+    BenchmarkComparisonService,
+    BlumTradingPowerScoreService,
+    LearningIntelligenceDashboardService,
+    LearningProgressEvaluator,
+    LearningWeaknessMapService,
+    SelfImprovementActionEngine,
+)
 from app.services.live import live_news, market_sentiment
 from app.services.macro import macro_overview, update_macro_snapshots
 from app.services.market_brain import build_market_brain, latest_market_brain, market_brain_history
@@ -321,6 +334,11 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "intelligence_growth_metrics": True,
             "live_forward_paper_trading": True,
             "historical_vs_live_comparison": True,
+            "learning_intelligence_dashboard": True,
+            "blum_trading_power_score": True,
+            "official_benchmark_comparison": True,
+            "learning_weakness_map": True,
+            "self_improvement_action_engine": True,
         },
         "database_counts": {
             "assets": int(db.scalar(select(func.count(Asset.id))) or 0),
@@ -363,6 +381,11 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "live_forward_paper_games": int(db.scalar(select(func.count(LiveForwardPaperGame.id))) or 0),
             "live_forward_paper_positions": int(db.scalar(select(func.count(LiveForwardPaperPosition.id))) or 0),
             "historical_live_comparisons": int(db.scalar(select(func.count(HistoricalLiveComparison.id))) or 0),
+            "blum_trading_power_scores": int(db.scalar(select(func.count(BlumTradingPowerScore.id))) or 0),
+            "learning_benchmark_comparisons": int(db.scalar(select(func.count(LearningBenchmarkComparison.id))) or 0),
+            "learning_progress_snapshots": int(db.scalar(select(func.count(LearningProgressSnapshot.id))) or 0),
+            "learning_strength_weakness_map": int(db.scalar(select(func.count(LearningStrengthWeaknessMap.id))) or 0),
+            "self_improvement_actions": int(db.scalar(select(func.count(SelfImprovementAction.id))) or 0),
             "model_weight_versions": int(db.scalar(select(func.count(ModelWeightVersion.id))) or 0),
             "historical_similarity_cases": int(db.scalar(select(func.count(HistoricalSimilarityCase.id))) or 0),
             "confidence_adjustments": int(db.scalar(select(func.count(ConfidenceAdjustment.id))) or 0),
@@ -408,7 +431,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "Hugging Face serves the previous image until the Docker build finishes successfully.",
             "The finance-domain 7B model is disabled by default unless BLUM_ENABLE_FINANCIAL_BRAIN_MODEL=true.",
             "Existing snapshots are refreshed by the autonomous engine after a successful deployment.",
-            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.14.0.",
+            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.16.0.",
         ],
     }
 
@@ -910,6 +933,104 @@ def live_trading_game_metrics(db: Session = Depends(get_db)) -> dict:
 @router.get("/api/live-trading-game/compare-historical")
 def live_trading_game_compare_historical(db: Session = Depends(get_db)) -> dict:
     return LiveForwardPaperTradingService().compare_historical(db)
+
+
+@router.get("/api/learning-intelligence/dashboard")
+def learning_intelligence_dashboard(db: Session = Depends(get_db)) -> dict:
+    return LearningIntelligenceDashboardService().dashboard(db)
+
+
+@router.get("/api/learning-intelligence/trading-power")
+def learning_intelligence_trading_power(db: Session = Depends(get_db)) -> dict:
+    return BlumTradingPowerScoreService().get(db)
+
+
+@router.post("/api/learning-intelligence/trading-power/recalculate")
+def learning_intelligence_recalculate_trading_power(db: Session = Depends(get_db)) -> dict:
+    return BlumTradingPowerScoreService().recalculate(db)
+
+
+@router.get("/api/learning-intelligence/benchmarks")
+def learning_intelligence_benchmarks(db: Session = Depends(get_db)) -> dict:
+    return BenchmarkComparisonService().comparisons(db, persist=False)
+
+
+@router.get("/api/learning-intelligence/benchmarks/{benchmark_name}")
+def learning_intelligence_benchmark_detail(benchmark_name: str, db: Session = Depends(get_db)) -> dict:
+    return BenchmarkComparisonService().detail(db, benchmark_name=benchmark_name)
+
+
+@router.post("/api/learning-intelligence/benchmarks/recalculate")
+def learning_intelligence_recalculate_benchmarks(db: Session = Depends(get_db)) -> dict:
+    return BenchmarkComparisonService().comparisons(db, persist=True)
+
+
+@router.get("/api/learning-intelligence/progress")
+def learning_intelligence_progress(db: Session = Depends(get_db)) -> dict:
+    return LearningProgressEvaluator().overview(db, persist=False)
+
+
+@router.get("/api/learning-intelligence/progress/rolling")
+def learning_intelligence_progress_rolling(db: Session = Depends(get_db)) -> dict:
+    return LearningProgressEvaluator().rolling(db)
+
+
+@router.get("/api/learning-intelligence/progress/by-setup")
+def learning_intelligence_progress_by_setup(db: Session = Depends(get_db)) -> dict:
+    return LearningProgressEvaluator().by_dimension(db, "setup")
+
+
+@router.get("/api/learning-intelligence/progress/by-regime")
+def learning_intelligence_progress_by_regime(db: Session = Depends(get_db)) -> dict:
+    return LearningProgressEvaluator().by_dimension(db, "regime")
+
+
+@router.get("/api/learning-intelligence/weakness-map")
+def learning_intelligence_weakness_map(db: Session = Depends(get_db)) -> dict:
+    return LearningWeaknessMapService().map(db, persist=False)
+
+
+@router.get("/api/learning-intelligence/weakness-map/by-setup")
+def learning_intelligence_weakness_by_setup(db: Session = Depends(get_db)) -> dict:
+    return LearningWeaknessMapService().map(db, dimension="setup", persist=False)
+
+
+@router.get("/api/learning-intelligence/weakness-map/by-regime")
+def learning_intelligence_weakness_by_regime(db: Session = Depends(get_db)) -> dict:
+    return LearningWeaknessMapService().map(db, dimension="regime", persist=False)
+
+
+@router.get("/api/learning-intelligence/weakness-map/by-sector")
+def learning_intelligence_weakness_by_sector(db: Session = Depends(get_db)) -> dict:
+    return LearningWeaknessMapService().map(db, dimension="sector", persist=False)
+
+
+@router.get("/api/learning-intelligence/weakness-map/by-engine")
+def learning_intelligence_weakness_by_engine(db: Session = Depends(get_db)) -> dict:
+    return LearningWeaknessMapService().map(db, dimension="engine", persist=False)
+
+
+@router.get("/api/learning-intelligence/self-improvement/actions")
+def learning_intelligence_self_improvement_actions(
+    limit: int = Query(default=80, ge=1, le=300),
+    db: Session = Depends(get_db),
+) -> dict:
+    return SelfImprovementActionEngine().list(db, limit=limit)
+
+
+@router.post("/api/learning-intelligence/self-improvement/generate")
+def learning_intelligence_generate_self_improvement(db: Session = Depends(get_db)) -> dict:
+    return SelfImprovementActionEngine().generate(db, persist=True)
+
+
+@router.post("/api/learning-intelligence/self-improvement/apply/{action_id}")
+def learning_intelligence_apply_self_improvement(action_id: int, db: Session = Depends(get_db)) -> dict:
+    return SelfImprovementActionEngine().apply(db, action_id=action_id)
+
+
+@router.post("/api/learning-intelligence/self-improvement/evaluate/{action_id}")
+def learning_intelligence_evaluate_self_improvement(action_id: int, db: Session = Depends(get_db)) -> dict:
+    return SelfImprovementActionEngine().evaluate(db, action_id=action_id)
 
 
 @router.get("/model/status")
