@@ -3,9 +3,16 @@ from datetime import datetime, timedelta
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from app.models import DashboardSnapshot
+from app.models import (
+    BlumTradingPowerScore,
+    DashboardSnapshot,
+    LearningBenchmarkComparison,
+    LearningRun,
+    TradingCapitalCycle,
+    TradingGame,
+)
 from app.services.dashboard_snapshots import DashboardSnapshotService
-from app.services.learning_summary import safe_progress, summarize_benchmarks, truth_panel
+from app.services.learning_summary import LearningSummaryService, build_truth_panel, safe_progress, summarize_benchmarks
 
 
 def test_safe_progress_handles_partial_data():
@@ -21,9 +28,29 @@ def test_summarize_benchmarks_returns_partial_status():
 
 
 def test_truth_panel_is_honest_when_power_missing():
-    rows = truth_panel(None, summarize_benchmarks([]), ["No benchmark summary."], [])
+    rows = build_truth_panel(None, summarize_benchmarks([]), ["No benchmark summary."], [])
     assert rows[0].startswith("Not enough precomputed evidence")
     assert any("No benchmark summary" in row for row in rows)
+
+
+def test_learning_summary_returns_partial_payload_without_precomputed_rows():
+    engine = create_engine("sqlite:///:memory:", future=True)
+    for model in [
+        BlumTradingPowerScore,
+        DashboardSnapshot,
+        LearningBenchmarkComparison,
+        LearningRun,
+        TradingCapitalCycle,
+        TradingGame,
+    ]:
+        model.__table__.create(bind=engine)
+
+    with Session(engine) as db:
+        payload = LearningSummaryService().summary(db)
+
+    assert payload["status"] == "initializing"
+    assert "trading_power_score" in payload["missing_sections"]
+    assert payload["truth_panel"][0].startswith("Not enough precomputed evidence")
 
 
 def test_dashboard_snapshot_round_trip_and_stale_flag():

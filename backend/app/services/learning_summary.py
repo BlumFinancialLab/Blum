@@ -66,7 +66,7 @@ class LearningSummaryService:
         current_capital = getattr(current_cycle, "final_capital", None) if current_cycle else getattr(game, "current_capital", None)
         target_capital = getattr(current_cycle, "target_capital", None) if current_cycle else getattr(game, "target_capital", None)
         target_progress = safe_progress(current_capital, target_capital)
-        truth_panel = truth_panel(power, benchmark_summary, warnings, benchmarks)
+        truth_panel_lines = build_truth_panel(power, benchmark_summary, warnings, benchmarks)
         payload = {
             "status": "initializing" if missing_sections else "ready",
             "generated_at": datetime.utcnow().isoformat(),
@@ -82,7 +82,7 @@ class LearningSummaryService:
             "latest_learning_run_at": latest_run.started_at.isoformat() if latest_run and latest_run.started_at else None,
             "benchmark_summary": benchmark_summary,
             "live_vs_historical_summary": live_snapshot,
-            "truth_panel": truth_panel,
+            "truth_panel": truth_panel_lines,
             "warnings": warnings,
             "missing_sections": missing_sections,
             "data_freshness": {
@@ -131,7 +131,7 @@ def summarize_benchmarks(rows: list[LearningBenchmarkComparison]) -> dict:
     }
 
 
-def truth_panel(power: BlumTradingPowerScore | None, benchmark_summary: dict, warnings: list[str], rows: list[LearningBenchmarkComparison]) -> list[str]:
+def build_truth_panel(power: BlumTradingPowerScore | None, benchmark_summary: dict, warnings: list[str], rows: list[LearningBenchmarkComparison]) -> list[str]:
     output = []
     if power is None:
         output.append("Not enough precomputed evidence yet to rate BLUM Trading Power.")
