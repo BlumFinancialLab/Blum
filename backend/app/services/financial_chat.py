@@ -33,6 +33,7 @@ from app.services.fundamentals import fundamentals_for_asset
 from app.services.live import market_sentiment
 from app.services.learning_loop import LearningDashboardService
 from app.services.learning_intelligence import LearningIntelligenceDashboardService
+from app.services.capital_allocation import AdaptiveCapitalAllocationEngine
 from app.services.decision_intelligence import DecisionIntelligenceDashboardService
 from app.services.market_data import market_snapshot_for_asset
 from app.services.market_sniper import MarketSniperEngine
@@ -485,6 +486,7 @@ def trading_game_context_for_chat(db: Session) -> dict:
             "historical_vs_live": HistoricalLiveComparisonService().compare(db),
             "learning_intelligence": LearningIntelligenceDashboardService().dashboard(db),
             "decision_intelligence": DecisionIntelligenceDashboardService().dashboard(db),
+            "capital_allocation": AdaptiveCapitalAllocationEngine().dashboard(db),
             "pnl_breakdown": PnLBreakdownService().game_breakdown(db),
             "reality_check": TradingGameRealityCheckService().evaluate(db),
             "failures": engine.failures(db, limit=12),
@@ -1046,6 +1048,8 @@ def build_answer(
 ) -> dict:
     if intent == "trading_game":
         return build_trading_game_response(language, trading_game_context)
+    if intent == "portfolio_question":
+        return build_trading_game_response(language, trading_game_context)
     if intent == "reasoning_memory_question":
         return build_reasoning_memory_response(language, candidates[:3], asset_packets, validation)
     if intent == "market_sniper":
@@ -1472,6 +1476,7 @@ def build_trading_game_response(language: str, context: dict) -> dict:
     reality_check = context.get("reality_check") or {}
     learning_intelligence = context.get("learning_intelligence") or {}
     decision_intelligence = context.get("decision_intelligence") or {}
+    capital_allocation = context.get("capital_allocation") or {}
     if not game:
         message = "BLUM non ha ancora un Trading Game persistito. Serve almeno un ciclo Sniper/Learning Loop per creare simulazioni P/L reali." if language == "it" else "BLUM does not have a persisted Trading Game yet. It needs at least one Sniper/Learning Loop cycle to create real P/L simulations."
         return build_error_response(language, message, [])
@@ -1499,6 +1504,7 @@ def build_trading_game_response(language: str, context: dict) -> dict:
             ]},
             {"key": "learning_intelligence", "title": "Learning Intelligence", "bullets": learning_intelligence_lines(learning_intelligence, language)},
             {"key": "decision_intelligence", "title": "Decision Intelligence", "bullets": decision_intelligence_lines(decision_intelligence, language)},
+            {"key": "capital_allocation", "title": "Capital Allocation Intelligence", "bullets": capital_allocation_lines(capital_allocation, language)},
             {"key": "trade_ledger", "title": "Trade ledger", "bullets": trade_ledger_lines(ledger_rows, language)},
             {"key": "intelligence_metrics", "title": "Trading intelligence", "bullets": intelligence_metric_lines(intelligence_metrics, rolling_metrics, metrics_by_setup, language)},
             {"key": "live_forward", "title": "Storico vs live paper", "bullets": historical_live_lines(live_forward, historical_vs_live, language)},
@@ -1538,6 +1544,7 @@ def build_trading_game_response(language: str, context: dict) -> dict:
             ]},
             {"key": "learning_intelligence", "title": "Learning Intelligence", "bullets": learning_intelligence_lines(learning_intelligence, language)},
             {"key": "decision_intelligence", "title": "Decision Intelligence", "bullets": decision_intelligence_lines(decision_intelligence, language)},
+            {"key": "capital_allocation", "title": "Capital Allocation Intelligence", "bullets": capital_allocation_lines(capital_allocation, language)},
             {"key": "trade_ledger", "title": "Trade Ledger", "bullets": trade_ledger_lines(ledger_rows, language)},
             {"key": "intelligence_metrics", "title": "Trading Intelligence", "bullets": intelligence_metric_lines(intelligence_metrics, rolling_metrics, metrics_by_setup, language)},
             {"key": "live_forward", "title": "Historical vs Live Paper", "bullets": historical_live_lines(live_forward, historical_vs_live, language)},
@@ -1567,7 +1574,7 @@ def build_trading_game_response(language: str, context: dict) -> dict:
         "executive_view": summary,
         "risk_reward_view": f"Expectancy {format_number(game.get('expectancy_r'))}R, drawdown {format_signed(game.get('max_drawdown'))}%.",
         "data_quality": {"sample_warning": sample_warning, "trades": game.get("trade_count"), "reproducibility": reproducibility, "cycles": cycle_stats, "live_sample_warning": (historical_vs_live.get("sample_warning") if isinstance(historical_vs_live, dict) else None)},
-        "learning_loop_memory": {"trading_game": game, "lessons": lessons[:6], "latest_trades": trades[:6], "ledger": ledger_rows[:8], "reality_check": reality_check, "cycles": cycle_stats, "intelligence_metrics": intelligence_metrics, "historical_vs_live": historical_vs_live, "learning_intelligence": learning_intelligence, "decision_intelligence": decision_intelligence},
+        "learning_loop_memory": {"trading_game": game, "lessons": lessons[:6], "latest_trades": trades[:6], "ledger": ledger_rows[:8], "reality_check": reality_check, "cycles": cycle_stats, "intelligence_metrics": intelligence_metrics, "historical_vs_live": historical_vs_live, "learning_intelligence": learning_intelligence, "decision_intelligence": decision_intelligence, "capital_allocation": capital_allocation},
         "answer_to_user": summary,
     }
 
@@ -1640,6 +1647,47 @@ def decision_intelligence_lines(payload: dict, language: str) -> list[str]:
         lines.append("Highest business quality: " + ", ".join(f"{row.get('ticker')} {format_number(row.get('business_quality_score'))}/100" for row in business[:3]))
     if decision.get("warnings"):
         lines.extend(str(item) for item in decision.get("warnings", [])[:2])
+    return dedupe_warnings(lines)
+
+
+def capital_allocation_lines(payload: dict, language: str) -> list[str]:
+    if not payload or payload.get("status") == "unavailable":
+        return ["Capital Allocation non disponibile: non invento pesi, cash reserve o sizing." if language == "it" else "Capital Allocation is unavailable; I will not invent weights, cash reserve or sizing."]
+    plan = payload.get("allocation_plan") or {}
+    cash = payload.get("cash_policy") or {}
+    efficiency = payload.get("allocation_efficiency") or {}
+    sizing = (payload.get("sizing_logic") or {}).get("rows") or []
+    interactions = (payload.get("interaction_risks") or {}).get("rows") or []
+    allocations = plan.get("allocations") or []
+    top = allocations[0] if allocations else {}
+    top_sizing = sizing[0] if sizing else {}
+    top_interaction = interactions[0] if interactions else {}
+    if language == "it":
+        lines = [
+            f"Cash reserve: {format_number(plan.get('cash_reserve_percent') if plan else cash.get('cash_reserve_percent'))}% | stato {cash.get('decision_state', 'n/a')}.",
+            f"Allocation Quality: {format_number(plan.get('allocation_quality_score'))}/100 | Efficiency {format_number(efficiency.get('allocation_efficiency_score'))}/100.",
+        ]
+        if top:
+            lines.append(f"Prima allocazione candidata: {top.get('ticker')} peso {format_number(top.get('recommended_weight'))}% con capital score {format_number(top.get('capital_score'))}/100.")
+        if top_sizing:
+            lines.append(f"Sizing piu forte: {top_sizing.get('sizing_logic')} | rischio suggerito {format_number(top_sizing.get('recommended_risk_percent'))}% | {top_sizing.get('recommendation')}.")
+        if top_interaction:
+            lines.append(f"Rischio interazione principale: {top_interaction.get('entity_a')} / {top_interaction.get('entity_b') or 'settore'} score {format_number(top_interaction.get('risk_score'))}/100.")
+        if plan.get("warnings"):
+            lines.extend(str(item) for item in plan.get("warnings", [])[:2])
+        return dedupe_warnings(lines)
+    lines = [
+        f"Cash reserve: {format_number(plan.get('cash_reserve_percent') if plan else cash.get('cash_reserve_percent'))}% | state {cash.get('decision_state', 'n/a')}.",
+        f"Allocation Quality: {format_number(plan.get('allocation_quality_score'))}/100 | Efficiency {format_number(efficiency.get('allocation_efficiency_score'))}/100.",
+    ]
+    if top:
+        lines.append(f"Top allocation candidate: {top.get('ticker')} weight {format_number(top.get('recommended_weight'))}% with capital score {format_number(top.get('capital_score'))}/100.")
+    if top_sizing:
+        lines.append(f"Strongest sizing logic: {top_sizing.get('sizing_logic')} | suggested risk {format_number(top_sizing.get('recommended_risk_percent'))}% | {top_sizing.get('recommendation')}.")
+    if top_interaction:
+        lines.append(f"Main interaction risk: {top_interaction.get('entity_a')} / {top_interaction.get('entity_b') or 'sector'} score {format_number(top_interaction.get('risk_score'))}/100.")
+    if plan.get("warnings"):
+        lines.extend(str(item) for item in plan.get("warnings", [])[:2])
     return dedupe_warnings(lines)
 
 
@@ -2436,7 +2484,7 @@ def infer_intent(message: str, mode: str | None = None) -> str:
         return "fundamental_analysis"
     if any(term in normalized for term in ["tesi", "thesis", "convinzione", "conviction", "ancora valida", "still valid", "sopravviss", "survival", "decay", "decad", "bull bear neutral", "tesi bull", "tesi bear", "tesi neutral", "motore", "engine vote", "sta migliorando", "dove ha sbagliato", "reasoning core", "batte spy", "batte qqq", "vs spy", "vs qqq"]):
         return "reasoning_memory_question"
-    if any(term in normalized for term in ["capitale virtuale", "trading game", "sta battendo", "batte il mercato", "benchmark", "drawdown", "profit factor", "expectancy", "p/l", "pl ", "peggior errore", "andato a zero", "rischio per trade", "riproducibil", "reproducib", "win rate", "quali trade", "trade hanno", "dove e entrato", "dove e uscito", "entrato blum", "uscito blum", "per azione", "fortuna", "profitto arriva", "ledger", "trade piu importante", "100 eur", "10,000", "10000", "target cycle", "ciclo capitale", "cicli capitale", "quante volte", "live paper", "forward paper", "storico vs live", "historical vs live", "sta migliorando", "intelligence growth", "missed entry", "stop hit", "target hit", "trading power", "power score", "dove e scarso", "piu scarso", "weakness", "self improvement", "auto miglior", "prossima azione", "baseline semplice", "stiamo battendo spy", "stiamo battendo qqq", "best opportunity", "migliore opportunita", "opportunita migliore", "ha scelto il migliore", "decision superiority", "superiorita decisionale", "alpha capture", "opportunita mancata", "missed opportunity", "business quality", "qualita business", "moat", "management quality", "portfolio quality", "qualita portafoglio", "contribuisce piu alpha", "contribution", "concentrazione portfolio"]):
+    if any(term in normalized for term in ["capitale virtuale", "trading game", "sta battendo", "batte il mercato", "benchmark", "drawdown", "profit factor", "expectancy", "p/l", "pl ", "peggior errore", "andato a zero", "rischio per trade", "riproducibil", "reproducib", "win rate", "quali trade", "trade hanno", "dove e entrato", "dove e uscito", "entrato blum", "uscito blum", "per azione", "fortuna", "profitto arriva", "ledger", "trade piu importante", "100 eur", "10,000", "10000", "target cycle", "ciclo capitale", "cicli capitale", "quante volte", "live paper", "forward paper", "storico vs live", "historical vs live", "sta migliorando", "intelligence growth", "missed entry", "stop hit", "target hit", "trading power", "power score", "dove e scarso", "piu scarso", "weakness", "self improvement", "auto miglior", "prossima azione", "baseline semplice", "stiamo battendo spy", "stiamo battendo qqq", "best opportunity", "migliore opportunita", "opportunita migliore", "ha scelto il migliore", "decision superiority", "superiorita decisionale", "alpha capture", "opportunita mancata", "missed opportunity", "business quality", "qualita business", "moat", "management quality", "portfolio quality", "qualita portafoglio", "contribuisce piu alpha", "contribution", "concentrazione portfolio", "capital allocation", "cash allocation", "cash reserve", "quanto capitale", "quanto allocare", "peso capitale", "sizing logic", "logica di sizing"]):
         return "trading_game"
     if any(term in normalized for term in ["sniper", "entrabile", "meglio aspettare", "ingresso", "entry", "risk/reward", "uscita", "exit", "target", "invalidazione", "invalidation", "profitto", "take profit"]):
         return "market_sniper"

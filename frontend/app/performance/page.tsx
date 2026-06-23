@@ -72,6 +72,8 @@ export default function PerformanceDiagnosticsPage() {
   const widgetRows = diagnostics?.dashboard_widgets?.slowest_widget_events ?? [];
   const backgroundRows = diagnostics?.background_tasks?.slowest_tasks ?? [];
   const cache = diagnostics?.cache ?? {};
+  const initialLearning = diagnostics?.initial_learning_page_load ?? {};
+  const snapshotRows = Object.values(diagnostics?.dashboard_snapshots?.latest_by_type ?? {}) as any[];
   const evidenceLabel = useMemo(() => evidenceFromCounts(diagnostics), [diagnostics]);
 
   if (error && !diagnostics) return <div className="terminal-empty">API error: {error}</div>;
@@ -132,6 +134,9 @@ export default function PerformanceDiagnosticsPage() {
             <MetricCard label="Total Requests" value={clientStats?.total ?? 0} />
             <MetricCard label="Duplicate Requests" value={clientStats?.duplicate ?? 0} />
             <MetricCard label="Cache Hits" value={clientStats?.cacheHits ?? 0} />
+            <MetricCard label="Heavy POST During Load" value={initialLearning?.heavy_post_calls_during_page_load?.length ?? 0} />
+            <MetricCard label="Server Frontend Events" value={initialLearning?.frontend_request_count ?? 0} />
+            <MetricCard label="Server Cache Hits" value={initialLearning?.cache_hit_count ?? 0} />
           </div>
           <SimpleTable
             columns={["Method", "Endpoint", "Duration", "Status", "Dedupe"]}
@@ -150,6 +155,35 @@ export default function PerformanceDiagnosticsPage() {
           <ul className="diagnostic-list">
             {recommendations(diagnostics, clientStats).map((item) => <li key={item}>{item}</li>)}
           </ul>
+        </BloombergPanel>
+      </section>
+
+      <section className="professional-grid-2" style={{ marginTop: 12 }}>
+        <BloombergPanel title="Snapshot Freshness" value={`${diagnostics.dashboard_snapshots?.fresh_count ?? 0} fresh`} subtitle="Stale-but-usable dashboard payloads available to avoid blank loading states">
+          <SimpleTable
+            columns={["Snapshot", "Age", "Stale", "Compute", "Warnings"]}
+            rows={snapshotRows.slice(0, 12).map((row: any) => [
+              row.snapshot_type,
+              formatSeconds(row.age_seconds),
+              row.is_stale ? "yes" : "no",
+              formatMs(row.computation_duration_ms),
+              (row.warnings ?? []).length
+            ])}
+            empty="No dashboard snapshots have been written yet."
+          />
+        </BloombergPanel>
+
+        <BloombergPanel title="Heavy POST Calls During Learning Load" value={`${initialLearning?.heavy_post_calls_during_page_load?.length ?? 0} events`} subtitle="These should stay at zero unless the user explicitly requests recalculation">
+          <SimpleTable
+            columns={["Method", "Path", "Duration", "Referer"]}
+            rows={(initialLearning?.heavy_post_calls_during_page_load ?? []).slice(0, 10).map((row: any) => [
+              row.method,
+              truncate(row.path, 72),
+              formatMs(row.duration_ms),
+              truncate(row.referer, 72)
+            ])}
+            empty="No heavy recalculation POST was triggered during Learning page load."
+          />
         </BloombergPanel>
       </section>
 
@@ -280,6 +314,14 @@ function formatTime(value?: string | null) {
   }
 }
 
+function formatSeconds(value: any) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "n/a";
+  if (number < 60) return `${number.toFixed(0)}s`;
+  if (number < 3600) return `${(number / 60).toFixed(1)}m`;
+  return `${(number / 3600).toFixed(1)}h`;
+}
+
 function truncate(value: any, length: number) {
   const text = String(value ?? "");
   return text.length > length ? `${text.slice(0, length)}...` : text;
@@ -298,7 +340,11 @@ function recommendations(diagnostics: Diagnostics | null, clientStats: any | nul
   const slowApi = diagnostics?.api?.slowest_endpoints?.[0];
   const slowQuery = diagnostics?.database?.slowest_queries?.[0];
   const duplicates = Number(clientStats?.duplicate ?? 0);
+  const heavyPosts = diagnostics?.initial_learning_page_load?.heavy_post_calls_during_page_load ?? [];
+  const staleSnapshots = Number(diagnostics?.dashboard_snapshots?.stale_count ?? 0);
   if (duplicates > 0) output.push(`Request dedupe is catching ${duplicates} duplicate frontend calls in this session.`);
+  if (heavyPosts.length > 0) output.push(`Remove or gate ${heavyPosts.length} heavy POST call(s) observed during Learning page load.`);
+  if (staleSnapshots > 0) output.push(`${staleSnapshots} dashboard snapshot(s) are stale; verify background refresh cadence before adding live recomputation.`);
   if (slowApi) output.push(`Inspect ${slowApi.method} ${slowApi.path}: p95 ${formatMs(slowApi.p95_ms)} and max ${formatMs(slowApi.max_ms)}.`);
   if (slowQuery) output.push(`Inspect the slowest SQL operation ${slowQuery.operation}: ${formatMs(slowQuery.duration_ms)}.`);
   if ((diagnostics?.background_tasks?.slowest_tasks ?? []).length) output.push("Background worker timing is now available; compare startup pipeline versus scheduled refresh jobs before optimizing.");

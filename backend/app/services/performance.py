@@ -264,6 +264,7 @@ class PerformanceRecorder:
                 "slowest_tasks": aggregate_events(background_events, keys=("name",))[:20],
                 "slowest_task_events": sorted(background_events, key=lambda item: item["duration_ms"], reverse=True)[:20],
             },
+            "initial_learning_page_load": learning_page_load_summary(api_events, widget_events, frontend_widget_events),
             "top_10_bottlenecks": top_bottlenecks(api_events, db_events, background_events, widget_events + frontend_widget_events),
             "observability_limits": [
                 "Exact database rows scanned are not available without issuing EXPLAIN/ANALYZE, which this diagnostics layer avoids to prevent side effects.",
@@ -420,6 +421,56 @@ def top_bottlenecks(api_events: list[dict[str, Any]], db_events: list[dict[str, 
     for event in widget_events:
         rows.append({"kind": event.get("event_type", "dashboard_widget"), "name": event["name"], "duration_ms": event["duration_ms"], "started_at": event["started_at"]})
     return sorted(rows, key=lambda item: item["duration_ms"], reverse=True)[:10]
+
+
+def learning_page_load_summary(api_events: list[dict[str, Any]], widget_events: list[dict[str, Any]], frontend_widget_events: list[dict[str, Any]]) -> dict[str, Any]:
+    frontend_api_events = [event for event in frontend_widget_events if str(event.get("name", "")).startswith("frontend.api.")]
+    status_counts: dict[str, int] = defaultdict(int)
+    for event in frontend_api_events:
+        status_counts[str((event.get("metadata") or {}).get("status") or "unknown")] += 1
+    heavy_events = [
+        event for event in widget_events
+        if event.get("name") == "performance.heavy_recalculation_triggered_during_page_load"
+    ]
+    endpoint_rows = []
+    for event in frontend_api_events[-80:]:
+        name = str(event.get("name") or "")
+        endpoint_rows.append(
+            {
+                "name": name.replace("frontend.api.", ""),
+                "duration_ms": event.get("duration_ms"),
+                "status": (event.get("metadata") or {}).get("status"),
+                "source": (event.get("metadata") or {}).get("source"),
+                "started_at": event.get("started_at"),
+            }
+        )
+    blocking_candidates = [
+        event for event in frontend_api_events
+        if event.get("duration_ms", 0) >= 1000
+    ]
+    return {
+        "frontend_request_count": len(frontend_api_events),
+        "duplicate_request_count": status_counts.get("deduped", 0),
+        "cache_hit_count": status_counts.get("cache_hit", 0) + status_counts.get("cache", 0),
+        "status_counts": dict(status_counts),
+        "heavy_post_calls_during_page_load": [
+            {
+                "method": (event.get("metadata") or {}).get("method"),
+                "path": (event.get("metadata") or {}).get("path"),
+                "duration_ms": event.get("duration_ms"),
+                "referer": (event.get("metadata") or {}).get("referer"),
+                "started_at": event.get("started_at"),
+            }
+            for event in heavy_events[-20:]
+        ],
+        "endpoints_called_during_initial_page_load": endpoint_rows,
+        "potential_first_render_blockers": sorted(blocking_candidates, key=lambda item: item.get("duration_ms", 0), reverse=True)[:12],
+        "server_learning_endpoint_events": [
+            event for event in api_events
+            if event.get("path") == "/api/learning-intelligence/summary"
+            or str(event.get("path", "")).startswith("/learning/")
+        ][-20:],
+    }
 
 
 def json_safe(value: Any) -> Any:

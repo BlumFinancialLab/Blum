@@ -119,7 +119,7 @@ The backend instruments:
 - Dashboard widget timings for the main command-center payload.
 - Browser-side dashboard widget probes from the diagnostics page.
 
-The diagnostics API is available at `/performance/diagnostics`. It reports startup duration breakdown, slowest endpoints, slowest SQL queries, slowest dashboard widgets, average and p95 response times, cache hit rate when cache events are instrumented, background task durations, rowcount/scan visibility and the top 10 measured bottlenecks.
+The diagnostics API is available at `/performance/diagnostics`. It reports startup duration breakdown, slowest endpoints, slowest SQL queries, slowest dashboard widgets, average and p95 response times, cache hit rate, dashboard snapshot freshness, background task durations, rowcount/scan visibility, initial Learning page load requests, duplicate request counts, heavy POST calls triggered during page load and the top 10 measured bottlenecks.
 
 Rows scanned are reported conservatively: DBAPI cursor timing is exact, but exact scanned rows require `EXPLAIN/ANALYZE`. The diagnostics layer does not run optimizer probes automatically, so it exposes driver rowcount when available and marks unknown scan depth explicitly.
 
@@ -130,10 +130,10 @@ The Learning / Trading Intelligence dashboard uses progressive loading so the us
 - Tier 0: immediate shell, header, navigation and skeleton states.
 - Tier 1: `/api/learning-intelligence/summary`, a lightweight critical snapshot built from latest precomputed rows only.
 - Tier 2: main charts such as equity curve, rolling metrics and historical-vs-live comparison.
-- Tier 3: tables and ledgers with safe default limits.
+- Tier 3: tables and ledgers with safe default limits, loaded only when the ledger section becomes visible or when the user explicitly requests detailed tables.
 - Tier 4: deep reasoning/model panels such as thesis survival, conviction decay, regime reliability and training quality, loaded only when opened by the user.
 
-The frontend request wrapper deduplicates in-flight GET requests, applies request timeouts, keeps a short in-memory route-session cache and reports slow browser-side timings to Performance Diagnostics. Heavy recalculation POST endpoints are not called automatically during Learning page render; they remain explicit/manual or background-worker actions.
+The frontend request wrapper deduplicates in-flight GET requests, applies request timeouts, keeps a short in-memory route-session cache and reports Learning-page browser timings, cache hits and dedupe events to Performance Diagnostics. Heavy recalculation POST endpoints are not called automatically during Learning page render; they remain explicit/manual or background-worker actions, and the Performance page flags any accidental heavy POST during initial load.
 
 Dashboard snapshots provide stale-but-usable payloads for fast UI surfaces. The snapshot API is `/api/dashboard-snapshots/{snapshot_type}`. The startup status API is `/startup/status`, allowing the UI to distinguish API readiness from background warm-up.
 
@@ -1044,12 +1044,48 @@ Main API:
 - `GET /api/portfolio-intelligence/quality`
 - `POST /api/portfolio-intelligence/recalculate`
 
+### Adaptive Capital Allocation Intelligence
+
+`AdaptiveCapitalAllocationEngine` upgrades BLUM from trade evaluation to capital allocation research. It does not create trades and does not rewrite the Trading Game. It studies the evidence already produced by Trading Game, Decision Superiority, Business Quality and Portfolio Intelligence to answer:
+
+- how much simulated capital each opportunity deserved;
+- when capital should stay in cash;
+- whether capital was underallocated to winners or overallocated to losers;
+- which sizing logic produced better risk-adjusted alpha;
+- how positions interact through correlation, sector concentration and combined exposure;
+- whether the portfolio could have been allocated better than it was.
+
+The layer persists an auditable history in:
+
+- `capital_allocation_snapshots`
+- `opportunity_capital_scores`
+- `cash_allocation_decisions`
+- `allocation_efficiency_audits`
+- `sizing_logic_allocations`
+- `capital_interaction_risks`
+
+Main API:
+
+- `GET /api/capital-allocation/dashboard`
+- `GET /api/capital-allocation/plan`
+- `GET /api/capital-allocation/opportunities`
+- `GET /api/capital-allocation/cash-policy`
+- `GET /api/capital-allocation/efficiency`
+- `GET /api/capital-allocation/sizing`
+- `GET /api/capital-allocation/interactions`
+- `POST /api/capital-allocation/recalculate`
+
+The engine treats cash as an active research decision. Cash reserve rises when sample size is weak, expectancy is negative, benchmark excess is poor, drawdown is elevated or stop-hit rates are high. Capital weights are capped when evidence is thin, drawdown is high or position interaction risk is elevated.
+
 ### Guardrails
 
 - No decision-superiority claim is valid with insufficient comparable samples.
 - BLUM must say when a better opportunity existed.
 - Business quality is not inferred as fact when fundamentals are missing.
 - Portfolio quality is penalized when P/L is concentrated in too few positions.
+- Capital allocation must remain evidence-bound: no opportunity receives larger simulated capital without sample-size, benchmark, sizing and interaction context.
+- Cash allocation is valid output when the evidence does not justify deployment.
+- Allocation efficiency is ex-post research evidence, not a future promise.
 - Chat responses use stored dashboard evidence only. If the evidence is missing, BLUM must answer `Insufficient evidence`.
 
 ## Docker

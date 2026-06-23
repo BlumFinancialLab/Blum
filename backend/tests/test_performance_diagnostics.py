@@ -30,3 +30,25 @@ def test_performance_recorder_builds_diagnostics():
     assert payload["background_tasks"]["slowest_tasks"][0]["name"] == "market_refresh"
     assert payload["cache"]["hit_rate"] == 0.5
     assert payload["top_10_bottlenecks"][0]["kind"] == "background"
+
+
+def test_performance_recorder_exposes_learning_page_load_diagnostics():
+    recorder = PerformanceRecorder()
+    now = datetime.utcnow()
+    recorder.record_frontend_widget("frontend.api.GET./api/learning-intelligence/summary", 120.0, {"status": "ok", "source": "fetchBlum"})
+    recorder.record_frontend_widget("frontend.api.GET./api/trading-game/status", 0.4, {"status": "cache_hit", "source": "fetchBlum"})
+    recorder.record_frontend_widget("frontend.api.GET./api/trading-game/status", 0.2, {"status": "deduped", "source": "fetchBlum"})
+    recorder.record_dashboard_widget(
+        "performance.heavy_recalculation_triggered_during_page_load",
+        3400.0,
+        {"method": "POST", "path": "/api/business-quality/recalculate", "referer": "https://example.test/learning"},
+        now,
+    )
+
+    payload = recorder.diagnostics()
+    summary = payload["initial_learning_page_load"]
+
+    assert summary["frontend_request_count"] == 3
+    assert summary["cache_hit_count"] == 1
+    assert summary["duplicate_request_count"] == 1
+    assert summary["heavy_post_calls_during_page_load"][0]["path"] == "/api/business-quality/recalculate"

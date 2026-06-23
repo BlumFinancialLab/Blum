@@ -20,6 +20,7 @@ class DashboardSnapshotService:
             .limit(1)
         )
         if row is None:
+            record_snapshot_cache(snapshot_type, hit=False, status="missing")
             return {
                 "status": "missing",
                 "snapshot_type": snapshot_type,
@@ -28,6 +29,7 @@ class DashboardSnapshotService:
             }
         now = datetime.utcnow()
         is_stale = bool(row.is_stale or (row.expires_at is not None and row.expires_at < now))
+        record_snapshot_cache(snapshot_type, hit=not is_stale, status="stale" if is_stale else "ready")
         return {
             "status": "stale" if is_stale else "ready",
             "snapshot_type": row.snapshot_type,
@@ -67,3 +69,16 @@ class DashboardSnapshotService:
         db.add(row)
         db.commit()
         return self.latest(db, snapshot_type)
+
+
+def record_snapshot_cache(snapshot_type: str, *, hit: bool, status: str) -> None:
+    try:
+        from app.services.performance import performance_recorder
+
+        performance_recorder.record_cache_event(
+            f"dashboard_snapshot.{snapshot_type}",
+            hit=hit,
+            metadata={"status": status, "snapshot_type": snapshot_type},
+        )
+    except Exception:
+        pass

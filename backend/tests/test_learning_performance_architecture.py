@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -67,3 +68,15 @@ def test_dashboard_snapshot_round_trip_and_stale_flag():
         db.commit()
         stale = service.latest(db, "learning_summary")
         assert stale["status"] == "stale"
+
+
+def test_learning_page_keeps_heavy_work_out_of_initial_render():
+    page = Path(__file__).resolve().parents[2] / "frontend" / "app" / "learning" / "page.tsx"
+    text = page.read_text()
+
+    assert "setTimeout(loadVisibleTables" not in text
+    assert "IntersectionObserver" in text
+    assert "recalculateLearningTradingPower" not in text
+    assert "recalculateDecisionSuperiority" not in text
+    assert "recalculateBusinessQuality" not in text
+    assert "recalculatePortfolioIntelligence" not in text

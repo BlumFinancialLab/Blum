@@ -42,12 +42,14 @@ async function fetchBlum(path: string, options: RequestInit & { timeoutMs?: numb
     if (cached && cached.expiresAt > Date.now()) {
       requestStats.cacheHits += 1;
       recordInitialLearningRequest(path, method, nowMs() - started, "cache", false, true);
+      reportFrontendTiming(path, method, nowMs() - started, "cache_hit", true);
       return new Response(JSON.stringify(cached.value), { status: 200, headers: { "Content-Type": "application/json", "X-BLUM-FRONTEND-CACHE": "true" } });
     }
     const existing = inFlightRequests.get(key);
     if (existing) {
       requestStats.duplicate += 1;
       recordInitialLearningRequest(path, method, nowMs() - started, "deduped", true, false);
+      reportFrontendTiming(path, method, nowMs() - started, "deduped", true);
       return existing.then((value) => new Response(JSON.stringify(value), { status: 200, headers: { "Content-Type": "application/json", "X-BLUM-FRONTEND-DEDUPE": "true" } }));
     }
   }
@@ -94,9 +96,10 @@ async function fetchBlum(path: string, options: RequestInit & { timeoutMs?: numb
   return request;
 }
 
-function reportFrontendTiming(path: string, method: string, duration_ms: number, status: string) {
+function reportFrontendTiming(path: string, method: string, duration_ms: number, status: string, force = false) {
   if (path.includes("/performance/frontend-widget") || path.includes("/api/performance/frontend-widget")) return;
-  if (duration_ms < 400 && !path.includes("/learning")) return;
+  const onLearningPage = typeof location !== "undefined" && location.pathname.startsWith("/learning");
+  if (!force && !onLearningPage && duration_ms < 400 && !path.includes("/learning")) return;
   fetch(`${API_BASE}/api/performance/frontend-widget`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

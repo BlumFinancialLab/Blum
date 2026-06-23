@@ -16,6 +16,7 @@ from app.ingestion.news_ingestor import NewsIngestor
 from app.models import (
     AIInsight,
     AccuracySnapshot,
+    AllocationEfficiencyAudit,
     AlphaCaptureMetric,
     Asset,
     AutonomousEngineRun,
@@ -35,6 +36,9 @@ from app.models import (
     BlumTrainingExample,
     BusinessQualityProfile,
     BusinessQualityScore,
+    CapitalAllocationSnapshot,
+    CapitalInteractionRisk,
+    CashAllocationDecision,
     ChartAnalysis,
     ChartPatternMemory,
     ChatMessage,
@@ -105,11 +109,13 @@ from app.models import (
     ManagementQualityProfile,
     OpportunityPrecisionMetric,
     OpportunityRecallMetric,
+    OpportunityCapitalScore,
     PortfolioAlphaScore,
     PortfolioContribution,
     PortfolioCorrelation,
     PortfolioQualityScore,
     PositionSizingOutcome,
+    SizingLogicAllocation,
     RankingAccuracyMetric,
     SelfImprovementAction,
     ThesisCompetition,
@@ -179,6 +185,7 @@ from app.services.decision_intelligence import (
     DecisionSuperiorityEngine,
     PortfolioIntelligenceEngine,
 )
+from app.services.capital_allocation import AdaptiveCapitalAllocationEngine
 from app.services.live import live_news, market_sentiment
 from app.services.macro import macro_overview, update_macro_snapshots
 from app.services.market_brain import build_market_brain, latest_market_brain, market_brain_history
@@ -251,22 +258,29 @@ def health() -> dict:
 
 @router.get("/performance/diagnostics")
 @router.get("/api/performance/diagnostics")
-def performance_diagnostics() -> dict:
-    return performance_recorder.diagnostics()
+def performance_diagnostics(db: Session = Depends(get_db)) -> dict:
+    payload = performance_recorder.diagnostics()
+    payload["dashboard_snapshots"] = latest_dashboard_snapshot_status(db)
+    return payload
 
 
 @router.post("/performance/frontend-widget")
 @router.post("/api/performance/frontend-widget")
 def performance_frontend_widget(payload: dict) -> dict:
+    status = str(payload.get("status") or "")
     performance_recorder.record_frontend_widget(
         str(payload.get("name") or "unknown_frontend_widget"),
         float(payload.get("duration_ms") or 0),
         {
-            "status": payload.get("status"),
+            "status": status,
             "source": payload.get("source", "browser"),
             "detail": payload.get("detail"),
         },
     )
+    if status in {"cache", "cache_hit"}:
+        performance_recorder.record_cache_event("frontend_fetch", hit=True, metadata={"source": payload.get("source", "browser")})
+    elif status in {"ok", "error"} or status.startswith("http_"):
+        performance_recorder.record_cache_event("frontend_fetch", hit=False, metadata={"source": payload.get("source", "browser"), "status": status})
     return {"status": "recorded"}
 
 
@@ -283,6 +297,33 @@ def learning_intelligence_summary(db: Session = Depends(get_db)) -> dict:
 @router.get("/api/dashboard-snapshots/{snapshot_type}")
 def dashboard_snapshot(snapshot_type: str, db: Session = Depends(get_db)) -> dict:
     return DashboardSnapshotService().latest(db, snapshot_type=snapshot_type)
+
+
+def latest_dashboard_snapshot_status(db: Session) -> dict:
+    rows = db.scalars(select(DashboardSnapshot).order_by(DashboardSnapshot.snapshot_type, desc(DashboardSnapshot.created_at)).limit(120)).all()
+    latest_by_type: dict[str, dict] = {}
+    now = datetime.utcnow()
+    for row in rows:
+        if row.snapshot_type in latest_by_type:
+            continue
+        is_stale = bool(row.is_stale or (row.expires_at is not None and row.expires_at < now))
+        latest_by_type[row.snapshot_type] = {
+            "snapshot_type": row.snapshot_type,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "expires_at": row.expires_at.isoformat() if row.expires_at else None,
+            "is_stale": is_stale,
+            "age_seconds": round((now - row.created_at).total_seconds(), 3) if row.created_at else None,
+            "computation_duration_ms": row.computation_duration_ms,
+            "warnings": row.warnings_json or [],
+        }
+    stale_count = sum(1 for item in latest_by_type.values() if item["is_stale"])
+    return {
+        "snapshot_count": len(latest_by_type),
+        "stale_count": stale_count,
+        "fresh_count": len(latest_by_type) - stale_count,
+        "latest_by_type": latest_by_type,
+        "policy": "Dashboards may render stale snapshots while background refresh catches up.",
+    }
 
 
 @router.get("/system/status")
@@ -406,6 +447,11 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "performance_diagnostics": True,
             "learning_performance_architecture": True,
             "dashboard_snapshots": True,
+            "adaptive_capital_allocation_engine": True,
+            "cash_allocation_policy": True,
+            "allocation_efficiency_audit": True,
+            "sizing_logic_capital_learning": True,
+            "capital_interaction_risk": True,
         },
         "database_counts": {
             "assets": int(db.scalar(select(func.count(Asset.id))) or 0),
@@ -469,6 +515,12 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "position_sizing_outcomes": int(db.scalar(select(func.count(PositionSizingOutcome.id))) or 0),
             "portfolio_quality_scores": int(db.scalar(select(func.count(PortfolioQualityScore.id))) or 0),
             "dashboard_snapshots": int(db.scalar(select(func.count(DashboardSnapshot.id))) or 0),
+            "capital_allocation_snapshots": int(db.scalar(select(func.count(CapitalAllocationSnapshot.id))) or 0),
+            "opportunity_capital_scores": int(db.scalar(select(func.count(OpportunityCapitalScore.id))) or 0),
+            "cash_allocation_decisions": int(db.scalar(select(func.count(CashAllocationDecision.id))) or 0),
+            "allocation_efficiency_audits": int(db.scalar(select(func.count(AllocationEfficiencyAudit.id))) or 0),
+            "sizing_logic_allocations": int(db.scalar(select(func.count(SizingLogicAllocation.id))) or 0),
+            "capital_interaction_risks": int(db.scalar(select(func.count(CapitalInteractionRisk.id))) or 0),
             "model_weight_versions": int(db.scalar(select(func.count(ModelWeightVersion.id))) or 0),
             "historical_similarity_cases": int(db.scalar(select(func.count(HistoricalSimilarityCase.id))) or 0),
             "confidence_adjustments": int(db.scalar(select(func.count(ConfidenceAdjustment.id))) or 0),
@@ -514,7 +566,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "Hugging Face serves the previous image until the Docker build finishes successfully.",
             "The finance-domain 7B model is disabled by default unless BLUM_ENABLE_FINANCIAL_BRAIN_MODEL=true.",
             "Existing snapshots are refreshed by the autonomous engine after a successful deployment.",
-            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.19.0.",
+            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.20.0.",
         ],
     }
 
@@ -1187,6 +1239,46 @@ def portfolio_intelligence_recalculate(db: Session = Depends(get_db)) -> dict:
         "portfolio_alpha": engine.alpha_scores(db, persist=True),
         "position_sizing": engine.position_sizing_outcomes(db, persist=True),
     }
+
+
+@router.get("/api/capital-allocation/dashboard")
+def capital_allocation_dashboard(db: Session = Depends(get_db)) -> dict:
+    return AdaptiveCapitalAllocationEngine().dashboard(db)
+
+
+@router.get("/api/capital-allocation/plan")
+def capital_allocation_plan(limit: int = Query(default=12, ge=1, le=50), db: Session = Depends(get_db)) -> dict:
+    return AdaptiveCapitalAllocationEngine().allocation_plan(db, persist=False, limit=limit)
+
+
+@router.get("/api/capital-allocation/opportunities")
+def capital_allocation_opportunities(limit: int = Query(default=50, ge=1, le=200), db: Session = Depends(get_db)) -> dict:
+    return AdaptiveCapitalAllocationEngine().opportunity_scores(db, persist=False, limit=limit)
+
+
+@router.get("/api/capital-allocation/cash-policy")
+def capital_allocation_cash_policy(db: Session = Depends(get_db)) -> dict:
+    return AdaptiveCapitalAllocationEngine().cash_policy(db, persist=False)
+
+
+@router.get("/api/capital-allocation/efficiency")
+def capital_allocation_efficiency(db: Session = Depends(get_db)) -> dict:
+    return AdaptiveCapitalAllocationEngine().allocation_efficiency(db, persist=False)
+
+
+@router.get("/api/capital-allocation/sizing")
+def capital_allocation_sizing(db: Session = Depends(get_db)) -> dict:
+    return AdaptiveCapitalAllocationEngine().sizing_logic_effectiveness(db, persist=False)
+
+
+@router.get("/api/capital-allocation/interactions")
+def capital_allocation_interactions(db: Session = Depends(get_db)) -> dict:
+    return AdaptiveCapitalAllocationEngine().interaction_risks(db, persist=False)
+
+
+@router.post("/api/capital-allocation/recalculate")
+def capital_allocation_recalculate(db: Session = Depends(get_db)) -> dict:
+    return AdaptiveCapitalAllocationEngine().recalculate(db)
 
 
 @router.get("/model/status")

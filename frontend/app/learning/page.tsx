@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { AlertTriangle, Brain, Gauge, LineChart } from "lucide-react";
 import { api } from "@/lib/api";
@@ -22,8 +22,11 @@ export default function LearningPage() {
   const [summaryError, setSummaryError] = useState("");
   const [chartsLoading, setChartsLoading] = useState(false);
   const [tablesLoading, setTablesLoading] = useState(false);
+  const [tablesLoaded, setTablesLoaded] = useState(false);
+  const [tablesRequested, setTablesRequested] = useState(false);
   const [deepLoading, setDeepLoading] = useState(false);
   const [deepLoaded, setDeepLoaded] = useState(false);
+  const tier3Ref = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -79,6 +82,36 @@ export default function LearningPage() {
       setChartsLoading(false);
     }
 
+    loadCriticalSummary();
+    const chartsTimer = window.setTimeout(loadMainCharts, 120);
+    const summaryPoll = window.setInterval(loadCriticalSummary, 45000);
+    return () => {
+      mounted = false;
+      window.clearTimeout(chartsTimer);
+      window.clearInterval(summaryPoll);
+    };
+  }, []);
+
+  useEffect(() => {
+    const node = tier3Ref.current;
+    if (!node || tablesRequested || tablesLoaded) return undefined;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setTablesRequested(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "320px 0px" }
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [tablesRequested, tablesLoaded]);
+
+  useEffect(() => {
+    if (!tablesRequested || tablesLoaded || tablesLoading) return undefined;
+    let mounted = true;
+
     async function loadVisibleTables() {
       setTablesLoading(true);
       const [runsResult, predictionsResult, memoryResult, tradesResult, ledgerResult, ledgerSummaryResult, cyclesResult, cycleStatsResult, metricsBySetupResult, metricsByRegimeResult, metricsBySectorResult, livePositionsResult, decisionIntelligenceResult, learningEvidenceResult, realityCheckResult, pnlBreakdownResult, failuresResult, lessonsResult, benchmarkResult, reproducibilityResult] = await Promise.allSettled([
@@ -127,20 +160,15 @@ export default function LearningPage() {
         benchmark: benchmarkResult.status === "fulfilled" ? benchmarkResult.value : previous?.benchmark ?? null,
         reproducibility: reproducibilityResult.status === "fulfilled" ? reproducibilityResult.value : previous?.reproducibility ?? null
       }));
+      setTablesLoaded(true);
       setTablesLoading(false);
     }
 
-    loadCriticalSummary();
-    const chartsTimer = window.setTimeout(loadMainCharts, 120);
-    const tablesTimer = window.setTimeout(loadVisibleTables, 900);
-    const summaryPoll = window.setInterval(loadCriticalSummary, 45000);
+    loadVisibleTables();
     return () => {
       mounted = false;
-      window.clearTimeout(chartsTimer);
-      window.clearTimeout(tablesTimer);
-      window.clearInterval(summaryPoll);
     };
-  }, []);
+  }, [tablesRequested, tablesLoaded, tablesLoading]);
 
   async function loadDeepReasoningPanels() {
     setDeepLoading(true);
@@ -315,8 +343,13 @@ export default function LearningPage() {
         <AsyncPanel title="Tier 2 Main Charts" loading={chartsLoading} error="" updatedAt={summary?.generated_at} fallback="Loading charts without blocking the page">
           <p>Equity curve, benchmark comparison and rolling intelligence metrics load after the critical snapshot.</p>
         </AsyncPanel>
-        <AsyncPanel title="Tier 3 Tables" loading={tablesLoading} error="" updatedAt={summary?.generated_at} fallback="Loading ledgers and memory tables progressively">
-          <p>Trade ledgers, cycles, predictions and learning evidence use safe default limits and independent loading.</p>
+        <AsyncPanel title="Tier 3 Tables" loading={tablesLoading} error="" updatedAt={tablesLoaded ? summary?.generated_at : null} fallback="Loading ledgers and memory tables progressively">
+          <p>Trade ledgers, cycles, predictions and learning evidence use safe default limits and load only when this section becomes visible or when requested.</p>
+          {!tablesLoaded && (
+            <button className="button compact" onClick={() => setTablesRequested(true)} disabled={tablesLoading}>
+              {tablesLoading ? "Loading details..." : "Load detailed tables"}
+            </button>
+          )}
         </AsyncPanel>
       </section>
 
@@ -545,11 +578,16 @@ export default function LearningPage() {
         </section>
       )}
 
-      <section className="panel" style={{ marginTop: 12 }}>
+      <section className="panel" style={{ marginTop: 12 }} ref={tier3Ref}>
         <div className="panel-head">
           <span>Full Trade Ledger</span>
           <strong>{ledgerRows.length} visible / {trading?.ledger?.total ?? 0} total</strong>
         </div>
+        {!tablesRequested && !tablesLoaded && (
+          <div className="empty-state compact" style={{ marginBottom: 12 }}>
+            Detailed ledgers are lazy-loaded. Scroll here or use the Tier 3 button to fetch paginated trade evidence.
+          </div>
+        )}
         <div className="evidence-grid" style={{ marginBottom: 12 }}>
           <SmallDatum label="Wins" value={advancedLedgerSummary?.wins ?? 0} />
           <SmallDatum label="Losses" value={advancedLedgerSummary?.losses ?? 0} />

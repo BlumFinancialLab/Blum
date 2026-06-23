@@ -2719,3 +2719,140 @@ class PortfolioQualityScore(Base):
     warnings_json: Mapped[dict] = mapped_column(JsonType, default=dict)
 
     game = relationship("TradingGame")
+
+
+class CapitalAllocationSnapshot(Base):
+    __tablename__ = "capital_allocation_snapshots"
+    __table_args__ = (
+        Index("ix_capital_allocation_snapshots_game_created", "game_id", "calculated_at"),
+        Index("ix_capital_allocation_snapshots_quality", "allocation_quality_score"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    calculated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    game_id: Mapped[int | None] = mapped_column(ForeignKey("trading_games.id", ondelete="CASCADE"), index=True)
+    mode: Mapped[str] = mapped_column(String(80), default="historical_plus_live", index=True)
+    total_capital: Mapped[float | None] = mapped_column(Float)
+    cash_reserve_percent: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    deployable_percent: Mapped[float] = mapped_column(Float, default=0.0)
+    allocation_quality_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    expected_risk_adjusted_alpha: Mapped[float | None] = mapped_column(Float)
+    benchmark_context: Mapped[dict] = mapped_column(JsonType, default=dict)
+    allocation_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    warnings_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    explanation: Mapped[str] = mapped_column(Text, default="")
+
+    game = relationship("TradingGame")
+
+
+class OpportunityCapitalScore(Base):
+    __tablename__ = "opportunity_capital_scores"
+    __table_args__ = (
+        Index("ix_opportunity_capital_scores_ticker_created", "ticker", "calculated_at"),
+        Index("ix_opportunity_capital_scores_score", "capital_score"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    calculated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    game_id: Mapped[int | None] = mapped_column(ForeignKey("trading_games.id", ondelete="CASCADE"), index=True)
+    ticker: Mapped[str] = mapped_column(String(32), index=True)
+    sector: Mapped[str | None] = mapped_column(String(120), index=True)
+    setup_type: Mapped[str | None] = mapped_column(String(120), index=True)
+    capital_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    recommended_weight: Mapped[float] = mapped_column(Float, default=0.0)
+    max_weight: Mapped[float] = mapped_column(Float, default=0.0)
+    cash_penalty: Mapped[float] = mapped_column(Float, default=0.0)
+    risk_adjusted_alpha: Mapped[float | None] = mapped_column(Float)
+    portfolio_fit: Mapped[float | None] = mapped_column(Float)
+    sizing_confidence: Mapped[float | None] = mapped_column(Float)
+    decision_state: Mapped[str] = mapped_column(String(80), default="monitor", index=True)
+    evidence_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+
+    game = relationship("TradingGame")
+
+
+class CashAllocationDecision(Base):
+    __tablename__ = "cash_allocation_decisions"
+    __table_args__ = (Index("ix_cash_allocation_decisions_game_created", "game_id", "calculated_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    calculated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    game_id: Mapped[int | None] = mapped_column(ForeignKey("trading_games.id", ondelete="CASCADE"), index=True)
+    cash_reserve_percent: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    deployable_percent: Mapped[float] = mapped_column(Float, default=0.0)
+    decision_state: Mapped[str] = mapped_column(String(80), default="partial_cash", index=True)
+    market_regime: Mapped[str | None] = mapped_column(String(120), index=True)
+    drawdown_state: Mapped[str | None] = mapped_column(String(120), index=True)
+    reasons_json: Mapped[list] = mapped_column(JsonType, default=list)
+    evidence_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+
+    game = relationship("TradingGame")
+
+
+class AllocationEfficiencyAudit(Base):
+    __tablename__ = "allocation_efficiency_audits"
+    __table_args__ = (
+        Index("ix_allocation_efficiency_game_created", "game_id", "calculated_at"),
+        Index("ix_allocation_efficiency_score", "allocation_efficiency_score"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    calculated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    game_id: Mapped[int | None] = mapped_column(ForeignKey("trading_games.id", ondelete="CASCADE"), index=True)
+    sample_size: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    allocation_efficiency_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    allocation_regret_eur: Mapped[float | None] = mapped_column(Float)
+    cash_drag_estimate: Mapped[float | None] = mapped_column(Float)
+    benchmark_opportunity_cost: Mapped[float | None] = mapped_column(Float)
+    overallocated_losers_json: Mapped[list] = mapped_column(JsonType, default=list)
+    underallocated_winners_json: Mapped[list] = mapped_column(JsonType, default=list)
+    recommendations_json: Mapped[list] = mapped_column(JsonType, default=list)
+    evidence_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+
+    game = relationship("TradingGame")
+
+
+class SizingLogicAllocation(Base):
+    __tablename__ = "sizing_logic_allocations"
+    __table_args__ = (
+        Index("ix_sizing_logic_allocations_logic_created", "sizing_logic", "calculated_at"),
+        Index("ix_sizing_logic_allocations_score", "risk_adjusted_alpha"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    calculated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    game_id: Mapped[int | None] = mapped_column(ForeignKey("trading_games.id", ondelete="CASCADE"), index=True)
+    sizing_logic: Mapped[str] = mapped_column(String(120), index=True)
+    sample_size: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    average_r: Mapped[float | None] = mapped_column(Float)
+    benchmark_excess: Mapped[float | None] = mapped_column(Float)
+    max_drawdown: Mapped[float | None] = mapped_column(Float)
+    hit_rate: Mapped[float | None] = mapped_column(Float)
+    risk_adjusted_alpha: Mapped[float | None] = mapped_column(Float, index=True)
+    recommended_risk_percent: Mapped[float | None] = mapped_column(Float)
+    recommendation: Mapped[str] = mapped_column(String(120), default="hold", index=True)
+    evidence_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+
+    game = relationship("TradingGame")
+
+
+class CapitalInteractionRisk(Base):
+    __tablename__ = "capital_interaction_risks"
+    __table_args__ = (
+        Index("ix_capital_interaction_risks_game_created", "game_id", "calculated_at"),
+        Index("ix_capital_interaction_risks_entities", "entity_a", "entity_b"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    calculated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    game_id: Mapped[int | None] = mapped_column(ForeignKey("trading_games.id", ondelete="CASCADE"), index=True)
+    interaction_type: Mapped[str] = mapped_column(String(120), index=True)
+    entity_a: Mapped[str] = mapped_column(String(120), index=True)
+    entity_b: Mapped[str | None] = mapped_column(String(120), index=True)
+    risk_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    correlation: Mapped[float | None] = mapped_column(Float)
+    combined_weight: Mapped[float | None] = mapped_column(Float)
+    recommendation: Mapped[str] = mapped_column(Text, default="")
+    evidence_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+
+    game = relationship("TradingGame")
