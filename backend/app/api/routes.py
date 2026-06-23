@@ -44,6 +44,7 @@ from app.models import (
     ConfidenceAdjustment,
     DecisionSuperiorityScore,
     DecisionUniverseSnapshot,
+    DashboardSnapshot,
     EmbeddingVector,
     EngineVote,
     EnsembleWeightVersion,
@@ -141,6 +142,7 @@ from app.services.blum_financial_model import (
     training_manifest,
 )
 from app.services.dashboard import dashboard_overview, signal_payload
+from app.services.dashboard_snapshots import DashboardSnapshotService
 from app.services.data_continuity import data_coverage_report, repair_data_gaps
 from app.services.etf import list_etf_trends, update_etf_trends
 from app.services.fundamentals import fundamentals_for_asset, update_fundamentals
@@ -170,6 +172,7 @@ from app.services.learning_intelligence import (
     LearningWeaknessMapService,
     SelfImprovementActionEngine,
 )
+from app.services.learning_summary import LearningSummaryService
 from app.services.decision_intelligence import (
     BusinessQualityEngine,
     DecisionIntelligenceDashboardService,
@@ -232,6 +235,7 @@ from app.services.trading_intelligence_lab import (
     TradingCapitalCycleService,
     TradingIntelligenceMetricsService,
 )
+from app.services.performance import performance_recorder
 from app.signals.backtest import run_simple_backtest
 from app.signals.engine import SignalEngine
 
@@ -243,6 +247,42 @@ settings = get_settings()
 @router.get("/health")
 def health() -> dict:
     return {"status": "ok", "service": "blum-ai-financial-intelligence"}
+
+
+@router.get("/performance/diagnostics")
+@router.get("/api/performance/diagnostics")
+def performance_diagnostics() -> dict:
+    return performance_recorder.diagnostics()
+
+
+@router.post("/performance/frontend-widget")
+@router.post("/api/performance/frontend-widget")
+def performance_frontend_widget(payload: dict) -> dict:
+    performance_recorder.record_frontend_widget(
+        str(payload.get("name") or "unknown_frontend_widget"),
+        float(payload.get("duration_ms") or 0),
+        {
+            "status": payload.get("status"),
+            "source": payload.get("source", "browser"),
+            "detail": payload.get("detail"),
+        },
+    )
+    return {"status": "recorded"}
+
+
+@router.get("/startup/status")
+def startup_status() -> dict:
+    return performance_recorder.startup_status()
+
+
+@router.get("/api/learning-intelligence/summary")
+def learning_intelligence_summary(db: Session = Depends(get_db)) -> dict:
+    return LearningSummaryService().summary(db)
+
+
+@router.get("/api/dashboard-snapshots/{snapshot_type}")
+def dashboard_snapshot(snapshot_type: str, db: Session = Depends(get_db)) -> dict:
+    return DashboardSnapshotService().latest(db, snapshot_type=snapshot_type)
 
 
 @router.get("/system/status")
@@ -363,6 +403,9 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "decision_superiority_engine": True,
             "business_quality_engine": True,
             "portfolio_intelligence_engine": True,
+            "performance_diagnostics": True,
+            "learning_performance_architecture": True,
+            "dashboard_snapshots": True,
         },
         "database_counts": {
             "assets": int(db.scalar(select(func.count(Asset.id))) or 0),
@@ -425,6 +468,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "portfolio_alpha_scores": int(db.scalar(select(func.count(PortfolioAlphaScore.id))) or 0),
             "position_sizing_outcomes": int(db.scalar(select(func.count(PositionSizingOutcome.id))) or 0),
             "portfolio_quality_scores": int(db.scalar(select(func.count(PortfolioQualityScore.id))) or 0),
+            "dashboard_snapshots": int(db.scalar(select(func.count(DashboardSnapshot.id))) or 0),
             "model_weight_versions": int(db.scalar(select(func.count(ModelWeightVersion.id))) or 0),
             "historical_similarity_cases": int(db.scalar(select(func.count(HistoricalSimilarityCase.id))) or 0),
             "confidence_adjustments": int(db.scalar(select(func.count(ConfidenceAdjustment.id))) or 0),
@@ -470,7 +514,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "Hugging Face serves the previous image until the Docker build finishes successfully.",
             "The finance-domain 7B model is disabled by default unless BLUM_ENABLE_FINANCIAL_BRAIN_MODEL=true.",
             "Existing snapshots are refreshed by the autonomous engine after a successful deployment.",
-            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.17.0.",
+            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.19.0.",
         ],
     }
 

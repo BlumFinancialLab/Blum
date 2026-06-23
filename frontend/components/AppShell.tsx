@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Activity, Brain, Crosshair, Cpu, Database, Gauge, LineChart, MessageSquare, Network, Radar, Search, ShieldAlert, type LucideIcon } from "lucide-react";
+import { Activity, Brain, Crosshair, Cpu, Database, Gauge, LineChart, MessageSquare, Network, Radar, Search, ShieldAlert, Timer, type LucideIcon } from "lucide-react";
 import clsx from "clsx";
 import { api } from "@/lib/api";
 import { SystemStatus } from "@/lib/types";
@@ -24,6 +24,7 @@ const nav: NavItem[] = [
   { href: "/learning", label: "Learning", icon: Brain },
   { href: "/narratives", label: "Narratives", icon: Network, aliases: ["/themes"] },
   { href: "/chart-analyst", label: "Charts", icon: LineChart },
+  { href: "/performance", label: "Performance", icon: Timer },
   { href: "/chat", label: "Chat", icon: MessageSquare, aliases: ["/chatbot"] }
 ];
 

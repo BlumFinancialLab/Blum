@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import threading
+import time
 import traceback
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -20,6 +21,7 @@ from app.services.ipo import update_ipo_radar
 from app.services.learning_loop import LearningLoopService
 from app.services.macro import update_macro_snapshots
 from app.services.market_data import MarketDataService
+from app.services.performance import performance_recorder
 from app.services.pipeline import PipelineService
 from app.services.trading_game import TradingGameSimulator
 from app.signals.engine import SignalEngine
@@ -194,6 +196,10 @@ def _run_job(job_name: str, work):
         _state["stage_completed_at"] = None
         _state["completed_stages"] = []
         _state["stage_results"] = {}
+    perf_started_at = datetime.utcnow()
+    perf_started = time.perf_counter()
+    perf_status = "ok"
+    perf_error = ""
     try:
         with SessionLocal() as db:
             result = work(db)
@@ -202,12 +208,20 @@ def _run_job(job_name: str, work):
             _state["last_status"] = "ok"
             _state["last_result"] = _compact_payload(result or {})
     except Exception as exc:
+        perf_status = "error"
+        perf_error = f"{type(exc).__name__}: {str(exc)}"
         with _state_lock:
             _state["last_completed_at"] = datetime.utcnow().isoformat()
             _state["last_status"] = "error"
-            _state["last_error"] = f"{type(exc).__name__}: {str(exc)}"
+            _state["last_error"] = perf_error
             _state["last_result"] = {"traceback": traceback.format_exc(limit=4)}
     finally:
+        performance_recorder.record_background_task(
+            job_name,
+            (time.perf_counter() - perf_started) * 1000,
+            {"status": perf_status, "error": perf_error},
+            perf_started_at,
+        )
         with _state_lock:
             _state["running"] = False
 

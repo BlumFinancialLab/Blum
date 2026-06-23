@@ -1504,6 +1504,56 @@ p { color: var(--muted); line-height: 1.55; }
   font-size: 11px;
   line-height: 1.35;
 }
+
+.terminal-button {
+  border: 1px solid rgba(255,176,0,.38);
+  border-radius: 6px;
+  background: rgba(255,176,0,.12);
+  color: var(--amber);
+  padding: 9px 12px;
+  font-size: 12px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.terminal-button:hover {
+  background: rgba(255,176,0,.2);
+  border-color: rgba(255,176,0,.62);
+}
+
+.performance-table-wrap {
+  width: 100%;
+  overflow: auto;
+}
+
+.performance-table {
+  min-width: 920px;
+}
+
+.performance-table th,
+.performance-table td {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  vertical-align: top;
+}
+
+.performance-table td {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.diagnostic-list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+  line-height: 1.55;
+  font-size: 13px;
+}
+
+.diagnostic-list li + li {
+  margin-top: 8px;
+}
 .terminal-empty {
   min-height: 112px;
   display: grid;

@@ -106,6 +106,39 @@ The dashboard polls live JSON endpoints every 30 seconds and shows worker state,
 
 Every equity and ETF surface includes an explicit market snapshot when real OHLCV data is available: last price, currency, date, provider, volume and 1D/5D/1M performance. If public providers have not returned usable prices yet, the UI shows a real-data pending state instead of a fabricated value.
 
+## Performance Diagnostics
+
+Blum includes a `/performance` diagnostics page focused on measurement before optimization.
+
+The backend instruments:
+
+- FastAPI request timing for every endpoint through middleware.
+- SQLAlchemy query timing for every database statement through engine listeners.
+- Application startup phases, including database bootstrap and realtime-service startup.
+- APScheduler/background worker durations, including startup pipeline, market refresh, news refresh, learning loop and trading game jobs.
+- Dashboard widget timings for the main command-center payload.
+- Browser-side dashboard widget probes from the diagnostics page.
+
+The diagnostics API is available at `/performance/diagnostics`. It reports startup duration breakdown, slowest endpoints, slowest SQL queries, slowest dashboard widgets, average and p95 response times, cache hit rate when cache events are instrumented, background task durations, rowcount/scan visibility and the top 10 measured bottlenecks.
+
+Rows scanned are reported conservatively: DBAPI cursor timing is exact, but exact scanned rows require `EXPLAIN/ANALYZE`. The diagnostics layer does not run optimizer probes automatically, so it exposes driver rowcount when available and marks unknown scan depth explicitly.
+
+## Performance Architecture
+
+The Learning / Trading Intelligence dashboard uses progressive loading so the user sees useful intelligence before deep tables and model panels finish loading.
+
+- Tier 0: immediate shell, header, navigation and skeleton states.
+- Tier 1: `/api/learning-intelligence/summary`, a lightweight critical snapshot built from latest precomputed rows only.
+- Tier 2: main charts such as equity curve, rolling metrics and historical-vs-live comparison.
+- Tier 3: tables and ledgers with safe default limits.
+- Tier 4: deep reasoning/model panels such as thesis survival, conviction decay, regime reliability and training quality, loaded only when opened by the user.
+
+The frontend request wrapper deduplicates in-flight GET requests, applies request timeouts, keeps a short in-memory route-session cache and reports slow browser-side timings to Performance Diagnostics. Heavy recalculation POST endpoints are not called automatically during Learning page render; they remain explicit/manual or background-worker actions.
+
+Dashboard snapshots provide stale-but-usable payloads for fast UI surfaces. The snapshot API is `/api/dashboard-snapshots/{snapshot_type}`. The startup status API is `/startup/status`, allowing the UI to distinguish API readiness from background warm-up.
+
+Blum prioritizes fast visible intelligence first, then progressive deep detail. Existing APIs, tables, Learning Loop logic, Trading Game logic and Decision Intelligence logic remain backward compatible.
+
 ## Accuracy And Confidence Layer
 
 Blum separates opportunity scoring from evidence quality. The **Blum Intelligence Score** ranks research candidates. The **Blum Confidence Score** measures whether the evidence behind an asset is complete, current and internally consistent.

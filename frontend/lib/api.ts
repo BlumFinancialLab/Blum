@@ -1,9 +1,17 @@
 import { AccuracyOverview, AccuracyProfile, Asset, BrainAccuracy, BrainAssetMemory, BrainEvaluation, BrainStatus, ChartReport, CommunitySentimentPayload, DashboardOverview, DataCoverage, ExecutiveDashboardPayload, FinancialChatResponse, IPORadar, LiveNewsArticle, MacroOverview, MarketBrain, MarketBrainHistoryRow, MarketNarrativePayload, MarketSentiment, OpportunityRadarPayload, PipelineStatus, PortfolioScenarioPayload, RelatedNews, Signal, SignalValidationReport, StockRadar, SystemStatus, WatchlistPayload } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
+const inFlightRequests = new Map<string, Promise<any>>();
+const memoryCache = new Map<string, { expiresAt: number; value: any }>();
+const requestStats = {
+  total: 0,
+  duplicate: 0,
+  cacheHits: 0,
+  initialLearningPage: [] as Array<{ path: string; method: string; duration_ms: number; status: string; duplicate?: boolean; cache_hit?: boolean }>
+};
 
 async function getJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
+  const response = await fetchBlum(path, { method: "GET", cacheTtlMs: 2500, timeoutMs: 12000 });
   if (!response.ok) {
     throw new Error(await responseError(response));
   }
@@ -11,15 +19,100 @@ async function getJson<T>(path: string): Promise<T> {
 }
 
 async function postJson<T>(path: string, payload: unknown): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await fetchBlum(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
+    timeoutMs: 20000
   });
   if (!response.ok) {
     throw new Error(await responseError(response));
   }
   return response.json() as Promise<T>;
+}
+
+async function fetchBlum(path: string, options: RequestInit & { timeoutMs?: number; cacheTtlMs?: number } = {}): Promise<Response> {
+  const method = String(options.method ?? "GET").toUpperCase();
+  const key = `${method}:${path}:${typeof options.body === "string" ? options.body : ""}`;
+  const started = nowMs();
+  requestStats.total += 1;
+
+  if (method === "GET") {
+    const cached = memoryCache.get(key);
+    if (cached && cached.expiresAt > Date.now()) {
+      requestStats.cacheHits += 1;
+      recordInitialLearningRequest(path, method, nowMs() - started, "cache", false, true);
+      return new Response(JSON.stringify(cached.value), { status: 200, headers: { "Content-Type": "application/json", "X-BLUM-FRONTEND-CACHE": "true" } });
+    }
+    const existing = inFlightRequests.get(key);
+    if (existing) {
+      requestStats.duplicate += 1;
+      recordInitialLearningRequest(path, method, nowMs() - started, "deduped", true, false);
+      return existing.then((value) => new Response(JSON.stringify(value), { status: 200, headers: { "Content-Type": "application/json", "X-BLUM-FRONTEND-DEDUPE": "true" } }));
+    }
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 12000);
+  const request = fetch(`${API_BASE}${path}`, {
+    ...options,
+    method,
+    cache: "no-store",
+    signal: controller.signal
+  }).then(async (response) => {
+    const duration = nowMs() - started;
+    recordInitialLearningRequest(path, method, duration, response.ok ? "ok" : `http_${response.status}`, false, false);
+    reportFrontendTiming(path, method, duration, response.ok ? "ok" : `http_${response.status}`);
+    if (method === "GET" && response.ok && options.cacheTtlMs && !path.includes("/performance/")) {
+      const clone = response.clone();
+      try {
+        memoryCache.set(key, { expiresAt: Date.now() + options.cacheTtlMs, value: await clone.json() });
+      } catch {
+        // Non-JSON GETs are not cached.
+      }
+    }
+    return response;
+  }).catch(async (error) => {
+    const duration = nowMs() - started;
+    recordInitialLearningRequest(path, method, duration, "error", false, false);
+    reportFrontendTiming(path, method, duration, "error");
+    if (method === "GET" && !String(error?.name).includes("Abort") && !path.includes("/performance/")) {
+      return fetch(`${API_BASE}${path}`, { ...options, method, cache: "no-store" });
+    }
+    throw error;
+  }).finally(() => {
+    clearTimeout(timeout);
+    inFlightRequests.delete(key);
+  });
+
+  if (method === "GET") {
+    inFlightRequests.set(
+      key,
+      request.then((response) => response.clone().json()).catch(() => undefined)
+    );
+  }
+  return request;
+}
+
+function reportFrontendTiming(path: string, method: string, duration_ms: number, status: string) {
+  if (path.includes("/performance/frontend-widget") || path.includes("/api/performance/frontend-widget")) return;
+  if (duration_ms < 400 && !path.includes("/learning")) return;
+  fetch(`${API_BASE}/api/performance/frontend-widget`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: `frontend.api.${method}.${path}`, duration_ms, status, source: "fetchBlum" }),
+    keepalive: true
+  }).catch(() => undefined);
+}
+
+function recordInitialLearningRequest(path: string, method: string, duration_ms: number, status: string, duplicate: boolean, cache_hit: boolean) {
+  if (typeof location === "undefined" || !location.pathname.startsWith("/learning")) return;
+  requestStats.initialLearningPage.push({ path, method, duration_ms: Number(duration_ms.toFixed(2)), status, duplicate, cache_hit });
+  if (requestStats.initialLearningPage.length > 160) requestStats.initialLearningPage.shift();
+}
+
+function nowMs() {
+  return typeof performance === "undefined" ? Date.now() : performance.now();
 }
 
 async function responseError(response: Response) {
@@ -33,6 +126,10 @@ async function responseError(response: Response) {
 }
 
 export const api = {
+  clientRequestStats: () => ({ ...requestStats, initialLearningPage: [...requestStats.initialLearningPage] }),
+  performanceDiagnostics: () => getJson<any>("/performance/diagnostics"),
+  recordPerformanceWidget: (payload: { name: string; duration_ms: number; status?: string; source?: string; detail?: string }) =>
+    postJson<any>("/performance/frontend-widget", payload),
   systemStatus: () => getJson<SystemStatus>("/system/status"),
   brainStatus: () => getJson<BrainStatus>("/brain/status"),
   brainAccuracy: () => getJson<BrainAccuracy>("/brain/accuracy"),
@@ -44,6 +141,9 @@ export const api = {
   recalculateBrainWeights: () => postJson<any>("/brain/recalculate-weights", {}),
   runLearningCycle: (limit = 240) => postJson<any>(`/brain/run-learning-cycle?limit=${limit}`, {}),
   learningDashboard: () => getJson<any>("/learning/dashboard"),
+  learningSummary: () => getJson<any>("/api/learning-intelligence/summary"),
+  dashboardSnapshot: (snapshotType: string) => getJson<any>(`/api/dashboard-snapshots/${encodeURIComponent(snapshotType)}`),
+  startupStatus: () => getJson<any>("/startup/status"),
   learningRuns: (limit = 50) => getJson<any[]>(`/learning/runs?limit=${limit}`),
   learningPredictions: (limit = 80, ticker?: string) => getJson<any[]>(`/learning/predictions?limit=${limit}${ticker ? `&ticker=${encodeURIComponent(ticker)}` : ""}`),
   learningMemory: (limit = 40) => getJson<any>(`/learning/memory?limit=${limit}`),

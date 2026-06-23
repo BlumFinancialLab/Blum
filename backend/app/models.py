@@ -2680,6 +2680,24 @@ class PositionSizingOutcome(Base):
     evidence_json: Mapped[dict] = mapped_column(JsonType, default=dict)
 
 
+class DashboardSnapshot(Base):
+    __tablename__ = "dashboard_snapshots"
+    __table_args__ = (
+        Index("ix_dashboard_snapshots_type_created", "snapshot_type", "created_at"),
+        Index("ix_dashboard_snapshots_type_expires", "snapshot_type", "expires_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    snapshot_type: Mapped[str] = mapped_column(String(120), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    payload_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    source_modules_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    is_stale: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    computation_duration_ms: Mapped[float | None] = mapped_column(Float)
+    warnings_json: Mapped[list] = mapped_column(JsonType, default=list)
+
+
 class PortfolioQualityScore(Base):
     __tablename__ = "portfolio_quality_scores"
     __table_args__ = (

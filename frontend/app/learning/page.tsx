@@ -4,11 +4,12 @@ import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { AlertTriangle, Brain, Gauge, LineChart } from "lucide-react";
 import { api } from "@/lib/api";
-import { LoadingState } from "@/components/LoadingState";
+import { AsyncPanel } from "@/components/AsyncPanel";
 import { PlotPanel } from "@/components/PlotPanel";
 import { StatusBadge } from "@/components/StatusBadge";
 
 export default function LearningPage() {
+  const [summary, setSummary] = useState<any | null>(null);
   const [dashboard, setDashboard] = useState<any | null>(null);
   const [runs, setRuns] = useState<any[]>([]);
   const [predictions, setPredictions] = useState<any[]>([]);
@@ -18,106 +19,154 @@ export default function LearningPage() {
   const [selectedTrade, setSelectedTrade] = useState<any | null>(null);
   const [tradeError, setTradeError] = useState("");
   const [error, setError] = useState("");
+  const [summaryError, setSummaryError] = useState("");
+  const [chartsLoading, setChartsLoading] = useState(false);
+  const [tablesLoading, setTablesLoading] = useState(false);
+  const [deepLoading, setDeepLoading] = useState(false);
+  const [deepLoaded, setDeepLoaded] = useState(false);
 
   useEffect(() => {
     let mounted = true;
-    async function load() {
-      setError("");
-      const [dashResult, runsResult, predictionsResult, memoryResult, tradingStatusResult, equityResult, annotatedEquityResult, tradesResult, ledgerResult, ledgerSummaryResult, cyclesResult, currentCycleResult, cycleStatsResult, intelligenceMetricsResult, rollingMetricsResult, metricsBySetupResult, metricsByRegimeResult, metricsBySectorResult, historicalVsLiveResult, liveStatusResult, livePositionsResult, liveMetricsResult, learningIntelligenceResult, decisionIntelligenceResult, learningEvidenceResult, realityCheckResult, pnlBreakdownResult, failuresResult, lessonsResult, benchmarkResult, reproducibilityResult, reasoningStatusResult, survivalResult, convictionResult, reliabilityResult, competitionResult, ensembleResult, benchmarkRelativeResult, trainingQualityResult] = await Promise.allSettled([
+
+    async function loadCriticalSummary() {
+      try {
+        setSummaryError("");
+        const [summaryResult, statusResult, currentCycleResult] = await Promise.allSettled([
+          api.learningSummary(),
+          api.tradingGameStatus(),
+          api.tradingGameCurrentCycle()
+        ] as const);
+        if (!mounted) return;
+        if (summaryResult.status === "fulfilled") setSummary(summaryResult.value);
+        if (summaryResult.status === "rejected") setSummaryError((summaryResult.reason as Error).message);
+        setTrading((previous: any) => ({
+          ...(previous ?? {}),
+          status: statusResult.status === "fulfilled" ? statusResult.value : previous?.status ?? null,
+          currentCycle: currentCycleResult.status === "fulfilled" ? currentCycleResult.value : previous?.currentCycle ?? null
+        }));
+      } catch (err) {
+        if (mounted) setSummaryError(err instanceof Error ? err.message : String(err));
+      }
+    }
+
+    async function loadMainCharts() {
+      setChartsLoading(true);
+      const [dashResult, equityResult, annotatedEquityResult, intelligenceMetricsResult, rollingMetricsResult, historicalVsLiveResult, liveStatusResult, liveMetricsResult, learningIntelligenceResult] = await Promise.allSettled([
         api.learningDashboard(),
-        api.learningRuns(20),
-        api.learningPredictions(36),
-        api.learningMemory(32),
-        api.tradingGameStatus(),
         api.tradingGameEquity(240),
-        api.tradingGameAnnotatedEquity(360),
-        api.tradingGameTrades(80),
-        api.tradingGameLedger(120),
-        api.tradingGameLedgerSummary(),
-        api.tradingGameCycles(60),
-        api.tradingGameCurrentCycle(),
-        api.tradingGameCycleStats(),
+        api.tradingGameAnnotatedEquity(240),
         api.tradingGameIntelligenceMetrics(),
         api.tradingGameIntelligenceRolling(),
-        api.tradingGameIntelligenceBySetup(),
-        api.tradingGameIntelligenceByRegime(),
-        api.tradingGameIntelligenceBySector(),
         api.tradingGameHistoricalVsLive(),
         api.liveTradingGameStatus(),
-        api.liveTradingGamePositions(),
         api.liveTradingGameMetrics(),
-        api.learningIntelligenceDashboard(),
-        api.decisionIntelligenceDashboard(),
-        api.tradingGameLearningEvidence(60),
-        api.tradingGameRealityCheck(),
-        api.tradingGamePnlBreakdown(),
-        api.tradingGameFailures(24),
-        api.tradingGameLessons(24),
-        api.tradingGameBenchmark(),
-        api.tradingGameReproducibility(160),
-        api.reasoningCoreStatus(),
-        api.thesisSurvival(24),
-        api.convictionDecay(24),
-        api.reliabilityByRegime(24),
-        api.thesisCompetitions(16),
-        api.ensembleStatus(),
-        api.benchmarkRelative(24),
-        api.trainingQuality(24)
+        api.learningIntelligenceDashboard()
       ] as const);
       if (!mounted) return;
       if (dashResult.status === "fulfilled") setDashboard(dashResult.value);
+      setTrading((previous: any) => ({
+        ...(previous ?? {}),
+        equity: equityResult.status === "fulfilled" ? equityResult.value : previous?.equity ?? [],
+        annotatedEquity: annotatedEquityResult.status === "fulfilled" ? annotatedEquityResult.value : previous?.annotatedEquity ?? null,
+        intelligenceMetrics: intelligenceMetricsResult.status === "fulfilled" ? intelligenceMetricsResult.value : previous?.intelligenceMetrics ?? null,
+        rollingMetrics: rollingMetricsResult.status === "fulfilled" ? rollingMetricsResult.value : previous?.rollingMetrics ?? null,
+        historicalVsLive: historicalVsLiveResult.status === "fulfilled" ? historicalVsLiveResult.value : previous?.historicalVsLive ?? null,
+        liveStatus: liveStatusResult.status === "fulfilled" ? liveStatusResult.value : previous?.liveStatus ?? null,
+        liveMetrics: liveMetricsResult.status === "fulfilled" ? liveMetricsResult.value : previous?.liveMetrics ?? null,
+        learningIntelligence: learningIntelligenceResult.status === "fulfilled" ? learningIntelligenceResult.value : previous?.learningIntelligence ?? null
+      }));
+      if (dashResult.status === "rejected") setError((dashResult.reason as Error).message);
+      setChartsLoading(false);
+    }
+
+    async function loadVisibleTables() {
+      setTablesLoading(true);
+      const [runsResult, predictionsResult, memoryResult, tradesResult, ledgerResult, ledgerSummaryResult, cyclesResult, cycleStatsResult, metricsBySetupResult, metricsByRegimeResult, metricsBySectorResult, livePositionsResult, decisionIntelligenceResult, learningEvidenceResult, realityCheckResult, pnlBreakdownResult, failuresResult, lessonsResult, benchmarkResult, reproducibilityResult] = await Promise.allSettled([
+        api.learningRuns(20),
+        api.learningPredictions(24),
+        api.learningMemory(24),
+        api.tradingGameTrades(50),
+        api.tradingGameLedger(50),
+        api.tradingGameLedgerSummary(),
+        api.tradingGameCycles(40),
+        api.tradingGameCycleStats(),
+        api.tradingGameIntelligenceBySetup(),
+        api.tradingGameIntelligenceByRegime(),
+        api.tradingGameIntelligenceBySector(),
+        api.liveTradingGamePositions(),
+        api.decisionIntelligenceDashboard(),
+        api.tradingGameLearningEvidence(40),
+        api.tradingGameRealityCheck(),
+        api.tradingGamePnlBreakdown(),
+        api.tradingGameFailures(16),
+        api.tradingGameLessons(16),
+        api.tradingGameBenchmark(),
+        api.tradingGameReproducibility(80)
+      ] as const);
+      if (!mounted) return;
       if (runsResult.status === "fulfilled") setRuns(runsResult.value);
       if (predictionsResult.status === "fulfilled") setPredictions(predictionsResult.value);
       if (memoryResult.status === "fulfilled") setMemory(memoryResult.value);
-      setTrading({
-        status: tradingStatusResult.status === "fulfilled" ? tradingStatusResult.value : null,
-        equity: equityResult.status === "fulfilled" ? equityResult.value : [],
-        annotatedEquity: annotatedEquityResult.status === "fulfilled" ? annotatedEquityResult.value : null,
-        trades: tradesResult.status === "fulfilled" ? tradesResult.value : [],
-        ledger: ledgerResult.status === "fulfilled" ? ledgerResult.value : null,
-        ledgerSummary: ledgerSummaryResult.status === "fulfilled" ? ledgerSummaryResult.value : null,
-        cycles: cyclesResult.status === "fulfilled" ? cyclesResult.value : null,
-        currentCycle: currentCycleResult.status === "fulfilled" ? currentCycleResult.value : null,
-        cycleStats: cycleStatsResult.status === "fulfilled" ? cycleStatsResult.value : null,
-        intelligenceMetrics: intelligenceMetricsResult.status === "fulfilled" ? intelligenceMetricsResult.value : null,
-        rollingMetrics: rollingMetricsResult.status === "fulfilled" ? rollingMetricsResult.value : null,
-        metricsBySetup: metricsBySetupResult.status === "fulfilled" ? metricsBySetupResult.value : null,
-        metricsByRegime: metricsByRegimeResult.status === "fulfilled" ? metricsByRegimeResult.value : null,
-        metricsBySector: metricsBySectorResult.status === "fulfilled" ? metricsBySectorResult.value : null,
-        historicalVsLive: historicalVsLiveResult.status === "fulfilled" ? historicalVsLiveResult.value : null,
-        liveStatus: liveStatusResult.status === "fulfilled" ? liveStatusResult.value : null,
-        livePositions: livePositionsResult.status === "fulfilled" ? livePositionsResult.value : null,
-        liveMetrics: liveMetricsResult.status === "fulfilled" ? liveMetricsResult.value : null,
-        learningIntelligence: learningIntelligenceResult.status === "fulfilled" ? learningIntelligenceResult.value : null,
-        decisionIntelligence: decisionIntelligenceResult.status === "fulfilled" ? decisionIntelligenceResult.value : null,
-        learningEvidence: learningEvidenceResult.status === "fulfilled" ? learningEvidenceResult.value : null,
-        realityCheck: realityCheckResult.status === "fulfilled" ? realityCheckResult.value : null,
-        pnlBreakdown: pnlBreakdownResult.status === "fulfilled" ? pnlBreakdownResult.value : null,
-        failures: failuresResult.status === "fulfilled" ? failuresResult.value : [],
-        lessons: lessonsResult.status === "fulfilled" ? lessonsResult.value : [],
-        benchmark: benchmarkResult.status === "fulfilled" ? benchmarkResult.value : null,
-        reproducibility: reproducibilityResult.status === "fulfilled" ? reproducibilityResult.value : null
-      });
-      setReasoning({
-        status: reasoningStatusResult.status === "fulfilled" ? reasoningStatusResult.value : null,
-        survival: survivalResult.status === "fulfilled" ? survivalResult.value : null,
-        conviction: convictionResult.status === "fulfilled" ? convictionResult.value : null,
-        reliability: reliabilityResult.status === "fulfilled" ? reliabilityResult.value : null,
-        competitions: competitionResult.status === "fulfilled" ? competitionResult.value : null,
-        ensemble: ensembleResult.status === "fulfilled" ? ensembleResult.value : null,
-        benchmark: benchmarkRelativeResult.status === "fulfilled" ? benchmarkRelativeResult.value : null,
-        trainingQuality: trainingQualityResult.status === "fulfilled" ? trainingQualityResult.value : null
-      });
-      const failed = [dashResult, runsResult, predictionsResult, memoryResult, tradingStatusResult].find(isRejected);
-      if (failed) setError((failed.reason as Error).message);
+      setTrading((previous: any) => ({
+        ...(previous ?? {}),
+        trades: tradesResult.status === "fulfilled" ? tradesResult.value : previous?.trades ?? [],
+        ledger: ledgerResult.status === "fulfilled" ? ledgerResult.value : previous?.ledger ?? null,
+        ledgerSummary: ledgerSummaryResult.status === "fulfilled" ? ledgerSummaryResult.value : previous?.ledgerSummary ?? null,
+        cycles: cyclesResult.status === "fulfilled" ? cyclesResult.value : previous?.cycles ?? null,
+        cycleStats: cycleStatsResult.status === "fulfilled" ? cycleStatsResult.value : previous?.cycleStats ?? null,
+        metricsBySetup: metricsBySetupResult.status === "fulfilled" ? metricsBySetupResult.value : previous?.metricsBySetup ?? null,
+        metricsByRegime: metricsByRegimeResult.status === "fulfilled" ? metricsByRegimeResult.value : previous?.metricsByRegime ?? null,
+        metricsBySector: metricsBySectorResult.status === "fulfilled" ? metricsBySectorResult.value : previous?.metricsBySector ?? null,
+        livePositions: livePositionsResult.status === "fulfilled" ? livePositionsResult.value : previous?.livePositions ?? null,
+        decisionIntelligence: decisionIntelligenceResult.status === "fulfilled" ? decisionIntelligenceResult.value : previous?.decisionIntelligence ?? null,
+        learningEvidence: learningEvidenceResult.status === "fulfilled" ? learningEvidenceResult.value : previous?.learningEvidence ?? null,
+        realityCheck: realityCheckResult.status === "fulfilled" ? realityCheckResult.value : previous?.realityCheck ?? null,
+        pnlBreakdown: pnlBreakdownResult.status === "fulfilled" ? pnlBreakdownResult.value : previous?.pnlBreakdown ?? null,
+        failures: failuresResult.status === "fulfilled" ? failuresResult.value : previous?.failures ?? [],
+        lessons: lessonsResult.status === "fulfilled" ? lessonsResult.value : previous?.lessons ?? [],
+        benchmark: benchmarkResult.status === "fulfilled" ? benchmarkResult.value : previous?.benchmark ?? null,
+        reproducibility: reproducibilityResult.status === "fulfilled" ? reproducibilityResult.value : previous?.reproducibility ?? null
+      }));
+      setTablesLoading(false);
     }
-    load();
-    const timer = window.setInterval(load, 45000);
+
+    loadCriticalSummary();
+    const chartsTimer = window.setTimeout(loadMainCharts, 120);
+    const tablesTimer = window.setTimeout(loadVisibleTables, 900);
+    const summaryPoll = window.setInterval(loadCriticalSummary, 45000);
     return () => {
       mounted = false;
-      window.clearInterval(timer);
+      window.clearTimeout(chartsTimer);
+      window.clearTimeout(tablesTimer);
+      window.clearInterval(summaryPoll);
     };
   }, []);
+
+  async function loadDeepReasoningPanels() {
+    setDeepLoading(true);
+    const [reasoningStatusResult, survivalResult, convictionResult, reliabilityResult, competitionResult, ensembleResult, benchmarkRelativeResult, trainingQualityResult] = await Promise.allSettled([
+      api.reasoningCoreStatus(),
+      api.thesisSurvival(16),
+      api.convictionDecay(16),
+      api.reliabilityByRegime(16),
+      api.thesisCompetitions(12),
+      api.ensembleStatus(),
+      api.benchmarkRelative(16),
+      api.trainingQuality(16)
+    ] as const);
+    setReasoning({
+      status: reasoningStatusResult.status === "fulfilled" ? reasoningStatusResult.value : null,
+      survival: survivalResult.status === "fulfilled" ? survivalResult.value : null,
+      conviction: convictionResult.status === "fulfilled" ? convictionResult.value : null,
+      reliability: reliabilityResult.status === "fulfilled" ? reliabilityResult.value : null,
+      competitions: competitionResult.status === "fulfilled" ? competitionResult.value : null,
+      ensemble: ensembleResult.status === "fulfilled" ? ensembleResult.value : null,
+      benchmark: benchmarkRelativeResult.status === "fulfilled" ? benchmarkRelativeResult.value : null,
+      trainingQuality: trainingQualityResult.status === "fulfilled" ? trainingQualityResult.value : null
+    });
+    setDeepLoaded(true);
+    setDeepLoading(false);
+  }
 
   const metrics = dashboard?.metrics ?? {};
   const byTimeframe = metrics.by_timeframe ?? {};
@@ -125,7 +174,13 @@ export default function LearningPage() {
   const strategyRows = memory?.strategy_memory ?? dashboard?.strategy_memory ?? [];
   const mistakeRows = memory?.mistakes ?? dashboard?.mistakes ?? [];
   const latestRun = dashboard?.latest_run;
-  const game = trading?.status?.current_game ?? dashboard?.trading_game?.current_game;
+  const game = trading?.status?.current_game ?? dashboard?.trading_game?.current_game ?? {
+    current_capital: summary?.current_capital,
+    target_capital: summary?.target_capital,
+    target_cycles_completed: summary?.completed_target_cycles,
+    bankrupt_cycles: summary?.bankrupt_cycles,
+    status: summary?.status,
+  };
   const equityRows = trading?.equity ?? [];
   const annotatedEquityRows = trading?.annotatedEquity?.equity_curve_points ?? equityRows;
   const equityAnnotations = trading?.annotatedEquity?.annotations ?? [];
@@ -154,13 +209,20 @@ export default function LearningPage() {
   const portfolioQuality = decisionIntelligence?.portfolio?.portfolio_quality ?? {};
   const portfolioContributionRows = decisionIntelligence?.portfolio?.contributions ?? [];
   const portfolioCorrelationRows = decisionIntelligence?.portfolio?.correlations ?? [];
-  const tradingPower = learningIntelligence?.trading_power ?? {};
+  const tradingPower = learningIntelligence?.trading_power ?? {
+    score: summary?.trading_power_score,
+    classification: summary?.trading_power_classification,
+    truth_panel: summary?.truth_panel,
+    warnings: summary?.warnings,
+    explanation: summary?.suggested_next_step,
+    statistical_confidence: summary?.benchmark_summary?.status,
+  };
   const tradingPowerComponents = tradingPower?.components ?? {};
-  const benchmarkArenaRows = learningIntelligence?.benchmarks?.rows ?? [];
+  const benchmarkArenaRows = learningIntelligence?.benchmarks?.rows ?? benchmarkRowsFromSummary(summary);
   const learningProgress = learningIntelligence?.progress ?? {};
   const weaknessRows = learningIntelligence?.weakness_map?.rows ?? [];
   const improvementActions = learningIntelligence?.self_improvement?.actions ?? [];
-  const truthPanelRows = learningIntelligence?.truth_panel ?? tradingPower?.truth_panel ?? [];
+  const truthPanelRows = learningIntelligence?.truth_panel ?? tradingPower?.truth_panel ?? summary?.truth_panel ?? [];
   const learningEvidenceRows = trading?.learningEvidence?.rows ?? [];
   const realityCheck = trading?.realityCheck ?? {};
   const pnlBreakdown = trading?.pnlBreakdown ?? {};
@@ -213,9 +275,6 @@ export default function LearningPage() {
     }
   }
 
-  if (error && !dashboard) return <div className="empty-state">API error: {error}</div>;
-  if (!dashboard) return <LoadingState label="Loading BLUM Learning Loop" />;
-
   return (
     <>
       <header className="page-header">
@@ -225,16 +284,40 @@ export default function LearningPage() {
           <p>Capital cycles, advanced trade ledger, live forward paper mode and intelligence-growth metrics. Built to measure whether BLUM is improving entries, exits, risk control and benchmark-relative decision quality.</p>
         </div>
         <div className="header-actions">
-          <StatusBadge label={dashboard.status === "active" ? "Learning active" : "Learning passive"} />
-          <StatusBadge label={dashboard.configuration?.evaluation_mode ?? "walk_forward"} />
+          <StatusBadge label={summary?.status === "ready" || dashboard?.status === "active" ? "Learning snapshot ready" : "Loading snapshot"} />
+          <StatusBadge label={dashboard?.configuration?.evaluation_mode ?? "progressive"} />
+          {chartsLoading && <StatusBadge label="charts loading" />}
+          {tablesLoading && <StatusBadge label="tables loading" />}
         </div>
       </header>
 
+      {summaryError && <div className="empty-state" style={{ marginBottom: 12 }}>Summary warning: {summaryError}</div>}
+      {error && <div className="empty-state" style={{ marginBottom: 12 }}>Deferred widget warning: {error}</div>}
+
       <section className="grid-4">
-        <LearningMetric icon={<Brain size={18} />} label="Simulations" value={metrics.simulations ?? 0} subvalue={`${metrics.outcomes ?? 0} evaluated horizons`} />
+        <LearningMetric icon={<Brain size={18} />} label="Simulations" value={metrics.simulations ?? "loading"} subvalue={`${metrics.outcomes ?? 0} evaluated horizons`} />
         <LearningMetric icon={<Gauge size={18} />} label="Short Accuracy" value={formatPct(byTimeframe.short?.accuracy)} subvalue="5-20 trading days" />
         <LearningMetric icon={<LineChart size={18} />} label="Mid Accuracy" value={formatPct(byTimeframe.mid?.accuracy)} subvalue="1-3 months" />
         <LearningMetric icon={<AlertTriangle size={18} />} label="Calibration Error" value={formatNumber(metrics.confidence_calibration?.mean_absolute_error)} subvalue={metrics.confidence_calibration?.status ?? "insufficient sample"} />
+      </section>
+
+      <section className="grid-3" style={{ marginTop: 12 }}>
+        <AsyncPanel title="Tier 1 Critical Snapshot" loading={!summary && !summaryError} error={summaryError} updatedAt={summary?.generated_at} fallback="Loading lightweight summary">
+          <div className="evidence-grid">
+            <SmallDatum label="Capital" value={formatCurrency(summary?.current_capital)} />
+            <SmallDatum label="Target Progress" value={summary?.target_progress === null || summary?.target_progress === undefined ? "n/a" : formatPct(summary.target_progress)} />
+            <SmallDatum label="Power Score" value={summary?.trading_power_score === null || summary?.trading_power_score === undefined ? "n/a" : `${formatNumber(summary.trading_power_score)}/100`} />
+            <SmallDatum label="Benchmarks" value={summary?.benchmark_summary?.status ?? "loading"} />
+            <SmallDatum label="Latest Run" value={summary?.latest_learning_run_status ?? "loading"} />
+            <SmallDatum label="Freshness" value={formatTime(summary?.generated_at)} />
+          </div>
+        </AsyncPanel>
+        <AsyncPanel title="Tier 2 Main Charts" loading={chartsLoading} error="" updatedAt={summary?.generated_at} fallback="Loading charts without blocking the page">
+          <p>Equity curve, benchmark comparison and rolling intelligence metrics load after the critical snapshot.</p>
+        </AsyncPanel>
+        <AsyncPanel title="Tier 3 Tables" loading={tablesLoading} error="" updatedAt={summary?.generated_at} fallback="Loading ledgers and memory tables progressively">
+          <p>Trade ledgers, cycles, predictions and learning evidence use safe default limits and independent loading.</p>
+        </AsyncPanel>
       </section>
 
       <section className="grid-3" style={{ marginTop: 12 }}>
@@ -416,41 +499,51 @@ export default function LearningPage() {
         </div>
       </section>
 
-      <section className="grid-2" style={{ marginTop: 12 }}>
-        <div className="panel">
+      {!deepLoaded ? (
+        <section className="panel" style={{ marginTop: 12 }}>
           <div className="panel-head">
-            <span>Reasoning Precision Core</span>
-            <strong>{reasoning?.status?.precision_core?.status ?? "Loading"}</strong>
+            <span>Tier 4 Deep Reasoning Panels</span>
+            <button className="button compact" onClick={loadDeepReasoningPanels} disabled={deepLoading}>{deepLoading ? "Loading..." : "Load deep reasoning panels"}</button>
           </div>
-          <div className="evidence-grid">
-            <SmallDatum label="Survival Metrics" value={precisionCounts.thesis_survival_metrics ?? 0} />
-            <SmallDatum label="Conviction Rows" value={precisionCounts.conviction_history_rows ?? 0} />
-            <SmallDatum label="Regime Reliability" value={precisionCounts.reliability_by_regime_rows ?? 0} />
-            <SmallDatum label="Thesis Competitions" value={precisionCounts.thesis_competitions ?? 0} />
-            <SmallDatum label="Engine Votes" value={precisionCounts.engine_votes ?? 0} />
-            <SmallDatum label="Benchmark Outcomes" value={precisionCounts.benchmark_relative_outcomes ?? 0} />
+          <p>Thesis survival, conviction decay, regime-aware reliability, thesis competitions, ensemble status and training quality are intentionally lazy-loaded. They no longer block the Learning dashboard first render.</p>
+        </section>
+      ) : (
+        <section className="grid-2" style={{ marginTop: 12 }}>
+          <div className="panel">
+            <div className="panel-head">
+              <span>Reasoning Precision Core</span>
+              <strong>{reasoning?.status?.precision_core?.status ?? "Loading"}</strong>
+            </div>
+            <div className="evidence-grid">
+              <SmallDatum label="Survival Metrics" value={precisionCounts.thesis_survival_metrics ?? 0} />
+              <SmallDatum label="Conviction Rows" value={precisionCounts.conviction_history_rows ?? 0} />
+              <SmallDatum label="Regime Reliability" value={precisionCounts.reliability_by_regime_rows ?? 0} />
+              <SmallDatum label="Thesis Competitions" value={precisionCounts.thesis_competitions ?? 0} />
+              <SmallDatum label="Engine Votes" value={precisionCounts.engine_votes ?? 0} />
+              <SmallDatum label="Benchmark Outcomes" value={precisionCounts.benchmark_relative_outcomes ?? 0} />
+            </div>
+            <p>These panels measure thesis durability, confidence decay, benchmark-relative evidence and engine disagreement. They update database memory only; no source code is self-modified.</p>
           </div>
-          <p>These panels measure thesis durability, confidence decay, benchmark-relative evidence and engine disagreement. They update database memory only; no source code is self-modified.</p>
-        </div>
 
-        <div className="panel">
-          <div className="panel-head"><span>Thesis survival and decay</span><strong>{survivalRows.length} / {convictionRows.length}</strong></div>
-          <div className="learning-table">
-            <div className="learning-row head"><span>Ticker</span><span>Status</span><span>Age</span><span>Confidence</span><span>Excess</span><span>Quality</span></div>
-            {survivalRows.slice(0, 8).map((row: any) => (
-              <div className="learning-row" key={row.id}>
-                <strong>{row.ticker}</strong>
-                <span>{row.survival_status}</span>
-                <span>{formatNumber(row.survival_days)}d</span>
-                <span>{formatNumber(row.current_confidence)}</span>
-                <span className={Number(row.excess_return) >= 0 ? "positive-text" : "negative-text"}>{formatPctDecimal(row.excess_return)}</span>
-                <span>{formatNumber(row.survival_quality_score)}</span>
-              </div>
-            ))}
-            {survivalRows.length === 0 && <div className="empty-state">No thesis survival rows yet. The autonomous model cycle will create them after stored theses exist.</div>}
+          <div className="panel">
+            <div className="panel-head"><span>Thesis survival and decay</span><strong>{survivalRows.length} / {convictionRows.length}</strong></div>
+            <div className="learning-table">
+              <div className="learning-row head"><span>Ticker</span><span>Status</span><span>Age</span><span>Confidence</span><span>Excess</span><span>Quality</span></div>
+              {survivalRows.slice(0, 8).map((row: any) => (
+                <div className="learning-row" key={row.id}>
+                  <strong>{row.ticker}</strong>
+                  <span>{row.survival_status}</span>
+                  <span>{formatNumber(row.survival_days)}d</span>
+                  <span>{formatNumber(row.current_confidence)}</span>
+                  <span className={Number(row.excess_return) >= 0 ? "positive-text" : "negative-text"}>{formatPctDecimal(row.excess_return)}</span>
+                  <span>{formatNumber(row.survival_quality_score)}</span>
+                </div>
+              ))}
+              {survivalRows.length === 0 && <div className="empty-state">No thesis survival rows yet. The autonomous model cycle will create them after stored theses exist.</div>}
+            </div>
           </div>
-        </div>
-      </section>
+        </section>
+      )}
 
       <section className="panel" style={{ marginTop: 12 }}>
         <div className="panel-head">
@@ -656,46 +749,48 @@ export default function LearningPage() {
         </div>
       </section>
 
-      <section className="grid-2" style={{ marginTop: 12 }}>
-        <div className="panel">
-          <div className="panel-head"><span>Regime-aware reliability</span><strong>{reliabilityByRegimeRows.length}</strong></div>
-          <div className="learning-table">
-            <div className="learning-row head"><span>Engine</span><span>Setup</span><span>Regime</span><span>Samples</span><span>Hit</span><span>Penalty</span></div>
-            {reliabilityByRegimeRows.slice(0, 8).map((row: any) => (
-              <div className="learning-row" key={row.id}>
-                <strong>{String(row.engine_name).replaceAll("_", " ")}</strong>
-                <span>{String(row.setup_type).replaceAll("_", " ")}</span>
-                <span>{row.market_regime}</span>
-                <span>{row.sample_size}</span>
-                <span>{formatPct(row.hit_rate)}</span>
-                <span>{formatNumber(row.confidence_penalty)}</span>
-              </div>
-            ))}
-            {reliabilityByRegimeRows.length === 0 && <div className="empty-state">No regime-specific reliability rows yet. BLUM needs matured thesis outcomes first.</div>}
+      {deepLoaded && (
+        <section className="grid-2" style={{ marginTop: 12 }}>
+          <div className="panel">
+            <div className="panel-head"><span>Regime-aware reliability</span><strong>{reliabilityByRegimeRows.length}</strong></div>
+            <div className="learning-table">
+              <div className="learning-row head"><span>Engine</span><span>Setup</span><span>Regime</span><span>Samples</span><span>Hit</span><span>Penalty</span></div>
+              {reliabilityByRegimeRows.slice(0, 8).map((row: any) => (
+                <div className="learning-row" key={row.id}>
+                  <strong>{String(row.engine_name).replaceAll("_", " ")}</strong>
+                  <span>{String(row.setup_type).replaceAll("_", " ")}</span>
+                  <span>{row.market_regime}</span>
+                  <span>{row.sample_size}</span>
+                  <span>{formatPct(row.hit_rate)}</span>
+                  <span>{formatNumber(row.confidence_penalty)}</span>
+                </div>
+              ))}
+              {reliabilityByRegimeRows.length === 0 && <div className="empty-state">No regime-specific reliability rows yet. BLUM needs matured thesis outcomes first.</div>}
+            </div>
           </div>
-        </div>
 
-        <div className="panel">
-          <div className="panel-head"><span>Thesis competition and training quality</span><strong>{competitionRows.length}</strong></div>
-          <div className="brain-list dense">
-            {competitionRows.slice(0, 5).map((row: any) => (
-              <div key={row.id}>
-                <StatusBadge label={row.ticker} />
-                <strong>{row.judge_summary || "Competition pending"}</strong>
-                <p>Uncertainty {formatNumber(row.uncertainty_score)}/100 | theses {row.theses?.length ?? 0}</p>
-              </div>
-            ))}
-            {competitionRows.length === 0 && <div className="empty-state">No bull/bear/neutral thesis competitions yet.</div>}
-            {trainingQualityRows.slice(0, 3).map((row: any) => (
-              <div key={`quality-${row.id}`}>
-                <StatusBadge label="Training gate" />
-                <strong>Training value {formatNumber(row.final_training_value_score)}/100</strong>
-                <p>SFT {String(row.include_in_sft)} | preference {String(row.include_in_preference_training)} | DPO {String(row.include_in_dpo)}</p>
-              </div>
-            ))}
+          <div className="panel">
+            <div className="panel-head"><span>Thesis competition and training quality</span><strong>{competitionRows.length}</strong></div>
+            <div className="brain-list dense">
+              {competitionRows.slice(0, 5).map((row: any) => (
+                <div key={row.id}>
+                  <StatusBadge label={row.ticker} />
+                  <strong>{row.judge_summary || "Competition pending"}</strong>
+                  <p>Uncertainty {formatNumber(row.uncertainty_score)}/100 | theses {row.theses?.length ?? 0}</p>
+                </div>
+              ))}
+              {competitionRows.length === 0 && <div className="empty-state">No bull/bear/neutral thesis competitions yet.</div>}
+              {trainingQualityRows.slice(0, 3).map((row: any) => (
+                <div key={`quality-${row.id}`}>
+                  <StatusBadge label="Training gate" />
+                  <strong>Training value {formatNumber(row.final_training_value_score)}/100</strong>
+                  <p>SFT {String(row.include_in_sft)} | preference {String(row.include_in_preference_training)} | DPO {String(row.include_in_dpo)}</p>
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
-      </section>
+        </section>
+      )}
 
       <section className="grid-2" style={{ marginTop: 12 }}>
         <PlotPanel
@@ -785,7 +880,7 @@ export default function LearningPage() {
                 <SmallDatum label="Mistakes" value={latestRun.mistakes_found} />
                 <SmallDatum label="Memory Updates" value={latestRun.memory_updates} />
               </div>
-              <p>{latestRun.anti_overfitting_report?.policy ?? dashboard.policy}</p>
+              <p>{latestRun.anti_overfitting_report?.policy ?? dashboard?.policy ?? "Learning Loop policy will appear after the dashboard snapshot loads."}</p>
             </div>
           ) : (
             <div className="empty-state">The scheduler is active but no point-in-time learning run has been persisted yet.</div>
@@ -865,12 +960,12 @@ export default function LearningPage() {
       <section className="panel" style={{ marginTop: 12 }}>
         <div className="panel-head"><span>Governance and anti-overfitting</span><strong>Research only</strong></div>
         <div className="method-grid">
-          <SmallDatum label="Asset Universe" value={dashboard.configuration?.asset_universe} />
-          <SmallDatum label="Min History" value={`${dashboard.configuration?.min_history_years} years`} />
-          <SmallDatum label="Daily Guard" value={dashboard.configuration?.max_daily_runs} />
-          <SmallDatum label="Batch Size" value={dashboard.configuration?.batch_size} />
+          <SmallDatum label="Asset Universe" value={dashboard?.configuration?.asset_universe ?? "stocks,etfs"} />
+          <SmallDatum label="Min History" value={`${dashboard?.configuration?.min_history_years ?? "n/a"} years`} />
+          <SmallDatum label="Daily Guard" value={dashboard?.configuration?.max_daily_runs ?? "n/a"} />
+          <SmallDatum label="Batch Size" value={dashboard?.configuration?.batch_size ?? "n/a"} />
         </div>
-        <p>{dashboard.policy}</p>
+        <p>{dashboard?.policy ?? "Progressive loading is active. Deep learning details load after the lightweight summary and visible tables."}</p>
         <p>Every prediction stores the simulated date, hidden future policy, horizons, confidence, outcomes and mistake analysis. The loop updates parameters and memory only; it does not execute trades and does not self-modify source code.</p>
       </section>
     </>
@@ -949,6 +1044,18 @@ function benchmarkTone(label: any) {
   if (value === "outperforming") return "positive-text";
   if (value === "underperforming") return "negative-text";
   return "";
+}
+
+function benchmarkRowsFromSummary(summary: any) {
+  const rows = summary?.benchmark_summary?.major_benchmarks ?? {};
+  return Object.entries(rows).map(([benchmark_name, payload]: any) => ({
+    benchmark_name,
+    benchmark_type: "market",
+    result_label: payload.result_label,
+    excess_return: payload.excess_return,
+    sample_size: payload.sample_size,
+    statistical_confidence: payload.statistical_confidence,
+  }));
 }
 
 function isRejected(item: PromiseSettledResult<unknown>): item is PromiseRejectedResult {
