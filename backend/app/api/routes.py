@@ -84,6 +84,11 @@ from app.models import (
     TradeLearningEvidence,
     TradeQualityScore,
     TradingGameRealityCheck,
+    TradingCapitalCycle,
+    TradingIntelligenceMetric,
+    LiveForwardPaperGame,
+    LiveForwardPaperPosition,
+    HistoricalLiveComparison,
     EquityCurveAnnotation,
     MetaLearningEvent,
     ThesisCompetition,
@@ -186,6 +191,13 @@ from app.services.trade_transparency import (
     TradeQualityEvaluator,
     TradingGameRealityCheckService,
 )
+from app.services.trading_intelligence_lab import (
+    AdvancedTradeLedgerAnalyticsService,
+    HistoricalLiveComparisonService,
+    LiveForwardPaperTradingService,
+    TradingCapitalCycleService,
+    TradingIntelligenceMetricsService,
+)
 from app.signals.backtest import run_simple_backtest
 from app.signals.engine import SignalEngine
 
@@ -239,7 +251,14 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "trading_default_timeframe": settings.trading_default_timeframe,
             "trading_allow_microscalping": settings.trading_allow_microscalping,
             "trading_game_initial_capital": settings.trading_game_initial_capital,
+            "trading_game_target_capital": settings.trading_game_target_capital,
+            "trading_game_reset_on_target": settings.trading_game_reset_on_target,
+            "trading_game_reset_on_bankruptcy": settings.trading_game_reset_on_bankruptcy,
             "trading_game_batch_size": settings.trading_game_batch_size,
+            "live_trading_game_enabled": settings.live_trading_game_enabled,
+            "live_trading_game_initial_capital": settings.live_trading_game_initial_capital,
+            "live_trading_game_target_capital": settings.live_trading_game_target_capital,
+            "live_trading_game_max_open_positions": settings.live_trading_game_max_open_positions,
             "blum_model_cycle_minutes": settings.blum_model_cycle_minutes,
             "blum_model_cycle_limit": settings.blum_model_cycle_limit,
             "chart_vision_mode": settings.chart_vision_mode,
@@ -297,6 +316,11 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "trade_quality_score": True,
             "annotated_equity_curve": True,
             "trading_game_reality_check": True,
+            "trading_intelligence_lab": True,
+            "capital_cycles": True,
+            "intelligence_growth_metrics": True,
+            "live_forward_paper_trading": True,
+            "historical_vs_live_comparison": True,
         },
         "database_counts": {
             "assets": int(db.scalar(select(func.count(Asset.id))) or 0),
@@ -334,6 +358,11 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "trade_learning_evidence": int(db.scalar(select(func.count(TradeLearningEvidence.id))) or 0),
             "trading_game_reality_checks": int(db.scalar(select(func.count(TradingGameRealityCheck.id))) or 0),
             "equity_curve_annotations": int(db.scalar(select(func.count(EquityCurveAnnotation.id))) or 0),
+            "trading_capital_cycles": int(db.scalar(select(func.count(TradingCapitalCycle.id))) or 0),
+            "trading_intelligence_metrics": int(db.scalar(select(func.count(TradingIntelligenceMetric.id))) or 0),
+            "live_forward_paper_games": int(db.scalar(select(func.count(LiveForwardPaperGame.id))) or 0),
+            "live_forward_paper_positions": int(db.scalar(select(func.count(LiveForwardPaperPosition.id))) or 0),
+            "historical_live_comparisons": int(db.scalar(select(func.count(HistoricalLiveComparison.id))) or 0),
             "model_weight_versions": int(db.scalar(select(func.count(ModelWeightVersion.id))) or 0),
             "historical_similarity_cases": int(db.scalar(select(func.count(HistoricalSimilarityCase.id))) or 0),
             "confidence_adjustments": int(db.scalar(select(func.count(ConfidenceAdjustment.id))) or 0),
@@ -642,6 +671,66 @@ def trading_game_ledger(
     )
 
 
+@router.get("/api/trading-game/ledger/summary")
+def trading_game_ledger_summary(
+    game_id: int | None = Query(default=None),
+    ticker: str | None = Query(default=None),
+    setup_type: str | None = Query(default=None),
+    outcome_label: str | None = Query(default=None),
+    actionability_state: str | None = Query(default=None),
+    capital_cycle_id: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> dict:
+    return AdvancedTradeLedgerAnalyticsService().summary(
+        db,
+        game_id=game_id,
+        ticker=ticker,
+        setup_type=setup_type,
+        outcome_label=outcome_label,
+        actionability_state=actionability_state,
+        capital_cycle_id=capital_cycle_id,
+    )
+
+
+@router.get("/api/trading-game/ledger/by-ticker/{ticker}")
+def trading_game_ledger_by_ticker(
+    ticker: str,
+    game_id: int | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=1000),
+    db: Session = Depends(get_db),
+) -> dict:
+    return AdvancedTradeLedgerAnalyticsService().by_ticker(db, ticker=ticker, game_id=game_id, limit=limit)
+
+
+@router.get("/api/trading-game/ledger/by-setup/{setup_type}")
+def trading_game_ledger_by_setup(
+    setup_type: str,
+    game_id: int | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=1000),
+    db: Session = Depends(get_db),
+) -> dict:
+    return AdvancedTradeLedgerAnalyticsService().by_setup(db, setup_type=setup_type, game_id=game_id, limit=limit)
+
+
+@router.get("/api/trading-game/ledger/by-outcome/{outcome_label}")
+def trading_game_ledger_by_outcome(
+    outcome_label: str,
+    game_id: int | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=1000),
+    db: Session = Depends(get_db),
+) -> dict:
+    return AdvancedTradeLedgerAnalyticsService().by_outcome(db, outcome_label=outcome_label, game_id=game_id, limit=limit)
+
+
+@router.get("/api/trading-game/ledger/by-cycle/{cycle_id}")
+def trading_game_ledger_by_cycle(
+    cycle_id: int,
+    limit: int = Query(default=500, ge=1, le=2000),
+    db: Session = Depends(get_db),
+) -> dict:
+    return AdvancedTradeLedgerAnalyticsService().by_cycle(db, cycle_id=cycle_id, limit=limit)
+
+
 @router.get("/api/trading-game/trades/{trade_id}")
 def trading_game_trade_detail(trade_id: int, db: Session = Depends(get_db)) -> dict:
     return TradeLedgerService().detail(db, trade_id)
@@ -713,6 +802,114 @@ def trading_game_reality_check(game_id: int | None = Query(default=None), persis
 @router.get("/api/trading-game/pnl-breakdown")
 def trading_game_pnl_breakdown(game_id: int | None = Query(default=None), db: Session = Depends(get_db)) -> dict:
     return PnLBreakdownService().game_breakdown(db, game_id=game_id)
+
+
+@router.get("/api/trading-game/cycles")
+def trading_game_cycles(
+    game_id: int | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=1000),
+    db: Session = Depends(get_db),
+) -> dict:
+    return TradingCapitalCycleService().cycles(db, game_id=game_id, limit=limit)
+
+
+@router.get("/api/trading-game/cycles/current")
+def trading_game_current_cycle(game_id: int | None = Query(default=None), db: Session = Depends(get_db)) -> dict:
+    return TradingCapitalCycleService().current(db, game_id=game_id)
+
+
+@router.get("/api/trading-game/cycles/stats")
+def trading_game_cycle_stats(game_id: int | None = Query(default=None), db: Session = Depends(get_db)) -> dict:
+    return TradingCapitalCycleService().stats(db, game_id=game_id)
+
+
+@router.get("/api/trading-game/cycles/{cycle_id}")
+def trading_game_cycle_detail(cycle_id: int, db: Session = Depends(get_db)) -> dict:
+    return TradingCapitalCycleService().get(db, cycle_id=cycle_id)
+
+
+@router.post("/api/trading-game/cycles/reset")
+def trading_game_cycle_reset(game_id: int | None = Query(default=None), db: Session = Depends(get_db)) -> dict:
+    return TradingCapitalCycleService().reset(db, game_id=game_id)
+
+
+@router.get("/api/trading-game/intelligence-metrics")
+def trading_game_intelligence_metrics(
+    game_id: int | None = Query(default=None),
+    persist: bool = Query(default=False),
+    db: Session = Depends(get_db),
+) -> dict:
+    return TradingIntelligenceMetricsService().overview(db, game_id=game_id, persist=persist)
+
+
+@router.get("/api/trading-game/intelligence-metrics/rolling")
+def trading_game_intelligence_metrics_rolling(game_id: int | None = Query(default=None), db: Session = Depends(get_db)) -> dict:
+    return TradingIntelligenceMetricsService().rolling(db, game_id=game_id)
+
+
+@router.get("/api/trading-game/intelligence-metrics/by-setup")
+def trading_game_intelligence_metrics_by_setup(game_id: int | None = Query(default=None), db: Session = Depends(get_db)) -> dict:
+    return TradingIntelligenceMetricsService().by_dimension(db, "setup", game_id=game_id)
+
+
+@router.get("/api/trading-game/intelligence-metrics/by-regime")
+def trading_game_intelligence_metrics_by_regime(game_id: int | None = Query(default=None), db: Session = Depends(get_db)) -> dict:
+    return TradingIntelligenceMetricsService().by_dimension(db, "regime", game_id=game_id)
+
+
+@router.get("/api/trading-game/intelligence-metrics/by-sector")
+def trading_game_intelligence_metrics_by_sector(game_id: int | None = Query(default=None), db: Session = Depends(get_db)) -> dict:
+    return TradingIntelligenceMetricsService().by_dimension(db, "sector", game_id=game_id)
+
+
+@router.get("/api/trading-game/intelligence-metrics/by-cycle")
+def trading_game_intelligence_metrics_by_cycle(game_id: int | None = Query(default=None), db: Session = Depends(get_db)) -> dict:
+    return TradingIntelligenceMetricsService().by_dimension(db, "cycle", game_id=game_id)
+
+
+@router.get("/api/trading-game/historical-vs-live")
+def trading_game_historical_vs_live(persist: bool = Query(default=False), db: Session = Depends(get_db)) -> dict:
+    return HistoricalLiveComparisonService().compare(db, persist=persist)
+
+
+@router.get("/api/live-trading-game/status")
+def live_trading_game_status(db: Session = Depends(get_db)) -> dict:
+    return LiveForwardPaperTradingService().status(db)
+
+
+@router.post("/api/live-trading-game/run-cycle")
+def live_trading_game_run_cycle(db: Session = Depends(get_db)) -> dict:
+    return LiveForwardPaperTradingService().run_cycle(db)
+
+
+@router.get("/api/live-trading-game/positions")
+def live_trading_game_positions(db: Session = Depends(get_db)) -> dict:
+    return LiveForwardPaperTradingService().positions(db)
+
+
+@router.get("/api/live-trading-game/trades")
+def live_trading_game_trades(db: Session = Depends(get_db)) -> dict:
+    return LiveForwardPaperTradingService().trades(db)
+
+
+@router.get("/api/live-trading-game/ledger")
+def live_trading_game_ledger(limit: int = Query(default=200, ge=1, le=1000), db: Session = Depends(get_db)) -> dict:
+    return LiveForwardPaperTradingService().ledger(db, limit=limit)
+
+
+@router.get("/api/live-trading-game/equity")
+def live_trading_game_equity(db: Session = Depends(get_db)) -> dict:
+    return LiveForwardPaperTradingService().equity(db)
+
+
+@router.get("/api/live-trading-game/metrics")
+def live_trading_game_metrics(db: Session = Depends(get_db)) -> dict:
+    return LiveForwardPaperTradingService().metrics(db)
+
+
+@router.get("/api/live-trading-game/compare-historical")
+def live_trading_game_compare_historical(db: Session = Depends(get_db)) -> dict:
+    return LiveForwardPaperTradingService().compare_historical(db)
 
 
 @router.get("/model/status")

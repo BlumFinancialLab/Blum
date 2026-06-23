@@ -23,7 +23,7 @@ export default function LearningPage() {
     let mounted = true;
     async function load() {
       setError("");
-      const [dashResult, runsResult, predictionsResult, memoryResult, tradingStatusResult, equityResult, annotatedEquityResult, tradesResult, ledgerResult, learningEvidenceResult, realityCheckResult, pnlBreakdownResult, failuresResult, lessonsResult, benchmarkResult, reproducibilityResult, reasoningStatusResult, survivalResult, convictionResult, reliabilityResult, competitionResult, ensembleResult, benchmarkRelativeResult, trainingQualityResult] = await Promise.allSettled([
+      const [dashResult, runsResult, predictionsResult, memoryResult, tradingStatusResult, equityResult, annotatedEquityResult, tradesResult, ledgerResult, ledgerSummaryResult, cyclesResult, currentCycleResult, cycleStatsResult, intelligenceMetricsResult, rollingMetricsResult, metricsBySetupResult, metricsByRegimeResult, metricsBySectorResult, historicalVsLiveResult, liveStatusResult, livePositionsResult, liveMetricsResult, learningEvidenceResult, realityCheckResult, pnlBreakdownResult, failuresResult, lessonsResult, benchmarkResult, reproducibilityResult, reasoningStatusResult, survivalResult, convictionResult, reliabilityResult, competitionResult, ensembleResult, benchmarkRelativeResult, trainingQualityResult] = await Promise.allSettled([
         api.learningDashboard(),
         api.learningRuns(20),
         api.learningPredictions(36),
@@ -33,6 +33,19 @@ export default function LearningPage() {
         api.tradingGameAnnotatedEquity(360),
         api.tradingGameTrades(80),
         api.tradingGameLedger(120),
+        api.tradingGameLedgerSummary(),
+        api.tradingGameCycles(60),
+        api.tradingGameCurrentCycle(),
+        api.tradingGameCycleStats(),
+        api.tradingGameIntelligenceMetrics(),
+        api.tradingGameIntelligenceRolling(),
+        api.tradingGameIntelligenceBySetup(),
+        api.tradingGameIntelligenceByRegime(),
+        api.tradingGameIntelligenceBySector(),
+        api.tradingGameHistoricalVsLive(),
+        api.liveTradingGameStatus(),
+        api.liveTradingGamePositions(),
+        api.liveTradingGameMetrics(),
         api.tradingGameLearningEvidence(60),
         api.tradingGameRealityCheck(),
         api.tradingGamePnlBreakdown(),
@@ -60,6 +73,19 @@ export default function LearningPage() {
         annotatedEquity: annotatedEquityResult.status === "fulfilled" ? annotatedEquityResult.value : null,
         trades: tradesResult.status === "fulfilled" ? tradesResult.value : [],
         ledger: ledgerResult.status === "fulfilled" ? ledgerResult.value : null,
+        ledgerSummary: ledgerSummaryResult.status === "fulfilled" ? ledgerSummaryResult.value : null,
+        cycles: cyclesResult.status === "fulfilled" ? cyclesResult.value : null,
+        currentCycle: currentCycleResult.status === "fulfilled" ? currentCycleResult.value : null,
+        cycleStats: cycleStatsResult.status === "fulfilled" ? cycleStatsResult.value : null,
+        intelligenceMetrics: intelligenceMetricsResult.status === "fulfilled" ? intelligenceMetricsResult.value : null,
+        rollingMetrics: rollingMetricsResult.status === "fulfilled" ? rollingMetricsResult.value : null,
+        metricsBySetup: metricsBySetupResult.status === "fulfilled" ? metricsBySetupResult.value : null,
+        metricsByRegime: metricsByRegimeResult.status === "fulfilled" ? metricsByRegimeResult.value : null,
+        metricsBySector: metricsBySectorResult.status === "fulfilled" ? metricsBySectorResult.value : null,
+        historicalVsLive: historicalVsLiveResult.status === "fulfilled" ? historicalVsLiveResult.value : null,
+        liveStatus: liveStatusResult.status === "fulfilled" ? liveStatusResult.value : null,
+        livePositions: livePositionsResult.status === "fulfilled" ? livePositionsResult.value : null,
+        liveMetrics: liveMetricsResult.status === "fulfilled" ? liveMetricsResult.value : null,
         learningEvidence: learningEvidenceResult.status === "fulfilled" ? learningEvidenceResult.value : null,
         realityCheck: realityCheckResult.status === "fulfilled" ? realityCheckResult.value : null,
         pnlBreakdown: pnlBreakdownResult.status === "fulfilled" ? pnlBreakdownResult.value : null,
@@ -101,6 +127,21 @@ export default function LearningPage() {
   const equityAnnotations = trading?.annotatedEquity?.annotations ?? [];
   const gameTrades = trading?.trades ?? [];
   const ledgerRows = trading?.ledger?.rows ?? [];
+  const advancedLedgerSummary = trading?.ledgerSummary?.summary ?? trading?.ledger?.summary ?? {};
+  const cycleRows = trading?.cycles?.cycles ?? [];
+  const currentCycle = trading?.currentCycle?.cycle ?? {};
+  const cycleStats = trading?.cycleStats?.stats ?? trading?.cycles?.stats ?? {};
+  const intelligenceMetrics = trading?.intelligenceMetrics?.metrics ?? {};
+  const rollingMetrics = trading?.rollingMetrics?.windows ?? [];
+  const setupMetrics = trading?.metricsBySetup?.rows ?? [];
+  const regimeMetrics = trading?.metricsByRegime?.rows ?? [];
+  const sectorMetrics = trading?.metricsBySector?.rows ?? [];
+  const historicalVsLive = trading?.historicalVsLive ?? {};
+  const liveStatus = trading?.liveStatus ?? {};
+  const liveGame = liveStatus?.game ?? {};
+  const livePositionRows = trading?.livePositions?.positions ?? liveStatus?.open_positions ?? [];
+  const livePositions = Array.isArray(livePositionRows) ? livePositionRows : [];
+  const liveMetrics = trading?.liveMetrics?.metrics ?? {};
   const learningEvidenceRows = trading?.learningEvidence?.rows ?? [];
   const realityCheck = trading?.realityCheck ?? {};
   const pnlBreakdown = trading?.pnlBreakdown ?? {};
@@ -160,9 +201,9 @@ export default function LearningPage() {
     <>
       <header className="page-header">
         <div>
-          <div className="kicker">BLUM Learning Loop</div>
-          <h1>Point-in-time market simulation lab.</h1>
-          <p>Autonomous historical sampling, prediction evaluation, mistake classification, signal reliability and strategy memory. Built to improve calibration and robustness, not to manufacture perfect win rates.</p>
+          <div className="kicker">BLUM Trading Intelligence Lab</div>
+          <h1>Auditable paper trading intelligence.</h1>
+          <p>Capital cycles, advanced trade ledger, live forward paper mode and intelligence-growth metrics. Built to measure whether BLUM is improving entries, exits, risk control and benchmark-relative decision quality.</p>
         </div>
         <div className="header-actions">
           <StatusBadge label={dashboard.status === "active" ? "Learning active" : "Learning passive"} />
@@ -175,6 +216,48 @@ export default function LearningPage() {
         <LearningMetric icon={<Gauge size={18} />} label="Short Accuracy" value={formatPct(byTimeframe.short?.accuracy)} subvalue="5-20 trading days" />
         <LearningMetric icon={<LineChart size={18} />} label="Mid Accuracy" value={formatPct(byTimeframe.mid?.accuracy)} subvalue="1-3 months" />
         <LearningMetric icon={<AlertTriangle size={18} />} label="Calibration Error" value={formatNumber(metrics.confidence_calibration?.mean_absolute_error)} subvalue={metrics.confidence_calibration?.status ?? "insufficient sample"} />
+      </section>
+
+      <section className="grid-3" style={{ marginTop: 12 }}>
+        <div className="panel lab-command-panel">
+          <div className="panel-head"><span>Capital Cycle</span><strong>{currentCycle?.status ?? "no cycle"}</strong></div>
+          <div className="cycle-progress-track"><span style={{ width: `${cycleProgress(currentCycle)}%` }} /></div>
+          <div className="evidence-grid">
+            <SmallDatum label="Cycle Capital" value={formatCurrency(currentCycle?.final_capital ?? game?.current_capital)} />
+            <SmallDatum label="Target" value={formatCurrency(currentCycle?.target_capital ?? game?.target_capital)} />
+            <SmallDatum label="Progress" value={`${cycleProgress(currentCycle).toFixed(1)}%`} />
+            <SmallDatum label="Cycle #" value={currentCycle?.cycle_number ?? "n/a"} />
+            <SmallDatum label="Targets Hit" value={cycleStats?.target_cycles_completed ?? game?.target_cycles_completed ?? 0} />
+            <SmallDatum label="Bankrupt Cycles" value={cycleStats?.bankrupt_cycles ?? game?.bankrupt_cycles ?? 0} />
+          </div>
+          <p>Capital growth is capped into 100 EUR to target cycles. When target or bankruptcy is reached, the cycle is recorded and the active bankroll restarts from 100 EUR.</p>
+        </div>
+
+        <div className="panel lab-command-panel">
+          <div className="panel-head"><span>Trading Intelligence Metrics</span><strong>{formatNumber(intelligenceMetrics?.intelligence_growth_score)}/100</strong></div>
+          <div className="evidence-grid">
+            <SmallDatum label="Win Rate" value={formatPct(intelligenceMetrics?.win_rate)} />
+            <SmallDatum label="Missed Entry" value={formatPct(intelligenceMetrics?.missed_entry_rate)} />
+            <SmallDatum label="Target Hit" value={formatPct(intelligenceMetrics?.target_hit_rate)} />
+            <SmallDatum label="Stop Hit" value={formatPct(intelligenceMetrics?.stop_hit_rate)} />
+            <SmallDatum label="Expectancy" value={`${formatNumber(intelligenceMetrics?.expectancy_r)}R`} />
+            <SmallDatum label="Benchmark Excess" value={formatPctRaw(intelligenceMetrics?.benchmark_excess)} />
+          </div>
+          <p>These metrics measure decision quality, not only P/L. High numbers still require sample-size and realism checks before they mean anything.</p>
+        </div>
+
+        <div className="panel lab-command-panel">
+          <div className="panel-head"><span>Historical vs Live Forward</span><strong>{liveStatus?.status ?? "loading"}</strong></div>
+          <div className="evidence-grid">
+            <SmallDatum label="Live Capital" value={formatCurrency(liveGame?.current_capital)} />
+            <SmallDatum label="Open Positions" value={livePositions.length ?? liveGame?.open_positions ?? 0} />
+            <SmallDatum label="Live Trades" value={liveMetrics?.trades_count ?? historicalVsLive?.live?.trades_count ?? 0} />
+            <SmallDatum label="Historical Trades" value={historicalVsLive?.historical?.trades_count ?? 0} />
+            <SmallDatum label="Live Expectancy" value={`${formatNumber(liveMetrics?.expectancy_r ?? historicalVsLive?.live?.expectancy_r)}R`} />
+            <SmallDatum label="Historical Expectancy" value={`${formatNumber(historicalVsLive?.historical?.expectancy_r)}R`} />
+          </div>
+          <p>{historicalVsLive?.sample_warning ?? "Live forward paper evidence starts weak and becomes meaningful only after enough timestamp-frozen trades close."}</p>
+        </div>
       </section>
 
       <section className="grid-2" style={{ marginTop: 12 }}>
@@ -218,16 +301,26 @@ export default function LearningPage() {
           <span>Full Trade Ledger</span>
           <strong>{ledgerRows.length} visible / {trading?.ledger?.total ?? 0} total</strong>
         </div>
+        <div className="evidence-grid" style={{ marginBottom: 12 }}>
+          <SmallDatum label="Wins" value={advancedLedgerSummary?.wins ?? 0} />
+          <SmallDatum label="Losses" value={advancedLedgerSummary?.losses ?? 0} />
+          <SmallDatum label="Missed Entries" value={advancedLedgerSummary?.missed_entries ?? 0} />
+          <SmallDatum label="Target Hits" value={advancedLedgerSummary?.target_hits ?? 0} />
+          <SmallDatum label="Stop Hits" value={advancedLedgerSummary?.stop_hits ?? 0} />
+          <SmallDatum label="No-Trade Correct" value={advancedLedgerSummary?.no_trade_correct ?? 0} />
+        </div>
         <div className="learning-table trade-ledger-table">
-          <div className="learning-row trade-ledger-row head"><span>Ticker</span><span>Setup</span><span>Entry</span><span>Exit</span><span>P/L EUR</span><span>P/L %</span><span>R</span><span>Outcome</span><span>Quality</span><span>Excess</span></div>
+          <div className="learning-row trade-ledger-row head"><span>Ticker</span><span>Setup</span><span>Mode</span><span>Cycle</span><span>Entry</span><span>Exit</span><span>P/L EUR</span><span>P/L/share</span><span>R</span><span>Outcome</span><span>Quality</span><span>Excess</span></div>
           {ledgerRows.slice(0, 18).map((row: any) => (
             <button className="learning-row trade-ledger-row clickable" key={row.trade_id} onClick={() => openTrade(row.trade_id)}>
               <strong>{row.ticker}</strong>
               <span>{String(row.setup_type).replaceAll("_", " ")}</span>
+              <span>{String(row.mode ?? "historical").replaceAll("_", " ")}</span>
+              <span>{row.capital_cycle_id ?? "n/a"}</span>
               <span>{row.entry_date}<br />{formatNumber(row.entry_price)}</span>
               <span>{row.exit_date ?? "open"}<br />{formatNumber(row.exit_price)}</span>
               <span className={Number(row.net_pnl_eur) >= 0 ? "positive-text" : "negative-text"}>{formatCurrency(row.net_pnl_eur)}</span>
-              <span className={Number(row.pnl_percent) >= 0 ? "positive-text" : "negative-text"}>{formatPctRaw(row.pnl_percent)}</span>
+              <span className={Number(row.pnl_per_share) >= 0 ? "positive-text" : "negative-text"}>{formatNumber(row.pnl_per_share)}</span>
               <span className={Number(row.r_multiple) >= 0 ? "positive-text" : "negative-text"}>{formatNumber(row.r_multiple)}</span>
               <span>{String(row.outcome_label ?? row.decision_state).replaceAll("_", " ")}</span>
               <span>{formatNumber(row.trade_quality_score)}</span>
@@ -354,6 +447,55 @@ export default function LearningPage() {
               </div>
             ))}
             {learningEvidenceRows.length === 0 && <div className="empty-state compact">No trade learning evidence has been persisted yet.</div>}
+          </div>
+        </div>
+      </section>
+
+      <section className="grid-3" style={{ marginTop: 12 }}>
+        <div className="panel">
+          <div className="panel-head"><span>Capital Cycle History</span><strong>{cycleRows.length}</strong></div>
+          <div className="brain-list dense">
+            {cycleRows.slice(0, 6).map((row: any) => (
+              <div key={row.id}>
+                <StatusBadge label={`Cycle ${row.cycle_number}`} />
+                <div className="opportunity-line"><strong>{String(row.status).replaceAll("_", " ")}</strong><span>{formatCurrency(row.final_capital)}</span></div>
+                <p>Target {formatCurrency(row.target_capital)} | trades {row.trades_count} | return {formatPctRaw(row.return_percent)} | expectancy {formatNumber(row.expectancy_r)}R</p>
+              </div>
+            ))}
+            {cycleRows.length === 0 && <div className="empty-state compact">No capital cycle has been recorded yet.</div>}
+          </div>
+        </div>
+        <div className="panel">
+          <div className="panel-head"><span>Setup Development</span><strong>{setupMetrics.length}</strong></div>
+          <div className="brain-list dense">
+            {setupMetrics.slice(0, 6).map((row: any) => (
+              <div key={row.scope_id}>
+                <StatusBadge label={String(row.scope_id).replaceAll("_", " ")} />
+                <div className="opportunity-line"><strong>{formatNumber(row.intelligence_growth_score)}/100 growth</strong><span>{formatNumber(row.expectancy_r)}R</span></div>
+                <p>Win {formatPct(row.win_rate)} | missed {formatPct(row.missed_entry_rate)} | quality {formatNumber(row.trade_quality_score)}</p>
+              </div>
+            ))}
+            {setupMetrics.length === 0 && <div className="empty-state compact">No setup intelligence metrics yet.</div>}
+          </div>
+        </div>
+        <div className="panel">
+          <div className="panel-head"><span>Regime / Sector Learning</span><strong>{regimeMetrics.length + sectorMetrics.length}</strong></div>
+          <div className="brain-list dense">
+            {regimeMetrics.slice(0, 3).map((row: any) => (
+              <div key={`regime-${row.scope_id}`}>
+                <StatusBadge label={`Regime ${row.scope_id}`} />
+                <strong>{formatNumber(row.intelligence_growth_score)}/100 | {formatNumber(row.expectancy_r)}R</strong>
+                <p>Benchmark excess {formatPctRaw(row.benchmark_excess)} | trades {row.trades_count}</p>
+              </div>
+            ))}
+            {sectorMetrics.slice(0, 3).map((row: any) => (
+              <div key={`sector-${row.scope_id}`}>
+                <StatusBadge label={`Sector ${row.scope_id}`} />
+                <strong>{formatNumber(row.intelligence_growth_score)}/100 | {formatNumber(row.expectancy_r)}R</strong>
+                <p>Benchmark excess {formatPctRaw(row.benchmark_excess)} | trades {row.trades_count}</p>
+              </div>
+            ))}
+            {regimeMetrics.length + sectorMetrics.length === 0 && <div className="empty-state compact">No regime or sector learning metrics yet.</div>}
           </div>
         </div>
       </section>
@@ -611,6 +753,13 @@ function formatPctDecimal(value: any) {
 function formatPctRaw(value: any) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return "n/a";
   return `${Number(value).toFixed(2)}%`;
+}
+
+function cycleProgress(cycle: any) {
+  const capital = Number(cycle?.final_capital ?? 0);
+  const target = Number(cycle?.target_capital ?? 0);
+  if (!Number.isFinite(capital) || !Number.isFinite(target) || target <= 0) return 0;
+  return Math.max(0, Math.min(100, (capital / target) * 100));
 }
 
 function percentToNumber(value: any) {

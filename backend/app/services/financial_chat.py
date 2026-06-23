@@ -46,6 +46,12 @@ from app.services.dashboard import signal_payload
 from app.services.technical_analysis_engine import TechnicalAnalysisEngine
 from app.services.trading_game import TradingGameSimulator
 from app.services.trade_transparency import PnLBreakdownService, TradeLedgerService, TradingGameRealityCheckService
+from app.services.trading_intelligence_lab import (
+    HistoricalLiveComparisonService,
+    LiveForwardPaperTradingService,
+    TradingCapitalCycleService,
+    TradingIntelligenceMetricsService,
+)
 
 
 DISCLAIMER = "Analisi informativa, non consulenza finanziaria. I livelli sono tecnici e probabilistici, non garanzie."
@@ -467,6 +473,14 @@ def trading_game_context_for_chat(db: Session) -> dict:
             "equity": engine.equity(db, limit=80),
             "trades": engine.trades(db, limit=40),
             "ledger": ledger,
+            "ledger_summary": ledger.get("summary") or {},
+            "cycles": TradingCapitalCycleService().cycles(db, limit=40),
+            "current_cycle": TradingCapitalCycleService().current(db),
+            "intelligence_metrics": TradingIntelligenceMetricsService().overview(db),
+            "rolling_metrics": TradingIntelligenceMetricsService().rolling(db),
+            "metrics_by_setup": TradingIntelligenceMetricsService().by_dimension(db, "setup"),
+            "live_forward": LiveForwardPaperTradingService().status(db),
+            "historical_vs_live": HistoricalLiveComparisonService().compare(db),
             "pnl_breakdown": PnLBreakdownService().game_breakdown(db),
             "reality_check": TradingGameRealityCheckService().evaluate(db),
             "failures": engine.failures(db, limit=12),
@@ -1442,6 +1456,14 @@ def build_trading_game_response(language: str, context: dict) -> dict:
     trades = context.get("trades") or []
     ledger = context.get("ledger") or {}
     ledger_rows = ledger.get("rows") or []
+    cycles = context.get("cycles") or {}
+    cycle_stats = cycles.get("stats") or {}
+    current_cycle = (context.get("current_cycle") or {}).get("cycle") or {}
+    intelligence_metrics = (context.get("intelligence_metrics") or {}).get("metrics") or {}
+    rolling_metrics = (context.get("rolling_metrics") or {}).get("windows") or []
+    metrics_by_setup = (context.get("metrics_by_setup") or {}).get("rows") or []
+    live_forward = context.get("live_forward") or {}
+    historical_vs_live = context.get("historical_vs_live") or {}
     pnl_breakdown = context.get("pnl_breakdown") or {}
     reality_check = context.get("reality_check") or {}
     if not game:
@@ -1450,11 +1472,12 @@ def build_trading_game_response(language: str, context: dict) -> dict:
 
     sample_warning = game.get("trade_count", 0) < 30
     if language == "it":
-        summary = f"Il Trading Game e a {format_money(game.get('current_capital'))} da un capitale iniziale di {format_money(game.get('starting_capital'))}. P/L realizzato: {format_money(game.get('realized_pl'))}."
+        summary = f"Il Trading Game e a {format_money(game.get('current_capital'))} sul ciclo attivo, con target {format_money(game.get('target_capital') or current_cycle.get('target_capital'))}. Cicli target completati: {cycle_stats.get('target_cycles_completed', 0)}."
         if benchmark.get("alpha") is not None:
             summary += f" Alpha vs {benchmark.get('benchmark')}: {format_signed(benchmark.get('alpha'))}%."
         sections = [
             {"key": "summary", "title": "Sintesi", "bullets": [summary, "Questo e paper P/L learning: misura robustezza, drawdown e riproducibilita, non promette performance."]},
+            {"key": "capital_cycles", "title": "Cicli capitale", "bullets": cycle_lines(current_cycle, cycle_stats, language)},
             {"key": "performance", "title": "Performance", "bullets": [
                 f"Trade totali: {game.get('trade_count')}",
                 f"Win rate: {format_pct(game.get('win_rate'))}",
@@ -1469,6 +1492,8 @@ def build_trading_game_response(language: str, context: dict) -> dict:
                 "Nessuna dichiarazione di outperformance e valida se il campione e piccolo o incompleto.",
             ]},
             {"key": "trade_ledger", "title": "Trade ledger", "bullets": trade_ledger_lines(ledger_rows, language)},
+            {"key": "intelligence_metrics", "title": "Trading intelligence", "bullets": intelligence_metric_lines(intelligence_metrics, rolling_metrics, metrics_by_setup, language)},
+            {"key": "live_forward", "title": "Storico vs live paper", "bullets": historical_live_lines(live_forward, historical_vs_live, language)},
             {"key": "pnl_breakdown", "title": "P/L breakdown", "bullets": pnl_breakdown_lines(pnl_breakdown, language)},
             {"key": "reality_check", "title": "Reality check", "bullets": reality_check_lines(reality_check, language)},
             {"key": "reproducibility", "title": "Riproducibilita", "bullets": [
@@ -1484,11 +1509,12 @@ def build_trading_game_response(language: str, context: dict) -> dict:
             ]},
         ]
     else:
-        summary = f"The Trading Game is at {format_money(game.get('current_capital'))} from {format_money(game.get('starting_capital'))} starting capital. Realized P/L: {format_money(game.get('realized_pl'))}."
+        summary = f"The Trading Game is at {format_money(game.get('current_capital'))} in the active cycle, with target {format_money(game.get('target_capital') or current_cycle.get('target_capital'))}. Completed target cycles: {cycle_stats.get('target_cycles_completed', 0)}."
         if benchmark.get("alpha") is not None:
             summary += f" Alpha vs {benchmark.get('benchmark')}: {format_signed(benchmark.get('alpha'))}%."
         sections = [
             {"key": "summary", "title": "Summary", "bullets": [summary, "This is paper P/L learning: it measures robustness, drawdown and reproducibility, not guaranteed performance."]},
+            {"key": "capital_cycles", "title": "Capital Cycles", "bullets": cycle_lines(current_cycle, cycle_stats, language)},
             {"key": "performance", "title": "Performance", "bullets": [
                 f"Total trades: {game.get('trade_count')}",
                 f"Win rate: {format_pct(game.get('win_rate'))}",
@@ -1503,6 +1529,8 @@ def build_trading_game_response(language: str, context: dict) -> dict:
                 "No outperformance claim is valid when sample size or benchmark coverage is insufficient.",
             ]},
             {"key": "trade_ledger", "title": "Trade Ledger", "bullets": trade_ledger_lines(ledger_rows, language)},
+            {"key": "intelligence_metrics", "title": "Trading Intelligence", "bullets": intelligence_metric_lines(intelligence_metrics, rolling_metrics, metrics_by_setup, language)},
+            {"key": "live_forward", "title": "Historical vs Live Paper", "bullets": historical_live_lines(live_forward, historical_vs_live, language)},
             {"key": "pnl_breakdown", "title": "P/L Breakdown", "bullets": pnl_breakdown_lines(pnl_breakdown, language)},
             {"key": "reality_check", "title": "Reality Check", "bullets": reality_check_lines(reality_check, language)},
             {"key": "reproducibility", "title": "Reproducibility", "bullets": [
@@ -1528,8 +1556,8 @@ def build_trading_game_response(language: str, context: dict) -> dict:
         "standard_sections": sections,
         "executive_view": summary,
         "risk_reward_view": f"Expectancy {format_number(game.get('expectancy_r'))}R, drawdown {format_signed(game.get('max_drawdown'))}%.",
-        "data_quality": {"sample_warning": sample_warning, "trades": game.get("trade_count"), "reproducibility": reproducibility},
-        "learning_loop_memory": {"trading_game": game, "lessons": lessons[:6], "latest_trades": trades[:6], "ledger": ledger_rows[:8], "reality_check": reality_check},
+        "data_quality": {"sample_warning": sample_warning, "trades": game.get("trade_count"), "reproducibility": reproducibility, "cycles": cycle_stats, "live_sample_warning": (historical_vs_live.get("sample_warning") if isinstance(historical_vs_live, dict) else None)},
+        "learning_loop_memory": {"trading_game": game, "lessons": lessons[:6], "latest_trades": trades[:6], "ledger": ledger_rows[:8], "reality_check": reality_check, "cycles": cycle_stats, "intelligence_metrics": intelligence_metrics, "historical_vs_live": historical_vs_live},
         "answer_to_user": summary,
     }
 
@@ -1551,6 +1579,76 @@ def trade_ledger_lines(rows: list[dict], language: str) -> list[str]:
         else:
             lines.append(f"{ticker}: {setup}, entry {format_number(entry)}, exit {format_number(exit_price)}, P/L {pnl}, {r_value}R, outcome {outcome}.")
     return lines
+
+
+def cycle_lines(current_cycle: dict, stats: dict, language: str) -> list[str]:
+    if not current_cycle and not stats:
+        return ["Nessun ciclo capitale e ancora disponibile." if language == "it" else "No capital cycle is available yet."]
+    progress = None
+    if current_cycle:
+        progress = safe_ratio(current_cycle.get("final_capital"), current_cycle.get("target_capital"))
+    if language == "it":
+        return [
+            f"Ciclo attivo: #{current_cycle.get('cycle_number', 'n/a')} | capitale {format_money(current_cycle.get('final_capital'))} / target {format_money(current_cycle.get('target_capital'))} | progresso {format_pct_decimal(progress * 100 if progress is not None else None)}.",
+            f"Cicli 100 EUR -> target completati: {stats.get('target_cycles_completed', 0)}; cicli falliti: {stats.get('bankrupt_cycles', 0)}.",
+            f"Target hit rate: {format_pct(stats.get('target_hit_rate'))}; survival rate: {format_pct(stats.get('survival_rate'))}.",
+        ]
+    return [
+        f"Active cycle: #{current_cycle.get('cycle_number', 'n/a')} | capital {format_money(current_cycle.get('final_capital'))} / target {format_money(current_cycle.get('target_capital'))} | progress {format_pct_decimal(progress * 100 if progress is not None else None)}.",
+        f"Completed 100 EUR -> target cycles: {stats.get('target_cycles_completed', 0)}; bankrupt cycles: {stats.get('bankrupt_cycles', 0)}.",
+        f"Target hit rate: {format_pct(stats.get('target_hit_rate'))}; survival rate: {format_pct(stats.get('survival_rate'))}.",
+    ]
+
+
+def intelligence_metric_lines(metrics: dict, rolling: list[dict], by_setup: list[dict], language: str) -> list[str]:
+    if not metrics:
+        return ["Metriche intelligence non ancora disponibili." if language == "it" else "Trading intelligence metrics are not available yet."]
+    best_setup = by_setup[0] if by_setup else {}
+    rolling_30 = next((item for item in rolling if item.get("window_size") == 30), None)
+    rolling_100 = next((item for item in rolling if item.get("window_size") == 100), None)
+    if language == "it":
+        lines = [
+            f"Intelligence Growth Score: {format_number(metrics.get('intelligence_growth_score'))}/100 su {metrics.get('trades_count', 0)} azioni/trade.",
+            f"Win rate {format_pct(metrics.get('win_rate'))}, missed entry {format_pct(metrics.get('missed_entry_rate'))}, target hit {format_pct(metrics.get('target_hit_rate'))}, stop hit {format_pct(metrics.get('stop_hit_rate'))}.",
+            f"Expectancy {format_number(metrics.get('expectancy_r'))}R, profit factor {format_number(metrics.get('profit_factor'))}, benchmark excess medio {format_signed(metrics.get('benchmark_excess'))}%.",
+        ]
+        if rolling_30:
+            lines.append(f"Rolling 30 trade: win rate {format_pct(rolling_30.get('win_rate'))}, expectancy {format_number(rolling_30.get('expectancy_r'))}R.")
+        if rolling_100:
+            lines.append(f"Rolling 100 trade: win rate {format_pct(rolling_100.get('win_rate'))}, expectancy {format_number(rolling_100.get('expectancy_r'))}R.")
+        if best_setup:
+            lines.append(f"Setup piu forte ora: {str(best_setup.get('scope_id')).replace('_', ' ')} con growth score {format_number(best_setup.get('intelligence_growth_score'))}/100.")
+        return lines
+    lines = [
+        f"Intelligence Growth Score: {format_number(metrics.get('intelligence_growth_score'))}/100 across {metrics.get('trades_count', 0)} actions/trades.",
+        f"Win rate {format_pct(metrics.get('win_rate'))}, missed entry {format_pct(metrics.get('missed_entry_rate'))}, target hit {format_pct(metrics.get('target_hit_rate'))}, stop hit {format_pct(metrics.get('stop_hit_rate'))}.",
+        f"Expectancy {format_number(metrics.get('expectancy_r'))}R, profit factor {format_number(metrics.get('profit_factor'))}, average benchmark excess {format_signed(metrics.get('benchmark_excess'))}%.",
+    ]
+    if rolling_30:
+        lines.append(f"Rolling 30 trades: win rate {format_pct(rolling_30.get('win_rate'))}, expectancy {format_number(rolling_30.get('expectancy_r'))}R.")
+    if rolling_100:
+        lines.append(f"Rolling 100 trades: win rate {format_pct(rolling_100.get('win_rate'))}, expectancy {format_number(rolling_100.get('expectancy_r'))}R.")
+    if best_setup:
+        lines.append(f"Current strongest setup: {str(best_setup.get('scope_id')).replace('_', ' ')} with growth score {format_number(best_setup.get('intelligence_growth_score'))}/100.")
+    return lines
+
+
+def historical_live_lines(live: dict, comparison: dict, language: str) -> list[str]:
+    live_game = live.get("game") if isinstance(live, dict) else {}
+    historical = comparison.get("historical") if isinstance(comparison, dict) else {}
+    live_metrics = comparison.get("live") if isinstance(comparison, dict) else {}
+    warning = comparison.get("sample_warning") if isinstance(comparison, dict) else None
+    if language == "it":
+        return [
+            f"Live paper: capitale {format_money((live_game or {}).get('current_capital'))}, posizioni aperte {(live_game or {}).get('open_positions', 0)}.",
+            f"Storico: {historical.get('trades_count', 0)} trade, expectancy {format_number(historical.get('expectancy_r'))}R; live: {live_metrics.get('trades_count', 0)} trade, expectancy {format_number(live_metrics.get('expectancy_r'))}R.",
+            warning or "Il live forward diventa evidenza forte solo dopo abbastanza trade timestamp-frozen chiusi.",
+        ]
+    return [
+        f"Live paper: capital {format_money((live_game or {}).get('current_capital'))}, open positions {(live_game or {}).get('open_positions', 0)}.",
+        f"Historical: {historical.get('trades_count', 0)} trades, expectancy {format_number(historical.get('expectancy_r'))}R; live: {live_metrics.get('trades_count', 0)} trades, expectancy {format_number(live_metrics.get('expectancy_r'))}R.",
+        warning or "Live forward becomes strong evidence only after enough timestamp-frozen trades close.",
+    ]
 
 
 def pnl_breakdown_lines(payload: dict, language: str) -> list[str]:
@@ -1753,6 +1851,14 @@ def format_pct_decimal(value: object) -> str:
     if numeric is None:
         return "n/a"
     return f"{numeric:.1f}%"
+
+
+def safe_ratio(numerator: object, denominator: object) -> float | None:
+    top = nullable_float(numerator)
+    bottom = nullable_float(denominator)
+    if top is None or bottom is None or bottom <= 0:
+        return None
+    return top / bottom
 
 
 def nullable_float(value: object) -> float | None:
@@ -1993,11 +2099,18 @@ def summarize_trading_game_context(context: dict) -> dict:
     ledger = (context or {}).get("ledger") or {}
     reality = (context or {}).get("reality_check") or {}
     pnl = (context or {}).get("pnl_breakdown") or {}
+    cycles = (context or {}).get("cycles") or {}
+    current_cycle = (context or {}).get("current_cycle") or {}
+    intelligence = (context or {}).get("intelligence_metrics") or {}
+    historical_vs_live = (context or {}).get("historical_vs_live") or {}
     return {
         "current_game": {
             "status": game.get("status"),
             "current_capital": game.get("current_capital"),
             "starting_capital": game.get("starting_capital"),
+            "target_capital": game.get("target_capital"),
+            "target_cycles_completed": game.get("target_cycles_completed"),
+            "bankrupt_cycles": game.get("bankrupt_cycles"),
             "trade_count": game.get("trade_count"),
             "expectancy_r": game.get("expectancy_r"),
             "max_drawdown": game.get("max_drawdown"),
@@ -2017,6 +2130,16 @@ def summarize_trading_game_context(context: dict) -> dict:
         "pnl_breakdown": {
             "total_realized_pnl": pnl.get("total_realized_pnl"),
             "pnl_by_setup": dict(list((pnl.get("pnl_by_setup") or {}).items())[:5]),
+        },
+        "capital_cycles": {
+            "current": current_cycle.get("cycle"),
+            "stats": cycles.get("stats"),
+        },
+        "intelligence_metrics": (intelligence.get("metrics") or {}),
+        "historical_vs_live": {
+            "sample_warning": historical_vs_live.get("sample_warning"),
+            "historical": historical_vs_live.get("historical"),
+            "live": historical_vs_live.get("live"),
         },
     }
 
@@ -2217,7 +2340,7 @@ def infer_intent(message: str, mode: str | None = None) -> str:
         return "fundamental_analysis"
     if any(term in normalized for term in ["tesi", "thesis", "convinzione", "conviction", "ancora valida", "still valid", "sopravviss", "survival", "decay", "decad", "bull bear neutral", "tesi bull", "tesi bear", "tesi neutral", "motore", "engine vote", "sta migliorando", "dove ha sbagliato", "reasoning core", "batte spy", "batte qqq", "vs spy", "vs qqq"]):
         return "reasoning_memory_question"
-    if any(term in normalized for term in ["capitale virtuale", "trading game", "sta battendo", "batte il mercato", "benchmark", "drawdown", "profit factor", "expectancy", "p/l", "pl ", "peggior errore", "andato a zero", "rischio per trade", "riproducibil", "reproducib", "win rate", "quali trade", "trade hanno", "dove e entrato", "dove e uscito", "entrato blum", "uscito blum", "per azione", "fortuna", "profitto arriva", "ledger", "trade piu importante"]):
+    if any(term in normalized for term in ["capitale virtuale", "trading game", "sta battendo", "batte il mercato", "benchmark", "drawdown", "profit factor", "expectancy", "p/l", "pl ", "peggior errore", "andato a zero", "rischio per trade", "riproducibil", "reproducib", "win rate", "quali trade", "trade hanno", "dove e entrato", "dove e uscito", "entrato blum", "uscito blum", "per azione", "fortuna", "profitto arriva", "ledger", "trade piu importante", "100 eur", "10,000", "10000", "target cycle", "ciclo capitale", "cicli capitale", "quante volte", "live paper", "forward paper", "storico vs live", "historical vs live", "sta migliorando", "intelligence growth", "missed entry", "stop hit", "target hit"]):
         return "trading_game"
     if any(term in normalized for term in ["sniper", "entrabile", "meglio aspettare", "ingresso", "entry", "risk/reward", "uscita", "exit", "target", "invalidazione", "invalidation", "profitto", "take profit"]):
         return "market_sniper"

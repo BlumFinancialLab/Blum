@@ -208,6 +208,14 @@ class TradingGameSimulator:
 
     def status(self, db: Session) -> dict:
         game = self.active_or_latest_game(db)
+        cycle_payload = None
+        if game:
+            try:
+                from app.services.trading_intelligence_lab import TradingCapitalCycleService
+
+                cycle_payload = TradingCapitalCycleService().current(db, game.id)
+            except Exception as exc:
+                cycle_payload = {"status": "degraded", "error": f"{type(exc).__name__}: {exc}"}
         counts = {
             "games": int(db.scalar(select(func.count(TradingGame.id))) or 0),
             "trades": int(db.scalar(select(func.count(TradingGameTrade.id))) or 0),
@@ -220,6 +228,7 @@ class TradingGameSimulator:
             "engine": "BLUM Reproducible Trading Game",
             "version": "trading-game-v1",
             "current_game": serialize_game(game) if game else None,
+            "current_cycle": cycle_payload,
             "counts": counts,
             "knowledge_base": self.knowledge.catalog(),
             "policy": TRADING_GAME_POLICY,
@@ -230,6 +239,13 @@ class TradingGameSimulator:
             return {"status": "disabled", "policy": TRADING_GAME_POLICY}
         batch_size = batch_size or settings.trading_game_batch_size
         game = self.active_or_create_game(db)
+        try:
+            from app.services.trading_intelligence_lab import TradingCapitalCycleService
+
+            cycle_service = TradingCapitalCycleService()
+            cycle_service.ensure_current_cycle(db, game)
+        except Exception:
+            cycle_service = None
         simulations = self.unused_simulations(db, game, batch_size)
         if len(simulations) < max(5, min(20, batch_size // 2)):
             MarketSniperEngine().simulate(db, limit=max(80, batch_size * 3))
@@ -240,11 +256,13 @@ class TradingGameSimulator:
 
         executed = []
         for simulation, prediction in simulations:
-            if game.current_capital <= 0:
+            if game.current_capital <= 0 and cycle_service is None:
                 self.close_bankrupt_game(db, game)
                 game = self.create_game(db, reason="restart_after_ruin")
                 break
             trade = self.apply_simulation(db, game, simulation, prediction)
+            if cycle_service is not None:
+                cycle_service.record_trade(db, game, trade)
             executed.append(serialize_game_trade(trade))
         self.recalculate_game(db, game)
         self.update_lessons(db, game)
@@ -293,11 +311,15 @@ class TradingGameSimulator:
             current_capital=capital,
             cash=capital,
             peak_capital=capital,
+            target_capital=settings.trading_game_target_capital,
             benchmark_ticker=settings.trading_game_benchmark,
             risk_per_trade=settings.trading_game_default_risk_percent,
             configuration={
                 "reason": reason,
                 "initial_capital": capital,
+                "target_capital": settings.trading_game_target_capital,
+                "reset_on_target": settings.trading_game_reset_on_target,
+                "reset_on_bankruptcy": settings.trading_game_reset_on_bankruptcy,
                 "min_timeframe": settings.trading_min_timeframe,
                 "default_timeframe": settings.trading_default_timeframe,
                 "allow_microscalping": settings.trading_allow_microscalping,
@@ -347,6 +369,7 @@ class TradingGameSimulator:
         trade = TradingGameTrade(
             game_id=game.id,
             execution_simulation_id=simulation.id,
+            mode="historical_simulation",
             ticker=simulation.ticker,
             asset_name=asset.name if asset else simulation.ticker,
             asset_type=asset.asset_type if asset else None,
@@ -866,6 +889,10 @@ def serialize_game(row: TradingGame | None) -> dict | None:
         "mode": row.mode,
         "starting_capital": row.starting_capital,
         "current_capital": row.current_capital,
+        "target_capital": row.target_capital,
+        "active_cycle_id": row.active_cycle_id,
+        "target_cycles_completed": row.target_cycles_completed,
+        "bankrupt_cycles": row.bankrupt_cycles,
         "cash": row.cash,
         "exposure": row.exposure,
         "realized_pl": row.realized_pl,
@@ -901,6 +928,8 @@ def serialize_game_trade(row: TradingGameTrade) -> dict:
     return {
         "id": row.id,
         "ticker": row.ticker,
+        "mode": row.mode,
+        "capital_cycle_id": row.capital_cycle_id,
         "setup_type": row.setup_type,
         "timeframe": row.timeframe,
         "decision_state": row.decision_state,

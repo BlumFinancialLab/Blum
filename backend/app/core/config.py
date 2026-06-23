@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     app_name: str = "Blum AI Financial Intelligence"
-    app_version: str = "0.14.0"
+    app_version: str = "0.15.0"
     environment: str = Field(default="demo", alias="ENVIRONMENT")
     database_url: str = Field(
         default="postgresql+psycopg2://postgres:postgres@127.0.0.1:5432/blum",
@@ -72,10 +72,22 @@ class Settings(BaseSettings):
     trading_require_reproducible_setup: bool = Field(default=True, alias="TRADING_REQUIRE_REPRODUCIBLE_SETUP")
     trading_game_enabled: bool = Field(default=True, alias="TRADING_GAME_ENABLED")
     trading_game_initial_capital: float = Field(default=100.0, alias="TRADING_GAME_INITIAL_CAPITAL")
+    trading_game_target_capital: float = Field(default=10000.0, alias="TRADING_GAME_TARGET_CAPITAL")
+    trading_game_reset_on_target: bool = Field(default=True, alias="TRADING_GAME_RESET_ON_TARGET")
+    trading_game_reset_on_bankruptcy: bool = Field(default=True, alias="TRADING_GAME_RESET_ON_BANKRUPTCY")
+    trading_game_max_cycle_days: int = Field(default=365, alias="TRADING_GAME_MAX_CYCLE_DAYS")
     trading_game_batch_size: int = Field(default=60, alias="TRADING_GAME_BATCH_SIZE")
     trading_game_max_risk_percent: float = Field(default=2.0, alias="TRADING_GAME_MAX_RISK_PERCENT")
     trading_game_default_risk_percent: float = Field(default=1.0, alias="TRADING_GAME_DEFAULT_RISK_PERCENT")
     trading_game_benchmark: str = Field(default="SPY", alias="TRADING_GAME_BENCHMARK")
+    live_trading_game_enabled: bool = Field(default=True, alias="LIVE_TRADING_GAME_ENABLED")
+    live_trading_game_initial_capital: float = Field(default=100.0, alias="LIVE_TRADING_GAME_INITIAL_CAPITAL")
+    live_trading_game_target_capital: float = Field(default=10000.0, alias="LIVE_TRADING_GAME_TARGET_CAPITAL")
+    live_trading_game_max_open_positions: int = Field(default=5, alias="LIVE_TRADING_GAME_MAX_OPEN_POSITIONS")
+    live_trading_game_max_risk_per_trade: float = Field(default=1.0, alias="LIVE_TRADING_GAME_MAX_RISK_PER_TRADE")
+    live_trading_game_require_actionable_setup: bool = Field(default=True, alias="LIVE_TRADING_GAME_REQUIRE_ACTIONABLE_SETUP")
+    live_trading_game_allow_fractional_shares: bool = Field(default=True, alias="LIVE_TRADING_GAME_ALLOW_FRACTIONAL_SHARES")
+    live_trading_game_benchmark: str = Field(default="SPY", alias="LIVE_TRADING_GAME_BENCHMARK")
 
     class Config:
         env_file = ".env"

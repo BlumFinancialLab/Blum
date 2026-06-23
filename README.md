@@ -804,6 +804,32 @@ BLUM now treats the Reproducible Trading Game as an auditable evidence system, n
 
 Simulated P/L is research evidence only. Strong numbers are not considered robust until sample size, regime coverage, benchmark fairness and execution realism pass the reality checks. BLUM does not claim guaranteed profit or provide financial advice.
 
+## Trading Intelligence Lab
+
+BLUM now extends the Learning Loop and Reproducible Trading Game into a measurable Trading Intelligence Lab. The goal is not to show an impressive capital number in isolation; the goal is to make every simulated decision auditable and to measure whether BLUM is becoming better at selecting setups, timing entries, managing exits, controlling risk and comparing results against benchmarks.
+
+Core additions:
+
+- Advanced Trade Ledger: filterable ledger analytics by trade, ticker, setup, outcome, market regime, benchmark, R-multiple, P/L, trade quality, reproducibility score and capital cycle.
+- Capital Cycles: each paper cycle starts at 100 EUR and targets 10,000 EUR by default. When the target is reached, the cycle is closed, counted and a new 100 EUR cycle starts. When capital reaches zero, the bankruptcy cycle is closed, counted and restarted.
+- Cycle Metrics: target cycles completed, bankrupt cycles, active cycle progress, average days to target, average days to bankruptcy, target hit rate, survival rate, best cycle and worst cycle.
+- Outcome Metrics: win rate, loss rate, missed-entry rate, target-hit rate, stop-hit rate, invalidation hits, no-trade correct rate, no-trade missed-opportunity rate, average R, median R, expectancy R and profit factor.
+- Decision Quality Metrics: entry timing, exit timing, sizing quality, risk/reward quality, benchmark-relative quality, reproducibility quality, process quality and trade quality.
+- Intelligence Growth Metrics: rolling 30/100-trade measurements, improvement by setup, regime and sector, repeated-mistake reduction and benchmark-relative progress.
+- Live Forward Paper Mode: current-market decisions are timestamp-frozen, tracked as paper-only positions and evaluated only after future market refreshes. It uses the same risk management, ledger, benchmark comparison and quality evaluation as historical simulation.
+- Historical vs Live Comparison: historical simulation is useful backtest-like evidence, while live forward paper trading is stronger evidence once enough timestamp-frozen trades close. The UI shows both with sample-size warnings.
+- Statistical Reality Warnings: panels warn on too few trades, too few live trades, too few tickers, too few regimes, profit concentration, historical-only evidence, unrealistic capital growth, high profit factor with low sample size, missing slippage/spread context and benchmark gaps.
+- Chat Integration: BLUM Chat can answer questions about the best/worst cycle, 100 EUR to 10,000 EUR completions, bankrupt cycles, missed entries, stop hits, target hits, live-vs-historical results and whether the evidence is statistically reliable. It must use actual ledger and metrics data; if data is missing it must say so.
+
+Important constraints:
+
+- Historical simulation is not enough to prove edge.
+- Live forward paper trading is stronger evidence, but only after enough closed trades.
+- Capital cycles prevent infinite, unrealistic equity growth from hiding risk.
+- Every trade remains paper research with entry, exit, thesis, outcome, benchmark comparison, attribution, quality score and learning evidence.
+- Every performance number must be read with sample-size and realism context.
+- BLUM does not execute real trades, does not provide financial advice and does not claim guaranteed outperformance.
+
 ## Local Setup
 
 ```bash
@@ -840,6 +866,19 @@ export BLUM_MODEL_CYCLE_MINUTES=5
 export BLUM_MODEL_CYCLE_LIMIT=120
 export BLUM_ENABLE_HF_DATASET_CATALOG=true
 export BLUM_HF_DATASET_REFRESH_HOURS=24
+export TRADING_GAME_INITIAL_CAPITAL=100
+export TRADING_GAME_TARGET_CAPITAL=10000
+export TRADING_GAME_RESET_ON_TARGET=true
+export TRADING_GAME_RESET_ON_BANKRUPTCY=true
+export TRADING_GAME_MAX_CYCLE_DAYS=365
+export LIVE_TRADING_GAME_ENABLED=true
+export LIVE_TRADING_GAME_INITIAL_CAPITAL=100
+export LIVE_TRADING_GAME_TARGET_CAPITAL=10000
+export LIVE_TRADING_GAME_MAX_OPEN_POSITIONS=5
+export LIVE_TRADING_GAME_MAX_RISK_PER_TRADE=1
+export LIVE_TRADING_GAME_REQUIRE_ACTIONABLE_SETUP=true
+export LIVE_TRADING_GAME_ALLOW_FRACTIONAL_SHARES=true
+export LIVE_TRADING_GAME_BENCHMARK=SPY
 ```
 
 The learning loops only update database memory, confidence adjustments, proprietary reasoning examples and reversible scoring-weight versions.
