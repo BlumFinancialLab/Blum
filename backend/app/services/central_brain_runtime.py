@@ -1,0 +1,592 @@
+from __future__ import annotations
+
+from datetime import datetime, timedelta
+import time
+from typing import Any
+
+from sqlalchemy import desc, func, select
+from sqlalchemy.orm import Session
+
+from app.core.config import get_settings
+from app.models import (
+    AlphaRecoveryAction,
+    BackgroundJobState,
+    BrainRuntimeEvent,
+    BusinessQualityScore,
+    CapitalAllocationSnapshot,
+    DashboardSnapshot,
+    DecisionSuperiorityScore,
+    LearningBenchmarkComparison,
+    LearningEvent,
+    LearningRun,
+    PortfolioQualityScore,
+    TradingGame,
+)
+from app.services.dashboard_snapshots import DashboardSnapshotService
+from app.services.learning_summary import LearningSummaryService
+from app.services.performance import performance_recorder
+
+
+settings = get_settings()
+
+RUNTIME_MODULES = [
+    "market_data",
+    "news_sentiment",
+    "signals",
+    "learning_loop",
+    "trading_game",
+    "decision_intelligence",
+    "business_quality",
+    "portfolio_intelligence",
+    "capital_allocation",
+    "alpha_recovery",
+    "meta_cognition",
+    "snapshot_producer",
+]
+
+CRITICAL_SNAPSHOT_TYPES = [
+    "learning_summary",
+    "trading_game_summary",
+    "benchmark_summary",
+    "intelligence_growth_summary",
+    "truth_panel_summary",
+    "decision_intelligence_summary",
+    "business_quality_summary",
+    "portfolio_intelligence_summary",
+    "capital_allocation_summary",
+    "alpha_recovery_summary",
+    "meta_cognition_summary",
+    "dashboard_overview_summary",
+]
+
+
+class BrainEventBus:
+    """Persistent internal event bus for runtime observability.
+
+    The bus records module progress and failures. It intentionally does not run
+    financial computation, dispatch remote work, or mutate model weights.
+    """
+
+    def publish(
+        self,
+        db: Session,
+        event_type: str,
+        source_module: str,
+        *,
+        status: str = "ok",
+        duration_ms: float | None = None,
+        payload: dict | None = None,
+        error_message: str = "",
+    ) -> dict:
+        row = BrainRuntimeEvent(
+            event_type=event_type,
+            source_module=source_module,
+            status=status,
+            duration_ms=duration_ms,
+            payload_json=json_safe(payload or {}),
+            error_message=error_message[:4000],
+        )
+        db.add(row)
+        db.commit()
+        return serialize_event(row)
+
+    def latest_by_module(self, db: Session, limit: int = 300) -> dict[str, dict]:
+        rows = db.scalars(select(BrainRuntimeEvent).order_by(desc(BrainRuntimeEvent.created_at)).limit(limit)).all()
+        latest: dict[str, dict] = {}
+        for row in rows:
+            if row.source_module not in latest:
+                latest[row.source_module] = serialize_event(row)
+        return latest
+
+    def recent(self, db: Session, limit: int = 80) -> list[dict]:
+        rows = db.scalars(select(BrainRuntimeEvent).order_by(desc(BrainRuntimeEvent.created_at)).limit(limit)).all()
+        return [serialize_event(row) for row in rows]
+
+
+class BackgroundJobStateService:
+    """State store for small resumable background jobs."""
+
+    def start(self, db: Session, job_name: str, *, stage_name: str = "default", max_items: int = 0, cursor: dict | None = None) -> BackgroundJobState:
+        row = self._get_or_create(db, job_name, stage_name)
+        row.status = "running"
+        row.last_started_at = datetime.utcnow()
+        row.last_completed_at = None
+        row.duration_ms = None
+        row.error_message = ""
+        row.max_items = max_items
+        if cursor is not None:
+            row.cursor_json = json_safe(cursor)
+        db.commit()
+        BrainEventBus().publish(db, "module_started", job_name, status="running", payload={"stage_name": stage_name, "max_items": max_items})
+        return row
+
+    def heartbeat(self, db: Session, job_name: str, *, stage_name: str = "default", items_processed: int | None = None, cursor: dict | None = None) -> BackgroundJobState:
+        row = self._get_or_create(db, job_name, stage_name)
+        if items_processed is not None:
+            row.items_processed = items_processed
+        if cursor is not None:
+            row.cursor_json = json_safe(cursor)
+        db.commit()
+        return row
+
+    def complete(
+        self,
+        db: Session,
+        job_name: str,
+        *,
+        stage_name: str = "default",
+        duration_ms: float | None = None,
+        items_processed: int | None = None,
+        cursor: dict | None = None,
+        next_run_after: datetime | None = None,
+        payload: dict | None = None,
+    ) -> BackgroundJobState:
+        row = self._get_or_create(db, job_name, stage_name)
+        row.status = "completed"
+        row.duration_ms = duration_ms
+        row.last_completed_at = datetime.utcnow()
+        row.next_run_after = next_run_after
+        row.error_message = ""
+        if items_processed is not None:
+            row.items_processed = items_processed
+        if cursor is not None:
+            row.cursor_json = json_safe(cursor)
+        db.commit()
+        BrainEventBus().publish(db, "module_completed", job_name, status="ok", duration_ms=duration_ms, payload=payload or {"stage_name": stage_name})
+        return row
+
+    def fail(
+        self,
+        db: Session,
+        job_name: str,
+        *,
+        stage_name: str = "default",
+        duration_ms: float | None = None,
+        error_message: str = "",
+        next_run_after: datetime | None = None,
+    ) -> BackgroundJobState:
+        row = self._get_or_create(db, job_name, stage_name)
+        row.status = "failed"
+        row.duration_ms = duration_ms
+        row.last_completed_at = datetime.utcnow()
+        row.next_run_after = next_run_after
+        row.error_message = error_message[:4000]
+        db.commit()
+        BrainEventBus().publish(db, "module_failed", job_name, status="error", duration_ms=duration_ms, error_message=error_message)
+        return row
+
+    def list(self, db: Session, limit: int = 80) -> list[dict]:
+        rows = db.scalars(select(BackgroundJobState).order_by(desc(BackgroundJobState.last_started_at)).limit(limit)).all()
+        return [serialize_job(row) for row in rows]
+
+    def should_stop(self, started_at: float, items_processed: int, max_items: int | None = None, max_seconds: int | None = None) -> bool:
+        item_limit = max_items if max_items is not None else settings.blum_autonomous_max_items_per_job
+        second_limit = max_seconds if max_seconds is not None else settings.blum_autonomous_max_seconds_per_job
+        if item_limit and items_processed >= item_limit:
+            return True
+        return (time.perf_counter() - started_at) >= max(1, second_limit)
+
+    def _get_or_create(self, db: Session, job_name: str, stage_name: str) -> BackgroundJobState:
+        row = db.scalar(select(BackgroundJobState).where(BackgroundJobState.job_name == job_name, BackgroundJobState.stage_name == stage_name).limit(1))
+        if row is None:
+            row = BackgroundJobState(job_name=job_name, stage_name=stage_name, enabled=True)
+            db.add(row)
+            db.flush()
+        return row
+
+
+class SnapshotProducerService:
+    """Produces UI-ready snapshots from latest stored evidence only."""
+
+    def produce(self, db: Session, snapshot_type: str) -> dict:
+        started = time.perf_counter()
+        warnings: list[str] = []
+        missing_sections: list[str] = []
+        try:
+            payload = self._payload(db, snapshot_type, missing_sections, warnings)
+            result = DashboardSnapshotService().write(
+                db,
+                snapshot_type,
+                payload,
+                source_modules={"producer": "SnapshotProducerService", "runtime_policy": "latest_stored_rows_only"},
+                ttl_seconds=600,
+                warnings=warnings,
+                missing_sections=missing_sections,
+                computation_duration_ms=round((time.perf_counter() - started) * 1000, 3),
+            )
+            BrainEventBus().publish(
+                db,
+                "snapshot_refreshed",
+                "snapshot_producer",
+                status="ok",
+                duration_ms=result.get("computation_duration_ms"),
+                payload={"snapshot_type": snapshot_type, "missing_sections": missing_sections},
+            )
+            return result
+        except Exception as exc:
+            BrainEventBus().publish(db, "snapshot_failed", "snapshot_producer", status="error", error_message=f"{type(exc).__name__}: {exc}", payload={"snapshot_type": snapshot_type})
+            raise
+
+    def produce_many(self, db: Session, snapshot_types: list[str] | None = None, *, max_items: int | None = None) -> dict:
+        selected = list(snapshot_types or CRITICAL_SNAPSHOT_TYPES)
+        limit = max_items or settings.blum_autonomous_max_items_per_job
+        produced = []
+        failed = []
+        for snapshot_type in selected[: max(1, limit)]:
+            try:
+                produced.append(self.produce(db, snapshot_type))
+            except Exception as exc:
+                failed.append({"snapshot_type": snapshot_type, "error": f"{type(exc).__name__}: {exc}"})
+        return {"produced": len(produced), "failed": failed, "requested": len(selected), "budget_items": limit}
+
+    def _payload(self, db: Session, snapshot_type: str, missing_sections: list[str], warnings: list[str]) -> dict:
+        if snapshot_type == "learning_summary":
+            return LearningSummaryService().summary(db)
+        if snapshot_type == "dashboard_overview_summary":
+            from app.services.dashboard import dashboard_overview
+
+            return dashboard_overview(db)
+        if snapshot_type == "trading_game_summary":
+            game = db.scalar(select(TradingGame).order_by(desc(TradingGame.updated_at)).limit(1))
+            if game is None:
+                missing_sections.append("trading_game")
+                return {"status": "missing", "summary": "No trading game rows are stored yet."}
+            return {
+                "status": "ready",
+                "game_id": game.game_id,
+                "current_capital": game.current_capital,
+                "starting_capital": game.starting_capital,
+                "target_capital": game.target_capital,
+                "trade_count": game.trade_count,
+                "win_rate": game.win_rate,
+                "expectancy_r": game.expectancy_r,
+                "updated_at": game.updated_at.isoformat() if game.updated_at else None,
+            }
+        if snapshot_type == "benchmark_summary":
+            rows = db.scalars(select(LearningBenchmarkComparison).order_by(desc(LearningBenchmarkComparison.calculated_at)).limit(24)).all()
+            if not rows:
+                missing_sections.append("learning_benchmark_comparisons")
+            return {"status": "ready" if rows else "missing", "benchmarks": [benchmark_payload(row) for row in rows[:12]]}
+        if snapshot_type == "intelligence_growth_summary":
+            latest = db.scalar(select(LearningRun).order_by(desc(LearningRun.started_at)).limit(1))
+            if latest is None:
+                missing_sections.append("learning_runs")
+            return {"status": "ready" if latest else "missing", "latest_learning_run": learning_run_payload(latest)}
+        if snapshot_type == "truth_panel_summary":
+            return {"status": "ready", "truth_panel": truth_panel_from_latest(db, warnings)}
+        if snapshot_type == "decision_intelligence_summary":
+            row = db.scalar(select(DecisionSuperiorityScore).order_by(desc(DecisionSuperiorityScore.calculated_at)).limit(1))
+            if row is None:
+                missing_sections.append("decision_superiority_scores")
+            return {"status": "ready" if row else "missing", "score": getattr(row, "score", None), "classification": getattr(row, "classification", "initializing")}
+        if snapshot_type == "business_quality_summary":
+            row = db.scalar(select(BusinessQualityScore).order_by(desc(BusinessQualityScore.calculated_at)).limit(1))
+            if row is None:
+                missing_sections.append("business_quality_scores")
+            return {"status": "ready" if row else "missing", "score": getattr(row, "business_quality_score", None), "ticker": getattr(row, "ticker", None)}
+        if snapshot_type == "portfolio_intelligence_summary":
+            row = db.scalar(select(PortfolioQualityScore).order_by(desc(PortfolioQualityScore.calculated_at)).limit(1))
+            if row is None:
+                missing_sections.append("portfolio_quality_scores")
+            return {"status": "ready" if row else "missing", "score": getattr(row, "portfolio_quality_score", None)}
+        if snapshot_type == "capital_allocation_summary":
+            row = db.scalar(select(CapitalAllocationSnapshot).order_by(desc(CapitalAllocationSnapshot.calculated_at)).limit(1))
+            if row is None:
+                missing_sections.append("capital_allocation_snapshots")
+            return {"status": "ready" if row else "missing", "allocation_quality_score": getattr(row, "allocation_quality_score", None)}
+        if snapshot_type == "alpha_recovery_summary":
+            row = db.scalar(select(AlphaRecoveryAction).order_by(desc(AlphaRecoveryAction.created_at)).limit(1))
+            if row is None:
+                missing_sections.append("alpha_recovery_actions")
+            return {"status": "ready" if row else "missing", "latest_action": alpha_action_payload(row)}
+        if snapshot_type == "meta_cognition_summary":
+            from app.services.meta_cognition import MetaCognitionEngine
+
+            return MetaCognitionEngine().summary(db)
+        missing_sections.append("unknown_snapshot_type")
+        return {"status": "unknown_snapshot_type", "snapshot_type": snapshot_type}
+
+
+class SnapshotWatchdogService:
+    """Detects missing/stale snapshots and unhealthy producers."""
+
+    def health(self, db: Session, *, queue_rebuild: bool = False) -> dict:
+        now = datetime.utcnow()
+        latest = latest_snapshot_map(db)
+        missing = [item for item in CRITICAL_SNAPSHOT_TYPES if item not in latest]
+        stale = []
+        for snapshot_type, row in latest.items():
+            if row.expires_at and row.expires_at < now:
+                stale.append(snapshot_type)
+            elif row.is_stale:
+                stale.append(snapshot_type)
+        jobs = BackgroundJobStateService().list(db, limit=120)
+        long_running = [job for job in jobs if job.get("status") == "running" and duration_since(job.get("last_started_at")) > settings.blum_autonomous_max_seconds_per_job]
+        failed_jobs = [job for job in jobs if job.get("status") == "failed"]
+        if queue_rebuild and missing:
+            for snapshot_type in missing[: settings.blum_autonomous_max_items_per_job]:
+                BrainEventBus().publish(db, "snapshot_requested", "snapshot_watchdog", payload={"snapshot_type": snapshot_type})
+        return {
+            "status": "healthy" if not missing and not stale and not failed_jobs and not long_running else "degraded",
+            "checked_at": now.isoformat(),
+            "missing_snapshots": missing,
+            "stale_snapshots": stale,
+            "failed_producers": failed_jobs,
+            "long_running_jobs": long_running,
+            "snapshot_freshness": snapshot_freshness_payload(latest),
+            "policy": "Watchdog detects and requests lightweight snapshot rebuilds; it does not run financial recalculation from GET endpoints.",
+        }
+
+
+class CentralBrainRuntime:
+    """Read-only runtime state composed from events, snapshots and job heartbeats."""
+
+    def state(self, db: Session) -> dict:
+        events = BrainEventBus().latest_by_module(db)
+        snapshot_health = SnapshotWatchdogService().health(db, queue_rebuild=False)
+        jobs = BackgroundJobStateService().list(db)
+        failed_modules = [module for module, event in events.items() if event.get("status") == "error"]
+        stale_modules = stale_modules_from_events(events)
+        bottleneck = current_bottleneck()
+        learning_health = LearningHealthService().health(db, snapshot_health=snapshot_health, jobs=jobs)
+        return {
+            "generated_at": datetime.utcnow().isoformat(),
+            "active_modules": RUNTIME_MODULES,
+            "last_event_per_module": events,
+            "stale_modules": stale_modules,
+            "failed_modules": failed_modules,
+            "missing_snapshots": snapshot_health["missing_snapshots"],
+            "snapshot_freshness": snapshot_health["snapshot_freshness"],
+            "background_queue_status": {
+                "jobs": jobs,
+                "running_count": sum(1 for job in jobs if job.get("status") == "running"),
+                "failed_count": sum(1 for job in jobs if job.get("status") == "failed"),
+            },
+            "learning_health": learning_health,
+            "current_bottleneck": bottleneck,
+            "system_readiness": runtime_readiness(snapshot_health, failed_modules, learning_health),
+            "policy": "Central Brain Runtime observes, coordinates snapshots and exposes readiness. Heavy computation stays in background workers.",
+        }
+
+
+class LearningHealthService:
+    def health(self, db: Session, *, snapshot_health: dict | None = None, jobs: list[dict] | None = None) -> dict:
+        now = datetime.utcnow()
+        latest_learning = db.scalar(select(LearningRun).order_by(desc(LearningRun.started_at)).limit(1))
+        latest_event = db.scalar(select(LearningEvent).order_by(desc(LearningEvent.created_at)).limit(1))
+        try:
+            from app.services.realtime import realtime_status
+
+            runtime = realtime_status()
+        except Exception:
+            runtime = {}
+        events_24h = int(db.scalar(select(func.count(LearningEvent.id)).where(LearningEvent.created_at >= now - timedelta(hours=24))) or 0)
+        missing = (snapshot_health or SnapshotWatchdogService().health(db)).get("missing_snapshots", [])
+        failed_jobs = [job for job in (jobs or BackgroundJobStateService().list(db)) if job.get("status") == "failed"]
+        status = "healthy"
+        if failed_jobs:
+            status = "failed"
+        elif missing:
+            status = "degraded"
+        elif latest_learning is None and latest_event is None:
+            status = "stale"
+        return {
+            "status": status,
+            "worker_alive": bool(runtime.get("started")),
+            "current_job": runtime.get("last_job"),
+            "current_stage": runtime.get("current_stage"),
+            "last_successful_learning_cycle": latest_learning.completed_at.isoformat() if latest_learning and latest_learning.completed_at else None,
+            "last_successful_trading_game_cycle": latest_job_completion(jobs or [], "blum_trading_game"),
+            "last_successful_alpha_recovery_cycle": latest_job_completion(jobs or [], "alpha_recovery"),
+            "last_successful_meta_cognition_cycle": latest_job_completion(jobs or [], "meta_cognition"),
+            "learning_events_last_24h": events_24h,
+            "errors_last_24h": len(failed_jobs),
+            "next_scheduled_job": next_job(jobs or []),
+            "missing_snapshots": missing,
+            "stale_modules": stale_modules_from_events(BrainEventBus().latest_by_module(db)),
+            "frontend_policy": "read_only_snapshot_observer",
+        }
+
+
+def latest_snapshot_map(db: Session) -> dict[str, DashboardSnapshot]:
+    rows = db.scalars(select(DashboardSnapshot).order_by(desc(DashboardSnapshot.created_at)).limit(300)).all()
+    output: dict[str, DashboardSnapshot] = {}
+    for row in rows:
+        output.setdefault(row.snapshot_type, row)
+    return output
+
+
+def snapshot_freshness_payload(latest: dict[str, DashboardSnapshot]) -> dict:
+    now = datetime.utcnow()
+    payload = {}
+    for snapshot_type in CRITICAL_SNAPSHOT_TYPES:
+        row = latest.get(snapshot_type)
+        if row is None:
+            payload[snapshot_type] = {"status": "missing"}
+            continue
+        is_stale = bool(row.is_stale or (row.expires_at is not None and row.expires_at < now))
+        payload[snapshot_type] = {
+            "status": "stale" if is_stale else "ready",
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "expires_at": row.expires_at.isoformat() if row.expires_at else None,
+            "age_seconds": round((now - row.created_at).total_seconds(), 3) if row.created_at else None,
+            "missing_sections": row.missing_sections_json or [],
+            "warnings": row.warnings_json or [],
+        }
+    return payload
+
+
+def stale_modules_from_events(events: dict[str, dict]) -> list[str]:
+    now = datetime.utcnow()
+    stale = []
+    for module in RUNTIME_MODULES:
+        event = events.get(module)
+        if not event:
+            stale.append(module)
+            continue
+        created_at = parse_datetime(event.get("created_at"))
+        if created_at and (now - created_at).total_seconds() > 60 * 60 * 6:
+            stale.append(module)
+    return stale
+
+
+def current_bottleneck() -> dict:
+    diagnostics = performance_recorder.diagnostics()
+    bottlenecks = diagnostics.get("top_10_bottlenecks") or []
+    return bottlenecks[0] if bottlenecks else {"status": "not_enough_timing_data"}
+
+
+def runtime_readiness(snapshot_health: dict, failed_modules: list[str], learning_health: dict) -> dict:
+    if failed_modules:
+        state = "degraded"
+    elif snapshot_health.get("status") != "healthy":
+        state = "degraded"
+    elif learning_health.get("status") in {"failed", "stale"}:
+        state = "degraded"
+    else:
+        state = "ready"
+    return {
+        "status": state,
+        "api_ready": True,
+        "ui_ready": True,
+        "background_learning_ready": learning_health.get("status") not in {"failed"},
+        "reason": "Runtime is ready." if state == "ready" else "Some modules, jobs or snapshots need background attention.",
+    }
+
+
+def truth_panel_from_latest(db: Session, warnings: list[str]) -> list[str]:
+    latest_benchmark = db.scalar(select(LearningBenchmarkComparison).order_by(desc(LearningBenchmarkComparison.calculated_at)).limit(1))
+    lines = []
+    if latest_benchmark is None:
+        lines.append("No benchmark comparison has enough stored evidence yet.")
+    else:
+        lines.append(f"Latest benchmark result: {latest_benchmark.benchmark_name} is {latest_benchmark.result_label}.")
+    lines.extend(warnings[:4])
+    return lines[:6]
+
+
+def benchmark_payload(row: LearningBenchmarkComparison) -> dict:
+    return {
+        "benchmark_name": row.benchmark_name,
+        "result_label": row.result_label,
+        "excess_return": row.excess_return,
+        "sample_size": row.sample_size,
+        "calculated_at": row.calculated_at.isoformat() if row.calculated_at else None,
+    }
+
+
+def learning_run_payload(row: LearningRun | None) -> dict | None:
+    if row is None:
+        return None
+    return {
+        "id": row.id,
+        "status": row.status,
+        "started_at": row.started_at.isoformat() if row.started_at else None,
+        "completed_at": row.completed_at.isoformat() if row.completed_at else None,
+        "trigger": row.trigger,
+    }
+
+
+def alpha_action_payload(row: AlphaRecoveryAction | None) -> dict | None:
+    if row is None:
+        return None
+    return {
+        "action_type": row.action_type,
+        "status": row.status,
+        "priority": row.priority,
+        "affected_module": row.affected_module,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+def serialize_event(row: BrainRuntimeEvent) -> dict:
+    return {
+        "id": row.id,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "event_type": row.event_type,
+        "source_module": row.source_module,
+        "status": row.status,
+        "duration_ms": row.duration_ms,
+        "payload": row.payload_json or {},
+        "error_message": row.error_message,
+    }
+
+
+def serialize_job(row: BackgroundJobState) -> dict:
+    return {
+        "id": row.id,
+        "job_name": row.job_name,
+        "stage_name": row.stage_name,
+        "status": row.status,
+        "cursor": row.cursor_json or {},
+        "items_processed": row.items_processed,
+        "max_items": row.max_items,
+        "duration_ms": row.duration_ms,
+        "last_started_at": row.last_started_at.isoformat() if row.last_started_at else None,
+        "last_completed_at": row.last_completed_at.isoformat() if row.last_completed_at else None,
+        "next_run_after": row.next_run_after.isoformat() if row.next_run_after else None,
+        "error_message": row.error_message,
+        "enabled": row.enabled,
+    }
+
+
+def latest_job_completion(jobs: list[dict], name_fragment: str) -> str | None:
+    for job in jobs:
+        if name_fragment in str(job.get("job_name")) and job.get("status") == "completed":
+            return job.get("last_completed_at")
+    return None
+
+
+def next_job(jobs: list[dict]) -> dict | None:
+    scheduled = [job for job in jobs if job.get("next_run_after")]
+    if not scheduled:
+        return None
+    return sorted(scheduled, key=lambda item: item.get("next_run_after") or "")[0]
+
+
+def duration_since(value: str | None) -> float:
+    parsed = parse_datetime(value)
+    if not parsed:
+        return 0.0
+    return (datetime.utcnow() - parsed).total_seconds()
+
+
+def parse_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except Exception:
+        return None
+
+
+def json_safe(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(key): json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [json_safe(item) for item in value]
+    if isinstance(value, tuple):
+        return [json_safe(item) for item in value]
+    return value

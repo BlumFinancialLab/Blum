@@ -1211,6 +1211,192 @@ What it does not do:
 - Alpha recovery actions must remain reversible and must not be treated as proof of future alpha.
 - Chat responses use stored dashboard evidence only. If the evidence is missing, BLUM must answer `Insufficient evidence`.
 
+## BLUM v1.0 Runtime Architecture
+
+BLUM v1.0 separates financial reasoning from runtime orchestration. The goal is to keep the backend autonomous and measurable while the frontend remains light and snapshot-driven.
+
+### Central Brain Runtime
+
+`CentralBrainRuntime` is a read-only operational view. It does not score assets, train models or run financial computation. It composes:
+
+- latest module events;
+- stale and failed modules;
+- missing or stale dashboard snapshots;
+- background job state;
+- learning health;
+- current measured bottleneck from performance diagnostics;
+- system readiness.
+
+Endpoint:
+
+- `GET /brain/runtime-state`
+
+### Event Bus
+
+`BrainEventBus` persists module lifecycle events in `brain_runtime_events`.
+
+Event examples:
+
+- `module_started`
+- `module_completed`
+- `module_failed`
+- `learning_cycle_completed`
+- `trading_game_updated`
+- `benchmark_updated`
+- `alpha_recovery_updated`
+- `meta_cognition_updated`
+- `capital_allocation_updated`
+- `snapshot_requested`
+- `snapshot_refreshed`
+- `snapshot_failed`
+
+Events are evidence for observability, not triggers for hidden trading or hidden model changes.
+
+### Background Job State
+
+`BackgroundJobStateService` stores resumable job state in `background_job_state`.
+
+Tracked fields include:
+
+- job and stage name;
+- status;
+- cursor;
+- items processed;
+- item budget;
+- duration;
+- last start/completion;
+- next run timestamp;
+- error message;
+- enabled flag.
+
+Default runtime budgets:
+
+- `BLUM_AUTONOMOUS_MAX_SECONDS_PER_JOB=120`
+- `BLUM_AUTONOMOUS_MAX_ITEMS_PER_JOB=50`
+
+These budgets make long jobs visible and constrain new runtime work. Existing financial engines are not rewritten by this layer.
+
+### Snapshot Producer
+
+`SnapshotProducerService` writes UI-ready snapshots from stored evidence only. It does not trigger benchmark recalculation, training, Learning Loop runs or Trading Game runs.
+
+Tracked snapshot types:
+
+- `learning_summary`
+- `trading_game_summary`
+- `benchmark_summary`
+- `intelligence_growth_summary`
+- `truth_panel_summary`
+- `decision_intelligence_summary`
+- `business_quality_summary`
+- `portfolio_intelligence_summary`
+- `capital_allocation_summary`
+- `alpha_recovery_summary`
+- `meta_cognition_summary`
+- `dashboard_overview_summary`
+
+Snapshots support:
+
+- partial payloads;
+- timestamps;
+- stale state;
+- warnings;
+- `missing_sections_json`;
+- fast read paths.
+
+Endpoint:
+
+- `POST /snapshots/produce`
+
+This endpoint is explicit and should not be called by page render.
+
+### Snapshot Watchdog
+
+`SnapshotWatchdogService` checks missing snapshots, stale snapshots, failed producers and long-running jobs.
+
+Endpoint:
+
+- `GET /snapshots/health`
+
+The `GET` endpoint is read-only. Background workers can request lightweight snapshot rebuilds without blocking page render.
+
+### Startup Light Mode
+
+Startup now separates API readiness from heavy research.
+
+Configuration:
+
+- `BLUM_STARTUP_RUN_FULL_AUTONOMOUS=false`
+- `BLUM_ENABLE_LIVE_STARTUP=true`
+
+With the default configuration, startup warms runtime snapshots and scheduler state instead of running the full autonomous engine immediately. Heavy work remains scheduled/background-first.
+
+### Read-Only Frontend Rule
+
+The Learning page remains:
+
+1. Overview
+2. Trading Game
+3. Deep Diagnostics
+
+Overview calls only:
+
+- `GET /api/learning-intelligence/summary`
+
+Deep runtime diagnostics are lazy-loaded through explicit buttons:
+
+- Central Brain Runtime;
+- Snapshot Watchdog;
+- Learning Health;
+- Performance Diagnostics;
+- Deep model panels.
+
+The frontend request wrapper blocks heavy Learning-page POST calls during initial render and treats `/snapshots/produce` as heavy.
+
+### GET Endpoint Hygiene
+
+GET endpoints must not write data. The runtime now records a warning when a `GET` request contains `persist=true`:
+
+- event: `GET_ENDPOINT_SIDE_EFFECT_DETECTED`
+- header: `X-BLUM-GET-SIDE-EFFECT-RISK: true`
+
+This preserves backward compatibility while making side-effect risk visible.
+
+### Learning Health
+
+Endpoint:
+
+- `GET /learning/health`
+
+Returns:
+
+- `healthy`, `degraded`, `stale` or `failed`;
+- worker alive state;
+- current job and stage;
+- last successful learning cycle;
+- last successful trading game cycle;
+- last successful alpha recovery cycle;
+- last successful meta-cognition cycle;
+- learning events in the last 24 hours;
+- errors in the last 24 hours;
+- missing snapshots;
+- stale modules.
+
+### Performance Targets
+
+Targets for future measurement:
+
+- `/api/learning-intelligence/summary` p95 under 300ms;
+- `/dashboard/overview` p95 under 500ms;
+- `/api/trading-game/ledger?limit=25` p95 under 800ms;
+- no default background job over 120 seconds;
+- cache hit rate over 50%;
+- Learning Overview max 2 initial requests;
+- no heavy POST during page load;
+- no missing critical snapshots after warm-up.
+
+Do not claim these targets are met unless `/performance/diagnostics` confirms them in the running environment.
+
 ## Docker
 
 ```bash

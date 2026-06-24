@@ -202,6 +202,12 @@ from app.services.decision_intelligence import (
     PortfolioIntelligenceEngine,
 )
 from app.services.capital_allocation import AdaptiveCapitalAllocationEngine
+from app.services.central_brain_runtime import (
+    CentralBrainRuntime,
+    LearningHealthService,
+    SnapshotProducerService,
+    SnapshotWatchdogService,
+)
 from app.services.live import live_news, market_sentiment
 from app.services.macro import macro_overview, update_macro_snapshots
 from app.services.market_brain import build_market_brain, latest_market_brain, market_brain_history
@@ -312,6 +318,33 @@ def startup_status() -> dict:
     return performance_recorder.startup_status()
 
 
+@router.get("/brain/runtime-state")
+def brain_runtime_state(db: Session = Depends(get_db)) -> dict:
+    return CentralBrainRuntime().state(db)
+
+
+@router.get("/snapshots/health")
+def snapshots_health(db: Session = Depends(get_db)) -> dict:
+    return SnapshotWatchdogService().health(db, queue_rebuild=False)
+
+
+@router.post("/snapshots/produce")
+def snapshots_produce(
+    snapshot_type: str | None = Query(default=None),
+    max_items: int = Query(default=settings.blum_autonomous_max_items_per_job, ge=1, le=50),
+    db: Session = Depends(get_db),
+) -> dict:
+    if snapshot_type:
+        return SnapshotProducerService().produce(db, snapshot_type)
+    return SnapshotProducerService().produce_many(db, max_items=max_items)
+
+
+@router.get("/learning/health")
+def learning_health(db: Session = Depends(get_db)) -> dict:
+    snapshot_health = SnapshotWatchdogService().health(db, queue_rebuild=False)
+    return LearningHealthService().health(db, snapshot_health=snapshot_health)
+
+
 @router.get("/api/learning-intelligence/summary")
 def learning_intelligence_summary(db: Session = Depends(get_db)) -> dict:
     return LearningSummaryService().summary(db)
@@ -337,6 +370,7 @@ def latest_dashboard_snapshot_status(db: Session) -> dict:
             "is_stale": is_stale,
             "age_seconds": round((now - row.created_at).total_seconds(), 3) if row.created_at else None,
             "computation_duration_ms": row.computation_duration_ms,
+            "missing_sections": getattr(row, "missing_sections_json", None) or [],
             "warnings": row.warnings_json or [],
         }
     stale_count = sum(1 for item in latest_by_type.values() if item["is_stale"])
@@ -368,7 +402,10 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "model_loading_enabled": settings.enable_model_loading,
             "financial_brain_model_enabled": settings.enable_financial_brain_model,
             "live_startup_enabled": settings.enable_live_startup,
+            "startup_run_full_autonomous": settings.startup_run_full_autonomous,
             "autonomous_engine_enabled": settings.enable_autonomous_engine,
+            "autonomous_max_seconds_per_job": settings.blum_autonomous_max_seconds_per_job,
+            "autonomous_max_items_per_job": settings.blum_autonomous_max_items_per_job,
             "autonomous_cycle_minutes": settings.autonomous_cycle_minutes,
             "autonomous_repair_limit": settings.autonomous_repair_limit,
             "yfinance_fallback_enabled": settings.enable_yfinance_fallback,

@@ -13,6 +13,7 @@ from app.ingestion.news_ingestor import NewsIngestor
 from app.services.accuracy import run_accuracy_audit
 from app.services.autonomous_engine import AutonomousResearchEngine
 from app.services.blum_financial_model import run_model_learning_cycle
+from app.services.central_brain_runtime import BackgroundJobStateService, SnapshotProducerService, SnapshotWatchdogService
 from app.services.data_continuity import repair_data_gaps
 from app.services.etf import update_etf_trends
 from app.services.fundamentals import update_fundamentals
@@ -52,8 +53,12 @@ def start_realtime_services() -> None:
     if _scheduler is not None:
         return
     _scheduler = BackgroundScheduler(timezone="UTC")
-    if settings.enable_live_startup:
+    if settings.enable_live_startup and settings.startup_run_full_autonomous:
         threading.Thread(target=run_startup_pipeline, daemon=True).start()
+    elif settings.enable_live_startup:
+        threading.Thread(target=run_startup_snapshot_warmup, daemon=True).start()
+    _scheduler.add_job(run_runtime_snapshot_watchdog, "interval", minutes=5, id="runtime_snapshot_watchdog", replace_existing=True, max_instances=1)
+    _scheduler.add_job(run_snapshot_refresh_job, "interval", minutes=10, id="snapshot_producer", replace_existing=True, max_instances=1)
     if settings.enable_autonomous_engine:
         _scheduler.add_job(run_autonomous_engine_job, "interval", minutes=settings.autonomous_cycle_minutes, id="autonomous_research_engine", replace_existing=True, max_instances=1)
         _scheduler.start()
@@ -107,6 +112,23 @@ def run_startup_pipeline() -> None:
         return {"pipeline": pipeline, "financial_brain_learning": learning, "blum_financial_model": model_learning, "blum_learning_loop": point_in_time_learning, "trading_game": trading_game}
 
     _run_job("startup_pipeline", work)
+
+
+def run_startup_snapshot_warmup() -> None:
+    def work(db):
+        health = SnapshotWatchdogService().health(db, queue_rebuild=True)
+        snapshots = SnapshotProducerService().produce_many(db, max_items=min(settings.blum_autonomous_max_items_per_job, 8))
+        return {"snapshot_health": health, "snapshots": snapshots, "policy": "startup_light_mode"}
+
+    _run_job("startup_snapshot_warmup", work)
+
+
+def run_runtime_snapshot_watchdog() -> None:
+    _run_job("runtime_snapshot_watchdog", lambda db: SnapshotWatchdogService().health(db, queue_rebuild=True))
+
+
+def run_snapshot_refresh_job() -> None:
+    _run_job("snapshot_producer", lambda db: SnapshotProducerService().produce_many(db, max_items=settings.blum_autonomous_max_items_per_job))
 
 
 def run_news_refresh() -> None:
@@ -200,9 +222,19 @@ def _run_job(job_name: str, work):
     perf_started = time.perf_counter()
     perf_status = "ok"
     perf_error = ""
+    max_items = settings.blum_autonomous_max_items_per_job
+    with SessionLocal() as db:
+        BackgroundJobStateService().start(db, job_name, max_items=max_items)
     try:
         with SessionLocal() as db:
             result = work(db)
+            duration_ms = (time.perf_counter() - perf_started) * 1000
+            BackgroundJobStateService().complete(
+                db,
+                job_name,
+                duration_ms=duration_ms,
+                payload=_compact_payload(result or {}),
+            )
         with _state_lock:
             _state["last_completed_at"] = datetime.utcnow().isoformat()
             _state["last_status"] = "ok"
@@ -210,6 +242,8 @@ def _run_job(job_name: str, work):
     except Exception as exc:
         perf_status = "error"
         perf_error = f"{type(exc).__name__}: {str(exc)}"
+        with SessionLocal() as db:
+            BackgroundJobStateService().fail(db, job_name, duration_ms=(time.perf_counter() - perf_started) * 1000, error_message=perf_error)
         with _state_lock:
             _state["last_completed_at"] = datetime.utcnow().isoformat()
             _state["last_status"] = "error"

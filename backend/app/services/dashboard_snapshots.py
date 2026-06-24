@@ -38,6 +38,7 @@ class DashboardSnapshotService:
             "is_stale": is_stale,
             "payload": row.payload_json or {},
             "source_modules": row.source_modules_json or {},
+            "missing_sections": getattr(row, "missing_sections_json", None) or [],
             "computation_duration_ms": row.computation_duration_ms,
             "warnings": row.warnings_json or [],
         }
@@ -51,6 +52,7 @@ class DashboardSnapshotService:
         source_modules: dict | None = None,
         ttl_seconds: int = 300,
         warnings: list[str] | None = None,
+        missing_sections: list[str] | None = None,
         computation_duration_ms: float | None = None,
     ) -> dict:
         started = time.perf_counter()
@@ -60,6 +62,7 @@ class DashboardSnapshotService:
             expires_at=datetime.utcnow() + timedelta(seconds=max(1, ttl_seconds)),
             payload_json=payload,
             source_modules_json=source_modules or {},
+            missing_sections_json=missing_sections or [],
             is_stale=False,
             computation_duration_ms=computation_duration_ms,
             warnings_json=warnings or [],

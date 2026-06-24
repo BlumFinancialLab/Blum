@@ -28,7 +28,8 @@ const heavyLearningPostFragments = [
   "/api/meta-cognition/evaluate",
   "/api/meta-cognition/capital-preservation/evaluate",
   "/api/meta-cognition/learning-focus/generate",
-  "/api/meta-cognition/noise/detect"
+  "/api/meta-cognition/noise/detect",
+  "/snapshots/produce"
 ];
 const requestStats = {
   total: 0,
@@ -177,6 +178,11 @@ export const api = {
   recordPerformanceWidget: (payload: { name: string; duration_ms: number; status?: string; source?: string; detail?: string }) =>
     postJson<any>("/performance/frontend-widget", payload),
   systemStatus: () => getJson<SystemStatus>("/system/status"),
+  brainRuntimeState: () => getJson<any>("/brain/runtime-state"),
+  snapshotsHealth: () => getJson<any>("/snapshots/health"),
+  produceSnapshots: (snapshotType?: string, maxItems = 8) =>
+    postJson<any>(`/snapshots/produce?max_items=${maxItems}${snapshotType ? `&snapshot_type=${encodeURIComponent(snapshotType)}` : ""}`, {}),
+  learningHealth: () => getJson<any>("/learning/health"),
   brainStatus: () => getJson<BrainStatus>("/brain/status"),
   brainAccuracy: () => getJson<BrainAccuracy>("/brain/accuracy"),
   brainLearningEvents: (limit = 50) => getJson<any[]>(`/brain/learning-events?limit=${limit}`),

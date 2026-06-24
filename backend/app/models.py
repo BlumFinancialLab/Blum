@@ -2693,9 +2693,51 @@ class DashboardSnapshot(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
     payload_json: Mapped[dict] = mapped_column(JsonType, default=dict)
     source_modules_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    missing_sections_json: Mapped[list] = mapped_column(JsonType, default=list)
     is_stale: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     computation_duration_ms: Mapped[float | None] = mapped_column(Float)
     warnings_json: Mapped[list] = mapped_column(JsonType, default=list)
+
+
+class BrainRuntimeEvent(Base):
+    __tablename__ = "brain_runtime_events"
+    __table_args__ = (
+        Index("ix_brain_runtime_events_module_created", "source_module", "created_at"),
+        Index("ix_brain_runtime_events_type_created", "event_type", "created_at"),
+        Index("ix_brain_runtime_events_status_created", "status", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    event_type: Mapped[str] = mapped_column(String(120), index=True)
+    source_module: Mapped[str] = mapped_column(String(160), index=True)
+    status: Mapped[str] = mapped_column(String(80), default="ok", index=True)
+    duration_ms: Mapped[float | None] = mapped_column(Float)
+    payload_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    error_message: Mapped[str] = mapped_column(Text, default="")
+
+
+class BackgroundJobState(Base):
+    __tablename__ = "background_job_state"
+    __table_args__ = (
+        Index("ix_background_job_state_job_stage", "job_name", "stage_name"),
+        Index("ix_background_job_state_status_next", "status", "next_run_after"),
+        Index("ix_background_job_state_enabled", "enabled", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_name: Mapped[str] = mapped_column(String(160), index=True)
+    stage_name: Mapped[str] = mapped_column(String(160), default="default", index=True)
+    status: Mapped[str] = mapped_column(String(80), default="idle", index=True)
+    cursor_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    items_processed: Mapped[int] = mapped_column(Integer, default=0)
+    max_items: Mapped[int] = mapped_column(Integer, default=0)
+    duration_ms: Mapped[float | None] = mapped_column(Float)
+    last_started_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    last_completed_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    next_run_after: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    error_message: Mapped[str] = mapped_column(Text, default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
 class PortfolioQualityScore(Base):

@@ -404,6 +404,9 @@ function DeepDiagnosticsTab({ diagnostics, loadPanel }: { diagnostics: Record<st
     { id: "capital_allocation", title: "Capital Allocation", loader: () => api.capitalAllocationDashboard(), summary: objectSummary },
     { id: "alpha_recovery", title: "Alpha Recovery", loader: () => api.alphaRecoveryDashboard(), summary: alphaRecoverySummary },
     { id: "meta_cognition", title: "Meta-Cognition Lab", loader: () => api.metaCognitionSummary(), summary: metaCognitionSummary },
+    { id: "runtime_state", title: "Central Brain Runtime", loader: () => api.brainRuntimeState(), summary: runtimeSummary },
+    { id: "snapshot_health", title: "Snapshot Watchdog", loader: () => api.snapshotsHealth(), summary: snapshotHealthSummary },
+    { id: "learning_health", title: "Learning Health", loader: () => api.learningHealth(), summary: learningHealthSummary },
     { id: "performance_diagnostics", title: "Performance Diagnostics", loader: () => api.performanceDiagnostics(), summary: performanceSummary },
   ];
 
@@ -576,6 +579,18 @@ function objectSummary(data: any) {
 
 function performanceSummary(data: any) {
   return `${data?.api?.request_count ?? 0} API events, ${data?.database?.query_count ?? 0} DB events`;
+}
+
+function runtimeSummary(data: any) {
+  return `Readiness: ${data?.system_readiness?.status ?? "unknown"} | failed modules: ${(data?.failed_modules ?? []).length}`;
+}
+
+function snapshotHealthSummary(data: any) {
+  return `Status: ${data?.status ?? "unknown"} | missing: ${(data?.missing_snapshots ?? []).length} | stale: ${(data?.stale_snapshots ?? []).length}`;
+}
+
+function learningHealthSummary(data: any) {
+  return `Status: ${data?.status ?? "unknown"} | worker: ${data?.worker_alive ? "alive" : "not observed"}`;
 }
 
 function alphaRecoverySummary(data: any) {
