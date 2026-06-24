@@ -22,6 +22,7 @@ from app.models import (
     LearningMetric,
     LearningRun,
     MacroSnapshot,
+    MissedWinner,
     MistakeAnalysis,
     ModelVersion,
     NewsArticle,
@@ -123,7 +124,8 @@ class LearningLoopService:
         seen_samples: set[tuple[str, str]] = set()
         for _ in range(batch):
             try:
-                sample = self.sampler.random_sample(db, seen_samples=seen_samples)
+                sample = self.sampler.alpha_loss_sample(db, seen_samples=seen_samples) if trigger == "alpha_loss_replay" else None
+                sample = sample or self.sampler.random_sample(db, seen_samples=seen_samples)
                 if not sample:
                     errors.append({"stage": "sample", "error": "No eligible historical sample found."})
                     continue
@@ -156,6 +158,7 @@ class LearningLoopService:
             "latest_reports": reports[-5:],
             "dashboard_metrics": metrics,
             "model_version": model_version,
+            "learning_mode": "alpha_loss_replay" if trigger == "alpha_loss_replay" else "random_point_in_time",
             "market_sniper_learning": sniper_learning,
         }
         run.anti_overfitting_report = anti_overfitting
@@ -178,6 +181,7 @@ class LearningLoopService:
             "errors": errors[:8],
             "metrics": metrics,
             "model_version": model_version,
+            "learning_mode": "alpha_loss_replay" if trigger == "alpha_loss_replay" else "random_point_in_time",
             "market_sniper_learning": sniper_learning,
             "anti_overfitting": anti_overfitting,
             "disclaimer": "Research learning loop only. It improves calibration and robustness; it does not create guaranteed market predictions.",
@@ -301,6 +305,24 @@ class HistoricalSamplerService:
     def __init__(self) -> None:
         self.rng = random.Random(self.seed())
 
+    def alpha_loss_sample(self, db: Session, seen_samples: set[tuple[str, str]] | None = None) -> dict | None:
+        missed = db.scalars(
+            select(MissedWinner)
+            .order_by(desc(MissedWinner.benchmark_relative_return), desc(MissedWinner.created_at))
+            .limit(120)
+        ).all()
+        for row in missed:
+            asset = db.scalar(select(Asset).where(Asset.ticker == row.ticker, Asset.is_active.is_(True)).limit(1))
+            if not asset:
+                continue
+            sample = self.sample_for_asset(db, asset, preferred_date=as_date(row.decision_date), seen_samples=seen_samples)
+            if sample:
+                sample["sampling_reason"] = "alpha_loss_replay"
+                sample["missed_winner_id"] = row.id
+                sample["benchmark_relative_return"] = row.benchmark_relative_return
+                return sample
+        return None
+
     def random_sample(self, db: Session, seen_samples: set[tuple[str, str]] | None = None) -> dict | None:
         universe = {item.strip().lower() for item in settings.learning_asset_universe.split(",") if item.strip()}
         asset_types = []
@@ -313,32 +335,37 @@ class HistoricalSamplerService:
 
         candidates = db.scalars(select(Asset).where(Asset.is_active.is_(True), Asset.asset_type.in_(asset_types))).all()
         self.rng.shuffle(candidates)
-        min_rows = max(252, settings.learning_min_history_years * 252)
         for asset in candidates:
-            stats = db.execute(
-                select(func.count(PriceHistory.id), func.min(PriceHistory.date), func.max(PriceHistory.date)).where(PriceHistory.asset_id == asset.id)
-            ).one()
-            count, first_date, last_date = int(stats[0] or 0), as_date(stats[1]), as_date(stats[2])
-            if count < min_rows or not first_date or not last_date:
+            sample = self.sample_for_asset(db, asset, preferred_date=None, seen_samples=seen_samples)
+            if sample:
+                return sample
+        return None
+
+    def sample_for_asset(self, db: Session, asset: Asset, preferred_date: date | None, seen_samples: set[tuple[str, str]] | None = None) -> dict | None:
+        min_rows = max(252, settings.learning_min_history_years * 252)
+        stats = db.execute(
+            select(func.count(PriceHistory.id), func.min(PriceHistory.date), func.max(PriceHistory.date)).where(PriceHistory.asset_id == asset.id)
+        ).one()
+        count, first_date, last_date = int(stats[0] or 0), as_date(stats[1]), as_date(stats[2])
+        if count < min_rows or not first_date or not last_date:
+            return None
+        earliest = first_date + timedelta(days=max(365, settings.learning_min_history_years * 365))
+        latest = last_date - timedelta(days=TIMEFRAMES["long"]["horizon_days"] * 2 + 30)
+        if earliest >= latest:
+            return None
+        preferred_candidates: list[date] = []
+        if preferred_date and earliest <= preferred_date <= latest:
+            preferred_candidates.extend([preferred_date, preferred_date - timedelta(days=3), preferred_date + timedelta(days=3)])
+        span = (latest - earliest).days
+        preferred_candidates.extend(earliest + timedelta(days=self.rng.randint(0, max(1, span))) for _ in range(8))
+        for candidate_date in preferred_candidates:
+            analysis_date = nearest_trading_date(db, asset, max(earliest, min(candidate_date, latest)), latest)
+            if not analysis_date:
                 continue
-            earliest = first_date + timedelta(days=max(365, settings.learning_min_history_years * 365))
-            latest = last_date - timedelta(days=TIMEFRAMES["long"]["horizon_days"] * 2 + 30)
-            if earliest >= latest:
+            key = (asset.ticker, analysis_date.isoformat())
+            if seen_samples and key in seen_samples:
                 continue
-            span = (latest - earliest).days
-            for _ in range(8):
-                analysis_date = nearest_trading_date(
-                    db,
-                    asset,
-                    earliest + timedelta(days=self.rng.randint(0, max(1, span))),
-                    latest,
-                )
-                if not analysis_date:
-                    continue
-                key = (asset.ticker, analysis_date.isoformat())
-                if seen_samples and key in seen_samples:
-                    continue
-                return {"asset": asset, "analysis_date": analysis_date, "first_price_date": first_date, "last_price_date": last_date, "sample_rows": count}
+            return {"asset": asset, "analysis_date": analysis_date, "first_price_date": first_date, "last_price_date": last_date, "sample_rows": count}
         return None
 
     def seed(self) -> int:

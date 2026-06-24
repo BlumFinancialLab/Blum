@@ -17,10 +17,13 @@ from app.models import (
     AIInsight,
     AccuracySnapshot,
     AllocationEfficiencyAudit,
+    AlphaLossAttribution,
+    AlphaRecoveryAction,
     AlphaCaptureMetric,
     Asset,
     AutonomousEngineRun,
     BenchmarkRelativeOutcome,
+    BenchmarkMethodologyValidation,
     BlumDatasetExport,
     BlumKnowledgeGraphEdge,
     BlumKnowledgeGraphNode,
@@ -107,6 +110,7 @@ from app.models import (
     LearningProgressSnapshot,
     LearningStrengthWeaknessMap,
     ManagementQualityProfile,
+    MissedWinner,
     OpportunityPrecisionMetric,
     OpportunityRecallMetric,
     OpportunityCapitalScore,
@@ -127,6 +131,13 @@ from app.models import (
 )
 from app.schemas import AssetOut, FinancialChatRequest, MarketUpdateRequest, NewsOut, NewsUpdateRequest, SemanticSearchRequest, SignalRunRequest
 from app.services.accuracy import asset_accuracy_profile, latest_accuracy_snapshot, market_accuracy_overview, run_accuracy_audit, signal_validation_report
+from app.services.alpha_recovery import (
+    AlphaLossAttributionEngine,
+    AlphaRecoveryActionEngine,
+    AlphaRecoveryDashboardService,
+    BenchmarkMethodologyValidator,
+    MissedWinnersEngine,
+)
 from app.services.autonomous_engine import AutonomousResearchEngine, latest_autonomous_status
 from app.services.blum_financial_model import (
     build_training_dataset,
@@ -1166,6 +1177,74 @@ def learning_intelligence_apply_self_improvement(action_id: int, db: Session = D
 @router.post("/api/learning-intelligence/self-improvement/evaluate/{action_id}")
 def learning_intelligence_evaluate_self_improvement(action_id: int, db: Session = Depends(get_db)) -> dict:
     return SelfImprovementActionEngine().evaluate(db, action_id=action_id)
+
+
+@router.get("/api/alpha-recovery/dashboard")
+def alpha_recovery_dashboard(db: Session = Depends(get_db)) -> dict:
+    return AlphaRecoveryDashboardService().dashboard(db)
+
+
+@router.post("/api/alpha-recovery/recalculate")
+def alpha_recovery_recalculate(
+    benchmark_name: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> dict:
+    return AlphaRecoveryDashboardService().recalculate(db, benchmark_name=benchmark_name)
+
+
+@router.get("/api/alpha-recovery/methodology")
+def alpha_recovery_methodology(limit: int = Query(default=40, ge=1, le=200), db: Session = Depends(get_db)) -> dict:
+    return BenchmarkMethodologyValidator().latest(db, limit=limit)
+
+
+@router.post("/api/alpha-recovery/methodology/validate")
+def alpha_recovery_methodology_validate(
+    benchmark_name: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> dict:
+    return BenchmarkMethodologyValidator().validate_latest(db, benchmark_name=benchmark_name, persist=True)
+
+
+@router.get("/api/alpha-recovery/attribution")
+def alpha_recovery_attribution(
+    benchmark_name: str | None = Query(default=None),
+    limit: int = Query(default=120, ge=1, le=500),
+    db: Session = Depends(get_db),
+) -> dict:
+    return AlphaLossAttributionEngine().latest(db, benchmark_name=benchmark_name, limit=limit)
+
+
+@router.post("/api/alpha-recovery/attribution/calculate")
+def alpha_recovery_attribution_calculate(
+    benchmark_name: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> dict:
+    return AlphaLossAttributionEngine().calculate(db, benchmark_name=benchmark_name, persist=True)
+
+
+@router.get("/api/alpha-recovery/missed-winners")
+def alpha_recovery_missed_winners(limit: int = Query(default=80, ge=1, le=300), db: Session = Depends(get_db)) -> dict:
+    return MissedWinnersEngine().latest(db, limit=limit)
+
+
+@router.post("/api/alpha-recovery/missed-winners/detect")
+def alpha_recovery_detect_missed_winners(limit: int = Query(default=80, ge=1, le=300), db: Session = Depends(get_db)) -> dict:
+    return MissedWinnersEngine().detect(db, persist=True, limit=limit)
+
+
+@router.get("/api/alpha-recovery/actions")
+def alpha_recovery_actions(limit: int = Query(default=80, ge=1, le=300), db: Session = Depends(get_db)) -> dict:
+    return AlphaRecoveryActionEngine().latest(db, limit=limit)
+
+
+@router.post("/api/alpha-recovery/actions/generate")
+def alpha_recovery_generate_actions(db: Session = Depends(get_db)) -> dict:
+    return AlphaRecoveryActionEngine().generate(db, persist=True)
+
+
+@router.get("/api/alpha-recovery/replay-priorities")
+def alpha_recovery_replay_priorities(limit: int = Query(default=30, ge=1, le=100), db: Session = Depends(get_db)) -> dict:
+    return AlphaRecoveryActionEngine().replay_priorities(db, limit=limit)
 
 
 @router.get("/api/decision-intelligence/dashboard")

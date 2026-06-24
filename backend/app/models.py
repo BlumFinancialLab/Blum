@@ -2745,6 +2745,115 @@ class CapitalAllocationSnapshot(Base):
     game = relationship("TradingGame")
 
 
+class BenchmarkMethodologyValidation(Base):
+    __tablename__ = "benchmark_methodology_validations"
+    __table_args__ = (
+        Index("ix_benchmark_methodology_benchmark_created", "benchmark_name", "created_at"),
+        Index("ix_benchmark_methodology_valid_conf", "methodology_valid", "confidence"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    benchmark_comparison_id: Mapped[int | None] = mapped_column(ForeignKey("learning_benchmark_comparisons.id", ondelete="SET NULL"), index=True)
+    benchmark_name: Mapped[str] = mapped_column(String(120), index=True)
+    mode: Mapped[str] = mapped_column(String(80), default="historical_simulation", index=True)
+    period_start: Mapped[datetime | None] = mapped_column(Date, index=True)
+    period_end: Mapped[datetime | None] = mapped_column(Date, index=True)
+    methodology_valid: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    corrected_excess_return: Mapped[float | None] = mapped_column(Float)
+    warnings_json: Mapped[list] = mapped_column(JsonType, default=list)
+    validation_checks_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    explanation: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    benchmark_comparison = relationship("LearningBenchmarkComparison")
+
+
+class AlphaLossAttribution(Base):
+    __tablename__ = "alpha_loss_attributions"
+    __table_args__ = (
+        Index("ix_alpha_loss_attr_benchmark_category", "benchmark_name", "category", "created_at"),
+        Index("ix_alpha_loss_attr_contribution", "contribution_value", "confidence"),
+        Index("ix_alpha_loss_attr_scope", "ticker", "setup_type", "sector"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    methodology_validation_id: Mapped[int | None] = mapped_column(ForeignKey("benchmark_methodology_validations.id", ondelete="SET NULL"), index=True)
+    benchmark_name: Mapped[str] = mapped_column(String(120), index=True)
+    mode: Mapped[str] = mapped_column(String(80), default="historical_simulation", index=True)
+    period_start: Mapped[datetime | None] = mapped_column(Date, index=True)
+    period_end: Mapped[datetime | None] = mapped_column(Date, index=True)
+    total_alpha_loss: Mapped[float] = mapped_column(Float, default=0.0)
+    category: Mapped[str] = mapped_column(String(120), index=True)
+    ticker: Mapped[str | None] = mapped_column(String(32), index=True)
+    setup_type: Mapped[str | None] = mapped_column(String(120), index=True)
+    sector: Mapped[str | None] = mapped_column(String(120), index=True)
+    engine_name: Mapped[str | None] = mapped_column(String(120), index=True)
+    capital_allocation_bucket: Mapped[str | None] = mapped_column(String(120), index=True)
+    contribution_value: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    contribution_percent: Mapped[float | None] = mapped_column(Float)
+    sample_size: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    evidence_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    explanation: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    methodology_validation = relationship("BenchmarkMethodologyValidation")
+
+
+class MissedWinner(Base):
+    __tablename__ = "missed_winners"
+    __table_args__ = (
+        Index("ix_missed_winners_ticker_date", "ticker", "decision_date"),
+        Index("ix_missed_winners_benchmark_created", "benchmark_name", "created_at"),
+        Index("ix_missed_winners_return", "benchmark_relative_return", "future_return"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ticker: Mapped[str] = mapped_column(String(32), index=True)
+    decision_date: Mapped[datetime | None] = mapped_column(Date, index=True)
+    benchmark_name: Mapped[str] = mapped_column(String(120), default="SPY", index=True)
+    future_return: Mapped[float | None] = mapped_column(Float, index=True)
+    benchmark_relative_return: Mapped[float | None] = mapped_column(Float, index=True)
+    blum_rank_at_decision: Mapped[int | None] = mapped_column(Integer, index=True)
+    rejection_reason: Mapped[str] = mapped_column(Text, default="")
+    confidence_at_decision: Mapped[float | None] = mapped_column(Float)
+    blocked_rule: Mapped[str | None] = mapped_column(String(180), index=True)
+    missed_signals_json: Mapped[list] = mapped_column(JsonType, default=list)
+    suggested_learning_action: Mapped[str] = mapped_column(Text, default="")
+    source_snapshot_id: Mapped[int | None] = mapped_column(ForeignKey("decision_universe_snapshots.id", ondelete="SET NULL"), index=True)
+    source_trade_id: Mapped[int | None] = mapped_column(ForeignKey("trading_game_trades.id", ondelete="SET NULL"), index=True)
+    evidence_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    source_snapshot = relationship("DecisionUniverseSnapshot")
+    source_trade = relationship("TradingGameTrade")
+
+
+class AlphaRecoveryAction(Base):
+    __tablename__ = "alpha_recovery_actions"
+    __table_args__ = (
+        Index("ix_alpha_recovery_status_priority", "status", "priority"),
+        Index("ix_alpha_recovery_benchmark_module", "benchmark_name", "affected_module"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    action_type: Mapped[str] = mapped_column(String(120), index=True)
+    detected_problem: Mapped[str] = mapped_column(Text, default="")
+    recommended_action: Mapped[str] = mapped_column(Text, default="")
+    affected_module: Mapped[str] = mapped_column(String(120), index=True)
+    benchmark_name: Mapped[str | None] = mapped_column(String(120), index=True)
+    expected_impact: Mapped[str] = mapped_column(Text, default="")
+    before_metric: Mapped[float | None] = mapped_column(Float)
+    after_metric: Mapped[float | None] = mapped_column(Float)
+    status: Mapped[str] = mapped_column(String(80), default="proposed", index=True)
+    rollback_available: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    priority: Mapped[str] = mapped_column(String(40), default="medium", index=True)
+    validation_status: Mapped[str] = mapped_column(String(80), default="untested", index=True)
+    evidence_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+
+
 class OpportunityCapitalScore(Base):
     __tablename__ = "opportunity_capital_scores"
     __table_args__ = (

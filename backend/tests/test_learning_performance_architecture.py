@@ -92,10 +92,12 @@ def test_learning_page_keeps_heavy_work_out_of_initial_render():
     assert "api.tradingGameLedger(25)" in text
     assert 'activeTab !== "trading"' in text
     assert "Load panel" in text
+    assert "api.alphaRecoveryDashboard()" in text
     assert "recalculateLearningTradingPower" not in text
     assert "recalculateDecisionSuperiority" not in text
     assert "recalculateBusinessQuality" not in text
     assert "recalculatePortfolioIntelligence" not in text
+    assert "recalculateAlphaRecovery" not in text
 
 
 def test_frontend_blocks_heavy_learning_post_during_initial_render():
@@ -105,3 +107,4 @@ def test_frontend_blocks_heavy_learning_post_during_initial_render():
     assert "blocked_heavy_frontend_recalculation" in text
     assert "LEARNING_INITIAL_RENDER_GUARD_MS" in text
     assert '"/api/capital-allocation/recalculate"' in text
+    assert '"/api/alpha-recovery/recalculate"' in text

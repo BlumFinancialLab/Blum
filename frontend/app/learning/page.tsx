@@ -400,6 +400,7 @@ function DeepDiagnosticsTab({ diagnostics, loadPanel }: { diagnostics: Record<st
     { id: "business_quality", title: "Business Quality", loader: () => api.businessQualityDashboard(), summary: objectSummary },
     { id: "portfolio_intelligence", title: "Portfolio Intelligence", loader: () => api.portfolioIntelligenceDashboard(), summary: objectSummary },
     { id: "capital_allocation", title: "Capital Allocation", loader: () => api.capitalAllocationDashboard(), summary: objectSummary },
+    { id: "alpha_recovery", title: "Alpha Recovery", loader: () => api.alphaRecoveryDashboard(), summary: alphaRecoverySummary },
     { id: "performance_diagnostics", title: "Performance Diagnostics", loader: () => api.performanceDiagnostics(), summary: performanceSummary },
   ];
 
@@ -516,6 +517,14 @@ function objectSummary(data: any) {
 
 function performanceSummary(data: any) {
   return `${data?.api?.request_count ?? 0} API events, ${data?.database?.query_count ?? 0} DB events`;
+}
+
+function alphaRecoverySummary(data: any) {
+  const truth = data?.truth_layer?.lines ?? [];
+  const missed = data?.missed_winners?.rows ?? [];
+  const actions = data?.recovery_actions?.rows ?? [];
+  if (truth.length) return truth[0];
+  return `${missed.length} missed winners, ${actions.length} recovery actions`;
 }
 
 function compactPreview(data: any) {

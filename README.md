@@ -1085,6 +1085,57 @@ Main API:
 
 The engine treats cash as an active research decision. Cash reserve rises when sample size is weak, expectancy is negative, benchmark excess is poor, drawdown is elevated or stop-hit rates are high. Capital weights are capped when evidence is thin, drawdown is high or position interaction risk is elevated.
 
+### Alpha Loss & Recovery Engine
+
+`Alpha Loss & Recovery Engine` upgrades BLUM from measuring underperformance to explaining why alpha was lost and what should be tested next. It is evidence-bound and snapshot-safe: dashboards read stored rows or `alpha_recovery_summary`; heavy attribution runs only through explicit backend recalculation or scheduled jobs.
+
+It adds:
+
+- `BenchmarkMethodologyValidator`: blocks learning from invalid benchmark comparisons, including missing periods, inconsistent horizons, weak sample size, return mismatches and proxy-only baselines.
+- `AlphaLossAttributionEngine`: decomposes validated benchmark underperformance into measurable causes such as missed entry, wrong asset selection, premature exit, poor exit, excessive cash and weak capital allocation.
+- `MissedWinnersEngine`: stores assets BLUM ignored or underweighted that later outperformed, including rank, rejection reason, confidence, blocked rule and suggested learning action.
+- `AlphaRecoveryActionEngine`: converts repeated alpha-loss evidence into reversible recovery experiments such as pullback-retest replay, ranking threshold tests, allocation replay and exit-logic audits.
+- `alpha_loss_replay`: a Learning Loop trigger that prioritizes missed winners and rejected outperformers while preserving the existing point-in-time and anti-overfitting guardrails.
+- Truth Layer: exposes when evidence is insufficient, benchmark methodology is invalid, performance is not statistically reliable or recovery conclusions are not yet justified.
+
+Persisted evidence:
+
+- `benchmark_methodology_validations`
+- `alpha_loss_attributions`
+- `missed_winners`
+- `alpha_recovery_actions`
+- dashboard snapshot type `alpha_recovery_summary`
+
+Main API:
+
+- `GET /api/alpha-recovery/dashboard`
+- `POST /api/alpha-recovery/recalculate`
+- `GET /api/alpha-recovery/methodology`
+- `POST /api/alpha-recovery/methodology/validate`
+- `GET /api/alpha-recovery/attribution`
+- `POST /api/alpha-recovery/attribution/calculate`
+- `GET /api/alpha-recovery/missed-winners`
+- `POST /api/alpha-recovery/missed-winners/detect`
+- `GET /api/alpha-recovery/actions`
+- `POST /api/alpha-recovery/actions/generate`
+- `GET /api/alpha-recovery/replay-priorities`
+
+What it does:
+
+- explains benchmark-relative alpha loss using stored trade, benchmark, allocation and decision evidence;
+- identifies missed or rejected winners for targeted replay;
+- generates testable recovery actions with expected impact, affected module, prior metric and rollback capability;
+- routes alpha-loss evidence back into Learning Loop sampling;
+- gives BLUM Chat evidence for questions such as why BLUM is losing against SPY/QQQ or which opportunities were missed.
+
+What it does not do:
+
+- it does not claim BLUM found alpha;
+- it does not guarantee recovery or benchmark outperformance;
+- it does not fabricate missed winners without stored future outcome evidence;
+- it does not learn from invalid benchmark methodology;
+- it does not self-modify source code or apply irreversible rule changes.
+
 ### Guardrails
 
 - No decision-superiority claim is valid with insufficient comparable samples.
@@ -1094,6 +1145,7 @@ The engine treats cash as an active research decision. Cash reserve rises when s
 - Capital allocation must remain evidence-bound: no opportunity receives larger simulated capital without sample-size, benchmark, sizing and interaction context.
 - Cash allocation is valid output when the evidence does not justify deployment.
 - Allocation efficiency is ex-post research evidence, not a future promise.
+- Alpha recovery actions must remain reversible and must not be treated as proof of future alpha.
 - Chat responses use stored dashboard evidence only. If the evidence is missing, BLUM must answer `Insufficient evidence`.
 
 ## Docker

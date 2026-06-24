@@ -17,7 +17,12 @@ const heavyLearningPostFragments = [
   "/stock-radar/update",
   "/ipo-radar/update",
   "/api/learning-intelligence/self-improvement/generate",
-  "/api/capital-allocation/recalculate"
+  "/api/capital-allocation/recalculate",
+  "/api/alpha-recovery/recalculate",
+  "/api/alpha-recovery/methodology/validate",
+  "/api/alpha-recovery/attribution/calculate",
+  "/api/alpha-recovery/missed-winners/detect",
+  "/api/alpha-recovery/actions/generate"
 ];
 const requestStats = {
   total: 0,
@@ -276,6 +281,13 @@ export const api = {
   portfolioQuality: () => getJson<any>("/api/portfolio-intelligence/quality"),
   recalculatePortfolioIntelligence: () => postJson<any>("/api/portfolio-intelligence/recalculate", {}),
   capitalAllocationDashboard: () => getJson<any>("/api/capital-allocation/dashboard"),
+  alphaRecoveryDashboard: () => getJson<any>("/api/alpha-recovery/dashboard"),
+  recalculateAlphaRecovery: (benchmarkName?: string) => postJson<any>(`/api/alpha-recovery/recalculate${benchmarkName ? `?benchmark_name=${encodeURIComponent(benchmarkName)}` : ""}`, {}),
+  alphaRecoveryMethodology: (limit = 40) => getJson<any>(`/api/alpha-recovery/methodology?limit=${limit}`),
+  alphaRecoveryAttribution: (limit = 120) => getJson<any>(`/api/alpha-recovery/attribution?limit=${limit}`),
+  alphaRecoveryMissedWinners: (limit = 80) => getJson<any>(`/api/alpha-recovery/missed-winners?limit=${limit}`),
+  alphaRecoveryActions: (limit = 80) => getJson<any>(`/api/alpha-recovery/actions?limit=${limit}`),
+  alphaRecoveryReplayPriorities: (limit = 30) => getJson<any>(`/api/alpha-recovery/replay-priorities?limit=${limit}`),
   chartAnalyzeTicker: (ticker: string, timeframe = "6M", period = "1y", includeVisual = false) => getPostChart<ChartReport>(`/chart/analyze-ticker?ticker=${encodeURIComponent(ticker)}&timeframe=${encodeURIComponent(timeframe)}&period=${encodeURIComponent(period)}&include_visual=${includeVisual ? "true" : "false"}`),
   chartTechnicalReport: (ticker: string, timeframe = "6M") => getJson<ChartReport>(`/chart/technical-report/${encodeURIComponent(ticker)}?timeframe=${encodeURIComponent(timeframe)}`),
   chartLevels: (ticker: string, timeframe = "6M") => getJson<any>(`/chart/levels/${encodeURIComponent(ticker)}?timeframe=${encodeURIComponent(timeframe)}`),
