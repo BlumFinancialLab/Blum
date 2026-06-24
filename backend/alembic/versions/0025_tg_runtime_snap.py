@@ -5,7 +5,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 
-revision = "0025_trading_game_runtime_snapshots"
+revision = "0025_tg_runtime_snap"
 down_revision = "0024_runtime_architecture"
 branch_labels = None
 depends_on = None
