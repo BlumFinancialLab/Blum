@@ -125,19 +125,27 @@ Rows scanned are reported conservatively: DBAPI cursor timing is exact, but exac
 
 ## Performance Architecture
 
-The Learning / Trading Intelligence dashboard uses progressive loading so the user sees useful intelligence before deep tables and model panels finish loading.
+The Learning / Trading Intelligence surface is snapshot-first and read-only by default. It is designed so frontend visualization never interferes with backend learning, training, Trading Game, Reasoning Core, Capital Allocation or Decision Intelligence jobs.
 
-- Tier 0: immediate shell, header, navigation and skeleton states.
-- Tier 1: `/api/learning-intelligence/summary`, a lightweight critical snapshot built from latest precomputed rows only.
-- Tier 2: main charts such as equity curve, rolling metrics and historical-vs-live comparison.
-- Tier 3: tables and ledgers with safe default limits, loaded only when the ledger section becomes visible or when the user explicitly requests detailed tables.
-- Tier 4: deep reasoning/model panels such as thesis survival, conviction decay, regime reliability and training quality, loaded only when opened by the user.
+- Overview: loads only `GET /api/learning-intelligence/summary` on first render.
+- Trading Game: loads only when the user opens the tab, with paginated ledger defaults and latest 25 trades.
+- Deep Diagnostics: all model, thesis, reliability, training-quality, decision, business, portfolio, capital-allocation and performance panels stay behind explicit `Load panel` actions.
 
-The frontend request wrapper deduplicates in-flight GET requests, applies request timeouts, keeps a short in-memory route-session cache and reports Learning-page browser timings, cache hits and dedupe events to Performance Diagnostics. Heavy recalculation POST endpoints are not called automatically during Learning page render; they remain explicit/manual or background-worker actions, and the Performance page flags any accidental heavy POST during initial load.
+The frontend request wrapper deduplicates in-flight GET requests, applies request timeouts, keeps a short in-memory route-session cache and reports Learning-page browser timings, cache hits and dedupe events to Performance Diagnostics. Heavy recalculation POST endpoints are not called automatically during Learning page render. During the initial Learning render window, accidental heavy POST calls are blocked and logged as `blocked_heavy_frontend_recalculation`.
 
 Dashboard snapshots provide stale-but-usable payloads for fast UI surfaces. The snapshot API is `/api/dashboard-snapshots/{snapshot_type}`. The startup status API is `/startup/status`, allowing the UI to distinguish API readiness from background warm-up.
 
 Blum prioritizes fast visible intelligence first, then progressive deep detail. Existing APIs, tables, Learning Loop logic, Trading Game logic and Decision Intelligence logic remain backward compatible.
+
+## Lightweight Learning Control Room
+
+The Learning page is intentionally reduced to three modes:
+
+- **Overview = fast truth.** One lightweight summary endpoint returns Learning Loop status, latest run timestamp, Trading Power Score, capital cycle, current capital, win rate, expectancy R, benchmark summary, live-vs-historical state, top weakness, latest lesson, Truth Panel, backend training status and last snapshot timestamp.
+- **Trading Game = focused evidence.** The tab loads equity curve, cycle progress, latest 25 ledger rows, win/loss/missed-entry summary, benchmark summary and reality-check warnings only after the user opens it.
+- **Deep Diagnostics = optional advanced analysis.** Heavy reasoning/model panels never load automatically. Each panel has its own explicit load action and failure state.
+
+Backend learning remains independent through APScheduler/autonomous jobs or explicit manual actions. The frontend observes snapshots and evidence; it does not train, recalculate, repair data or run pipelines during page render. If snapshots are stale while background recalculation is running, the UI shows the last snapshot timestamp and a stale-data warning instead of blocking first paint.
 
 ## Accuracy And Confidence Layer
 

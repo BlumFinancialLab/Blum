@@ -9,8 +9,12 @@ from app.models import (
     DashboardSnapshot,
     LearningBenchmarkComparison,
     LearningRun,
+    LearningStrengthWeaknessMap,
     TradingCapitalCycle,
     TradingGame,
+    TradingGameTrade,
+    TradingIntelligenceMetric,
+    TradeLearningEvidence,
 )
 from app.services.dashboard_snapshots import DashboardSnapshotService
 from app.services.learning_summary import LearningSummaryService, build_truth_panel, safe_progress, summarize_benchmarks
@@ -41,8 +45,12 @@ def test_learning_summary_returns_partial_payload_without_precomputed_rows():
         DashboardSnapshot,
         LearningBenchmarkComparison,
         LearningRun,
+        LearningStrengthWeaknessMap,
         TradingCapitalCycle,
         TradingGame,
+        TradingGameTrade,
+        TradingIntelligenceMetric,
+        TradeLearningEvidence,
     ]:
         model.__table__.create(bind=engine)
 
@@ -51,6 +59,9 @@ def test_learning_summary_returns_partial_payload_without_precomputed_rows():
 
     assert payload["status"] == "initializing"
     assert "trading_power_score" in payload["missing_sections"]
+    assert "trading_intelligence_metrics" in payload["missing_sections"]
+    assert payload["backend_training_status"]["frontend_policy"] == "read_only_snapshot_observer"
+    assert "snapshots" in payload
     assert payload["truth_panel"][0].startswith("Not enough precomputed evidence")
 
 
@@ -73,10 +84,24 @@ def test_dashboard_snapshot_round_trip_and_stale_flag():
 def test_learning_page_keeps_heavy_work_out_of_initial_render():
     page = Path(__file__).resolve().parents[2] / "frontend" / "app" / "learning" / "page.tsx"
     text = page.read_text()
+    initial_effect = text.split("useEffect(() => {", 1)[1].split("}, []);", 1)[0]
 
     assert "setTimeout(loadVisibleTables" not in text
-    assert "IntersectionObserver" in text
+    assert "api.learningSummary()" in initial_effect
+    assert initial_effect.count("api.") == 1
+    assert "api.tradingGameLedger(25)" in text
+    assert 'activeTab !== "trading"' in text
+    assert "Load panel" in text
     assert "recalculateLearningTradingPower" not in text
     assert "recalculateDecisionSuperiority" not in text
     assert "recalculateBusinessQuality" not in text
     assert "recalculatePortfolioIntelligence" not in text
+
+
+def test_frontend_blocks_heavy_learning_post_during_initial_render():
+    api_file = Path(__file__).resolve().parents[2] / "frontend" / "lib" / "api.ts"
+    text = api_file.read_text()
+
+    assert "blocked_heavy_frontend_recalculation" in text
+    assert "LEARNING_INITIAL_RENDER_GUARD_MS" in text
+    assert '"/api/capital-allocation/recalculate"' in text

@@ -3,6 +3,22 @@ import { AccuracyOverview, AccuracyProfile, Asset, BrainAccuracy, BrainAssetMemo
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
 const inFlightRequests = new Map<string, Promise<any>>();
 const memoryCache = new Map<string, { expiresAt: number; value: any }>();
+const LEARNING_INITIAL_RENDER_GUARD_MS = 4000;
+const heavyLearningPostFragments = [
+  "/recalculate",
+  "/run-cycle",
+  "/pipeline/run",
+  "/market/update",
+  "/news/update",
+  "/signals/run",
+  "/data/repair",
+  "/fundamentals/update",
+  "/macro/update",
+  "/stock-radar/update",
+  "/ipo-radar/update",
+  "/api/learning-intelligence/self-improvement/generate",
+  "/api/capital-allocation/recalculate"
+];
 const requestStats = {
   total: 0,
   duplicate: 0,
@@ -36,6 +52,16 @@ async function fetchBlum(path: string, options: RequestInit & { timeoutMs?: numb
   const key = `${method}:${path}:${typeof options.body === "string" ? options.body : ""}`;
   const started = nowMs();
   requestStats.total += 1;
+
+  if (method === "POST" && shouldBlockLearningHeavyPost(path)) {
+    const duration = nowMs() - started;
+    recordInitialLearningRequest(path, method, duration, "blocked_heavy_frontend_recalculation", false, false);
+    reportFrontendTiming(path, method, duration, "blocked_heavy_frontend_recalculation", true);
+    return new Response(JSON.stringify({
+      detail: "blocked_heavy_frontend_recalculation",
+      policy: "Learning page render is read-only. Heavy training/recalculation jobs must be explicit backend or user actions after initial load."
+    }), { status: 409, headers: { "Content-Type": "application/json", "X-BLUM-BLOCKED-HEAVY-FRONTEND-RECALCULATION": "true" } });
+  }
 
   if (method === "GET") {
     const cached = memoryCache.get(key);
@@ -112,6 +138,12 @@ function recordInitialLearningRequest(path: string, method: string, duration_ms:
   if (typeof location === "undefined" || !location.pathname.startsWith("/learning")) return;
   requestStats.initialLearningPage.push({ path, method, duration_ms: Number(duration_ms.toFixed(2)), status, duplicate, cache_hit });
   if (requestStats.initialLearningPage.length > 160) requestStats.initialLearningPage.shift();
+}
+
+function shouldBlockLearningHeavyPost(path: string) {
+  if (typeof location === "undefined" || !location.pathname.startsWith("/learning")) return false;
+  if (typeof performance === "undefined" || performance.now() > LEARNING_INITIAL_RENDER_GUARD_MS) return false;
+  return heavyLearningPostFragments.some((fragment) => path.includes(fragment));
 }
 
 function nowMs() {
@@ -243,6 +275,7 @@ export const api = {
   portfolioIntelligenceDashboard: () => getJson<any>("/api/portfolio-intelligence/dashboard"),
   portfolioQuality: () => getJson<any>("/api/portfolio-intelligence/quality"),
   recalculatePortfolioIntelligence: () => postJson<any>("/api/portfolio-intelligence/recalculate", {}),
+  capitalAllocationDashboard: () => getJson<any>("/api/capital-allocation/dashboard"),
   chartAnalyzeTicker: (ticker: string, timeframe = "6M", period = "1y", includeVisual = false) => getPostChart<ChartReport>(`/chart/analyze-ticker?ticker=${encodeURIComponent(ticker)}&timeframe=${encodeURIComponent(timeframe)}&period=${encodeURIComponent(period)}&include_visual=${includeVisual ? "true" : "false"}`),
   chartTechnicalReport: (ticker: string, timeframe = "6M") => getJson<ChartReport>(`/chart/technical-report/${encodeURIComponent(ticker)}?timeframe=${encodeURIComponent(timeframe)}`),
   chartLevels: (ticker: string, timeframe = "6M") => getJson<any>(`/chart/levels/${encodeURIComponent(ticker)}?timeframe=${encodeURIComponent(timeframe)}`),
