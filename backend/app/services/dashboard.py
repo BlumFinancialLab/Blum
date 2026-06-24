@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.models import Asset, ETFTrend, NewsArticle, PriceHistory, SentimentAnalysis, SignalSnapshot
 from app.services.accuracy import latest_accuracy_snapshot, market_accuracy_overview, signal_validation_report
 from app.services.data_continuity import data_coverage_report
+from app.services.dashboard_snapshots import DashboardSnapshotService
 from app.services.macro import macro_overview
 from app.services.market_data import market_snapshot_for_asset
 from app.services.performance import performance_recorder
@@ -14,6 +15,19 @@ from app.services.realtime import realtime_status
 
 
 def dashboard_overview(db: Session) -> dict:
+    with performance_recorder.dashboard_widget("dashboard.snapshot_lookup", snapshot_type="dashboard_overview_summary"):
+        snapshot = DashboardSnapshotService().latest(db, "dashboard_overview_summary")
+    if snapshot["payload"]:
+        payload = dict(snapshot["payload"])
+        payload["snapshot_status"] = snapshot["status"]
+        payload["snapshot_created_at"] = snapshot.get("created_at")
+        payload["snapshot_warnings"] = snapshot.get("warnings", [])
+        payload["runtime_policy"] = "snapshot_first_no_live_recalculation"
+        return payload
+    return empty_dashboard_overview(snapshot)
+
+
+def build_dashboard_overview_live(db: Session) -> dict:
     with performance_recorder.dashboard_widget("dashboard.load_signal_candidates"):
         signals = db.scalars(select(SignalSnapshot).order_by(desc(SignalSnapshot.created_at), desc(SignalSnapshot.blum_score)).limit(80)).all()
     with performance_recorder.dashboard_widget("dashboard.rank_latest_signals", signal_count=len(signals)):
@@ -77,6 +91,35 @@ def dashboard_overview(db: Session) -> dict:
         "sentiment_divergence": sentiment_divergence,
         "watchlist_candidates": watchlist_candidates,
         "etf_rotation_leaders": etf_rotation_leaders,
+    }
+
+
+def empty_dashboard_overview(snapshot: dict) -> dict:
+    return {
+        "snapshot_status": snapshot.get("status", "missing"),
+        "snapshot_created_at": snapshot.get("created_at"),
+        "snapshot_warnings": [snapshot.get("warning") or "dashboard_overview_summary snapshot is not ready"],
+        "runtime_policy": "snapshot_first_no_live_recalculation",
+        "market_pulse": {
+            "asset_count": 0,
+            "article_count": 0,
+            "average_sentiment": 0,
+            "signal_count": 0,
+            "classification_mix": {},
+            "price_row_count": 0,
+        },
+        "data_coverage": {"status": "missing_snapshot"},
+        "accuracy": {"status": "missing_snapshot"},
+        "macro": {"status": "missing_snapshot"},
+        "validation": {"status": "missing_snapshot"},
+        "readiness": {"status": "missing_snapshot"},
+        "realtime": {"status": "unknown"},
+        "todays_strongest_signals": [],
+        "narrative_breakouts": [],
+        "technical_breakouts": [],
+        "sentiment_divergence": [],
+        "watchlist_candidates": [],
+        "etf_rotation_leaders": [],
     }
 
 

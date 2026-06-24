@@ -2699,6 +2699,52 @@ class DashboardSnapshot(Base):
     warnings_json: Mapped[list] = mapped_column(JsonType, default=list)
 
 
+class TradingGameLedgerSnapshot(Base):
+    __tablename__ = "trading_game_ledger_snapshots"
+    __table_args__ = (
+        Index("ix_trading_game_ledger_snapshots_game_created", "game_id", "created_at"),
+        Index("ix_trading_game_ledger_snapshots_expires", "expires_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    game_id: Mapped[int] = mapped_column(ForeignKey("trading_games.id", ondelete="CASCADE"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    limit: Mapped[int] = mapped_column(Integer, default=50)
+    total_trades: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    row_count: Mapped[int] = mapped_column(Integer, default=0)
+    payload_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    summary_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    trace_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    payload_size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    is_stale: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+
+    game = relationship("TradingGame")
+
+
+class EquityCurveSnapshot(Base):
+    __tablename__ = "equity_curve_snapshots"
+    __table_args__ = (
+        Index("ix_equity_curve_snapshots_game_created", "game_id", "created_at"),
+        Index("ix_equity_curve_snapshots_expires", "expires_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    game_id: Mapped[int] = mapped_column(ForeignKey("trading_games.id", ondelete="CASCADE"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    limit: Mapped[int] = mapped_column(Integer, default=500)
+    point_count: Mapped[int] = mapped_column(Integer, default=0)
+    annotation_count: Mapped[int] = mapped_column(Integer, default=0)
+    payload_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    summary_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    trace_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    payload_size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    is_stale: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+
+    game = relationship("TradingGame")
+
+
 class BrainRuntimeEvent(Base):
     __tablename__ = "brain_runtime_events"
     __table_args__ = (

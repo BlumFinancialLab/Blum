@@ -135,6 +135,16 @@ The frontend request wrapper deduplicates in-flight GET requests, applies reques
 
 Dashboard snapshots provide stale-but-usable payloads for fast UI surfaces. The snapshot API is `/api/dashboard-snapshots/{snapshot_type}`. The startup status API is `/startup/status`, allowing the UI to distinguish API readiness from background warm-up.
 
+Trading Game runtime surfaces now use dedicated snapshots for the expensive read paths:
+
+- `trading_game_ledger_snapshot` backs `GET /api/trading-game/ledger`.
+- `equity_curve_snapshot` backs `GET /api/trading-game/equity/annotated`.
+- `dashboard_overview_summary` backs `GET /dashboard/overview`.
+
+Each Trading Game snapshot stores payload size, object counts and phase timings for base query, attribution loading, evidence loading, benchmark loading, quality loading, prediction loading, serialization and JSON generation. If a snapshot is stale, the UI can still show it with a warning instead of recalculating during page render.
+
+The Trading Game extraction audit is documented in `TRADING_GAME_NPLUS1_REPORT.md`.
+
 Blum prioritizes fast visible intelligence first, then progressive deep detail. Existing APIs, tables, Learning Loop logic, Trading Game logic and Decision Intelligence logic remain backward compatible.
 
 ## Lightweight Learning Control Room
@@ -1294,6 +1304,8 @@ Tracked snapshot types:
 - `alpha_recovery_summary`
 - `meta_cognition_summary`
 - `dashboard_overview_summary`
+- `trading_game_ledger_snapshot`
+- `equity_curve_snapshot`
 
 Snapshots support:
 

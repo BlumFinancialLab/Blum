@@ -57,6 +57,8 @@ CRITICAL_SNAPSHOT_TYPES = [
     "alpha_recovery_summary",
     "meta_cognition_summary",
     "dashboard_overview_summary",
+    "trading_game_ledger_snapshot",
+    "equity_curve_snapshot",
 ]
 
 
@@ -243,9 +245,17 @@ class SnapshotProducerService:
         if snapshot_type == "learning_summary":
             return LearningSummaryService().summary(db)
         if snapshot_type == "dashboard_overview_summary":
-            from app.services.dashboard import dashboard_overview
+            from app.services.dashboard import build_dashboard_overview_live
 
-            return dashboard_overview(db)
+            return build_dashboard_overview_live(db)
+        if snapshot_type == "trading_game_ledger_snapshot":
+            from app.services.trading_game_runtime import TradingGameRuntimeSnapshotService
+
+            return TradingGameRuntimeSnapshotService().produce_ledger_snapshot(db)
+        if snapshot_type == "equity_curve_snapshot":
+            from app.services.trading_game_runtime import TradingGameRuntimeSnapshotService
+
+            return TradingGameRuntimeSnapshotService().produce_equity_snapshot(db)
         if snapshot_type == "trading_game_summary":
             game = db.scalar(select(TradingGame).order_by(desc(TradingGame.updated_at)).limit(1))
             if game is None:

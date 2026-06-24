@@ -840,9 +840,10 @@ def trading_game_equity(
 def trading_game_annotated_equity(
     game_id: int | None = Query(default=None),
     limit: int = Query(default=800, ge=1, le=3000),
+    include_trace: bool = Query(default=False),
     db: Session = Depends(get_db),
 ) -> dict:
-    return EquityCurveAnnotationService().annotated_equity(db, game_id=game_id, limit=limit)
+    return EquityCurveAnnotationService().annotated_equity(db, game_id=game_id, limit=limit, refresh=False, use_snapshot=True, include_trace=include_trace)
 
 
 @router.get("/api/trading-game/trades")
@@ -869,6 +870,7 @@ def trading_game_ledger(
     sort_by: str = Query(default="created_at_desc"),
     limit: int = Query(default=200, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
+    include_trace: bool = Query(default=False),
     db: Session = Depends(get_db),
 ) -> dict:
     return TradeLedgerService().ledger(
@@ -886,6 +888,9 @@ def trading_game_ledger(
         sort_by=sort_by,
         limit=limit,
         offset=offset,
+        refresh=False,
+        use_snapshot=True,
+        include_trace=include_trace,
     )
 
 
