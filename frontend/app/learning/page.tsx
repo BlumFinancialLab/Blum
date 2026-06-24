@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import { AlertTriangle, Brain, Gauge, LineChart } from "lucide-react";
 import { api } from "@/lib/api";
 import { AsyncPanel } from "@/components/AsyncPanel";
+import { DiagnosticPanelRenderer } from "@/components/DiagnosticPanelRenderer";
 import { PlotPanel } from "@/components/PlotPanel";
 import { StatusBadge } from "@/components/StatusBadge";
 
@@ -422,14 +423,7 @@ function DeepDiagnosticsTab({ diagnostics, loadPanel }: { diagnostics: Record<st
                 <button className="button compact" onClick={() => loadPanel(panel.id, panel.loader)}>Load panel</button>
               </div>
             ) : (
-              <div className="brain-list dense">
-                <div>
-                  <StatusBadge label="loaded on demand" />
-                  <strong>{panel.summary(state.data)}</strong>
-                  <pre className="json-preview">{JSON.stringify(compactPreview(state.data), null, 2)}</pre>
-                  <button className="button compact" onClick={() => loadPanel(panel.id, panel.loader)}>Reload panel</button>
-                </div>
-              </div>
+              <DiagnosticPanelRenderer panelId={panel.id} title={panel.title} data={state.data} onReload={() => loadPanel(panel.id, panel.loader)} />
             )}
           </AsyncPanel>
         );
@@ -613,13 +607,6 @@ function metaCognitionSummary(data: any) {
 function factorTitle(row: any) {
   if (!row) return "No evidence yet";
   return String(row.factor_name ?? row.module_name ?? row.ticker ?? row.target ?? "No evidence yet").replaceAll("_", " ");
-}
-
-function compactPreview(data: any) {
-  if (Array.isArray(data)) return data.slice(0, 3);
-  if (Array.isArray(data?.rows)) return { ...data, rows: data.rows.slice(0, 3) };
-  const entries = Object.entries(data ?? {}).slice(0, 8);
-  return Object.fromEntries(entries);
 }
 
 function isRejected(item: PromiseSettledResult<unknown>): item is PromiseRejectedResult {

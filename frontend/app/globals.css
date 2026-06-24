@@ -2333,6 +2333,189 @@ p { color: var(--muted); line-height: 1.55; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.diagnostic-renderer {
+  display: grid;
+  gap: 12px;
+}
+
+.diagnostic-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 12px;
+}
+
+.diagnostic-panel-head h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.diagnostic-panel-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.diagnostic-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.diagnostic-metric {
+  min-height: 82px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px;
+  background: #070a0f;
+}
+
+.diagnostic-metric span,
+.truth-summary-grid span,
+.diagnostic-key-values span {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  font-weight: 900;
+}
+
+.diagnostic-metric strong {
+  display: block;
+  margin-top: 7px;
+  font-size: 18px;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.diagnostic-metric p {
+  margin: 5px 0 0;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.diagnostic-metric.positive { border-color: rgba(32,224,112,.28); }
+.diagnostic-metric.negative { border-color: rgba(255,77,94,.3); }
+.diagnostic-metric.warning { border-color: rgba(255,176,0,.32); }
+
+.truth-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.truth-summary-grid div,
+.diagnostic-key-values div {
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 6px;
+  padding: 10px;
+  background: #05080d;
+}
+
+.truth-summary-grid strong,
+.diagnostic-key-values strong {
+  display: block;
+  margin-top: 7px;
+  color: #dce7f5;
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.diagnostic-badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.evidence-badge {
+  display: inline-flex;
+  width: fit-content;
+  border-radius: 999px;
+  padding: 5px 8px;
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+.evidence-badge.positive { background: rgba(32,224,112,.14); color: var(--green); border: 1px solid rgba(32,224,112,.34); }
+.evidence-badge.negative { background: rgba(255,77,94,.14); color: var(--red); border: 1px solid rgba(255,77,94,.34); }
+.evidence-badge.warning { background: rgba(255,176,0,.13); color: var(--amber); border: 1px solid rgba(255,176,0,.34); }
+.evidence-badge.neutral { background: rgba(85,170,255,.11); color: var(--blue); border: 1px solid rgba(85,170,255,.25); }
+
+.diagnostic-table-shell {
+  display: grid;
+  gap: 8px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+  background: #05080d;
+}
+
+.diagnostic-table {
+  width: 100%;
+  min-width: 1040px;
+  border-collapse: collapse;
+}
+
+.diagnostic-table th {
+  color: var(--muted);
+  background: #070a0f;
+  text-align: left;
+  font-size: 10px;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  padding: 9px;
+  border-bottom: 1px solid var(--line);
+}
+
+.diagnostic-table td {
+  padding: 10px 9px;
+  border-bottom: 1px solid rgba(255,255,255,.06);
+  vertical-align: top;
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.diagnostic-section h3 {
+  margin-bottom: 8px;
+  font-size: 15px;
+}
+
+.diagnostic-key-values {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.json-debug-toggle {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+}
+
+.json-debug-toggle .json-preview {
+  width: 100%;
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #030509;
+  color: #cbd5e1;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .trade-ledger-table {
   overflow-x: auto;
   padding-bottom: 2px;
@@ -2378,7 +2561,7 @@ p { color: var(--muted); line-height: 1.55; }
   .system-card { position: static; margin-top: 14px; }
   .page-header { align-items: flex-start; flex-direction: column; }
   .header-actions { justify-content: flex-start; }
-  .hero, .grid-2, .grid-3, .grid-4, .live-grid, .realtime-strip, .deployment-banner, .diagnostic-grid, .instrument-card, .market-strip, .market-strip.compact, .brain-hero, .scenario-grid, .evidence-grid, .method-grid, .event-graph, .financial-brain-grid, .quality-lists, .macro-list, .executive-hero, .executive-command, .executive-grid, .narrative-grid, .sentiment-columns, .opportunity-card, .score-stack, .allocation-list div, .brain-status-grid, .brain-two-col, .chart-snapshot-panel .brain-status-grid, .key-level-grid, .evidence-columns, .terminal-header, .terminal-status-grid, .terminal-command-grid, .market-command-layout, .market-pulse-grid, .pulse-chart-grid, .asset-command-card, .signal-note-grid, .professional-grid-2, .professional-grid-3, .professional-grid-4, .desk-layout, .market-brain-system-grid, .chat-command-layout, .chat-prompt-grid, .chat-answer-grid, .chat-candidate-row, .chatgpt-shell, .chat-evidence-columns, .scenario-mini-grid, .compact-candidate, .asset-context-pill, .context-coverage { grid-template-columns: 1fr; }
+  .hero, .grid-2, .grid-3, .grid-4, .live-grid, .realtime-strip, .deployment-banner, .diagnostic-grid, .diagnostic-metric-grid, .truth-summary-grid, .diagnostic-key-values, .instrument-card, .market-strip, .market-strip.compact, .brain-hero, .scenario-grid, .evidence-grid, .method-grid, .event-graph, .financial-brain-grid, .quality-lists, .macro-list, .executive-hero, .executive-command, .executive-grid, .narrative-grid, .sentiment-columns, .opportunity-card, .score-stack, .allocation-list div, .brain-status-grid, .brain-two-col, .chart-snapshot-panel .brain-status-grid, .key-level-grid, .evidence-columns, .terminal-header, .terminal-status-grid, .terminal-command-grid, .market-command-layout, .market-pulse-grid, .pulse-chart-grid, .asset-command-card, .signal-note-grid, .professional-grid-2, .professional-grid-3, .professional-grid-4, .desk-layout, .market-brain-system-grid, .chat-command-layout, .chat-prompt-grid, .chat-answer-grid, .chat-candidate-row, .chatgpt-shell, .chat-evidence-columns, .scenario-mini-grid, .compact-candidate, .asset-context-pill, .context-coverage { grid-template-columns: 1fr; }
   .chat-context-rail { position: static; }
   .chat-thread { max-height: none; }
   .tape-row { grid-template-columns: 1fr; }

@@ -157,6 +157,21 @@ The Learning page is intentionally reduced to three modes:
 
 Backend learning remains independent through APScheduler/autonomous jobs or explicit manual actions. The frontend observes snapshots and evidence; it does not train, recalculate, repair data or run pipelines during page render. If snapshots are stale while background recalculation is running, the UI shows the last snapshot timestamp and a stale-data warning instead of blocking first paint.
 
+## Deep Diagnostics UX
+
+Deep Diagnostics remains lazy-loaded and human-readable by default. Each advanced panel is opened explicitly with `Load panel`; no model, thesis, reliability, training-quality, decision, business, portfolio, capital-allocation or performance payload is fetched during the initial Learning Overview render.
+
+Diagnostic payloads are rendered as analytical summaries instead of API dumps:
+
+- metric cards expose the headline state, sample size and core scores;
+- evidence badges and reliability badges mark weak evidence, stale state and warning conditions;
+- Reliability by Regime renders a summary plus engine/signal/setup/regime tables;
+- Ensemble Status renders active engine counts, highest/lowest weighted engines, weight distribution and disagreement warnings;
+- unknown or newer diagnostic payloads fall back to a clean key-value summary and capped table view;
+- raw JSON is hidden behind `Show raw JSON` for developer inspection only.
+
+Weak sample sizes are treated as first-class evidence warnings. Deep Diagnostics is designed to answer what the payload means, whether the evidence is strong or weak, whether BLUM appears to be improving, what warning matters most and what should be checked next.
+
 ## Accuracy And Confidence Layer
 
 Blum separates opportunity scoring from evidence quality. The **Blum Intelligence Score** ranks research candidates. The **Blum Confidence Score** measures whether the evidence behind an asset is complete, current and internally consistent.
