@@ -22,7 +22,13 @@ const heavyLearningPostFragments = [
   "/api/alpha-recovery/methodology/validate",
   "/api/alpha-recovery/attribution/calculate",
   "/api/alpha-recovery/missed-winners/detect",
-  "/api/alpha-recovery/actions/generate"
+  "/api/alpha-recovery/actions/generate",
+  "/api/meta-cognition/recalculate",
+  "/api/meta-cognition/factor-importance/recalculate",
+  "/api/meta-cognition/evaluate",
+  "/api/meta-cognition/capital-preservation/evaluate",
+  "/api/meta-cognition/learning-focus/generate",
+  "/api/meta-cognition/noise/detect"
 ];
 const requestStats = {
   total: 0,
@@ -288,6 +294,18 @@ export const api = {
   alphaRecoveryMissedWinners: (limit = 80) => getJson<any>(`/api/alpha-recovery/missed-winners?limit=${limit}`),
   alphaRecoveryActions: (limit = 80) => getJson<any>(`/api/alpha-recovery/actions?limit=${limit}`),
   alphaRecoveryReplayPriorities: (limit = 30) => getJson<any>(`/api/alpha-recovery/replay-priorities?limit=${limit}`),
+  metaCognitionSummary: () => getJson<any>("/api/meta-cognition/summary"),
+  metaCognitionRecalculate: () => postJson<any>("/api/meta-cognition/recalculate", {}),
+  metaFactorImportance: (limit = 120) => getJson<any>(`/api/meta-cognition/factor-importance?limit=${limit}`),
+  recalculateMetaFactorImportance: () => postJson<any>("/api/meta-cognition/factor-importance/recalculate", {}),
+  metaCognitionEvents: (limit = 120) => getJson<any>(`/api/meta-cognition/events?limit=${limit}`),
+  evaluateMetaCognition: () => postJson<any>("/api/meta-cognition/evaluate", {}),
+  metaCapitalPreservation: (limit = 120) => getJson<any>(`/api/meta-cognition/capital-preservation?limit=${limit}`),
+  evaluateMetaCapitalPreservation: () => postJson<any>("/api/meta-cognition/capital-preservation/evaluate", {}),
+  metaLearningFocus: (limit = 80) => getJson<any>(`/api/meta-cognition/learning-focus?limit=${limit}`),
+  generateMetaLearningFocus: () => postJson<any>("/api/meta-cognition/learning-focus/generate", {}),
+  metaReasoningNoise: (limit = 80) => getJson<any>(`/api/meta-cognition/noise?limit=${limit}`),
+  detectMetaReasoningNoise: () => postJson<any>("/api/meta-cognition/noise/detect", {}),
   chartAnalyzeTicker: (ticker: string, timeframe = "6M", period = "1y", includeVisual = false) => getPostChart<ChartReport>(`/chart/analyze-ticker?ticker=${encodeURIComponent(ticker)}&timeframe=${encodeURIComponent(timeframe)}&period=${encodeURIComponent(period)}&include_visual=${includeVisual ? "true" : "false"}`),
   chartTechnicalReport: (ticker: string, timeframe = "6M") => getJson<ChartReport>(`/chart/technical-report/${encodeURIComponent(ticker)}?timeframe=${encodeURIComponent(timeframe)}`),
   chartLevels: (ticker: string, timeframe = "6M") => getJson<any>(`/chart/levels/${encodeURIComponent(ticker)}?timeframe=${encodeURIComponent(timeframe)}`),

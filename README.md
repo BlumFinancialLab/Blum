@@ -1136,6 +1136,69 @@ What it does not do:
 - it does not learn from invalid benchmark methodology;
 - it does not self-modify source code or apply irreversible rule changes.
 
+### Meta-Cognition Engine
+
+`Meta-Cognition Engine` teaches BLUM how to evaluate its own reasoning process. It does not ask only whether a trade worked; it asks which reasoning factor created value, which factor destroyed value, which factor was noisy and where the Learning Loop should focus next.
+
+It adds:
+
+- `LearningImportanceEngine`: measures factor-level contribution across technicals, momentum, volume, sentiment, narrative, fundamentals, business quality, regime, decision superiority, sniper score, entry/exit timing, no-trade filters, capital allocation, position sizing, portfolio interaction, alpha recovery and confidence calibration.
+- `CapitalPreservationAlphaEngine`: measures value created by not acting, separating avoided losses from missed gains and scoring no-trade quality.
+- `MetaCognitionEngine`: evaluates whether learning events, recovery actions and rule experiments improved future metrics or degraded them.
+- `LearningFocusOptimizer`: converts factor importance, alpha-loss evidence, missed winners, failed actions and no-trade mistakes into active Learning Loop sampling priorities.
+- `ReasoningNoiseDetector`: flags weak evidence, tiny-sample effects, overvalued factors, unstable factor contribution and false-confidence risk.
+
+Persisted evidence:
+
+- `learning_factor_importance`
+- `meta_cognition_events`
+- `capital_preservation_alpha`
+- `learning_focus_priorities`
+- `reasoning_noise_flags`
+- dashboard snapshot type `meta_cognition_summary`
+
+Main API:
+
+- `GET /api/meta-cognition/summary`
+- `GET /api/meta-cognition/factor-importance`
+- `POST /api/meta-cognition/factor-importance/recalculate`
+- `GET /api/meta-cognition/events`
+- `POST /api/meta-cognition/evaluate`
+- `GET /api/meta-cognition/capital-preservation`
+- `POST /api/meta-cognition/capital-preservation/evaluate`
+- `GET /api/meta-cognition/learning-focus`
+- `POST /api/meta-cognition/learning-focus/generate`
+- `GET /api/meta-cognition/noise`
+- `POST /api/meta-cognition/noise/detect`
+- `POST /api/meta-cognition/recalculate`
+
+Learning Loop integration remains blended and anti-overfit:
+
+- 40% broad random coverage;
+- 30% alpha-loss replay;
+- 20% factor-importance focus;
+- 10% no-trade / capital-preservation replay.
+
+The ratios are configurable through `LEARNING_RANDOM_SAMPLE_RATIO`, `LEARNING_ALPHA_LOSS_SAMPLE_RATIO`, `LEARNING_FACTOR_FOCUS_SAMPLE_RATIO` and `LEARNING_CAPITAL_PRESERVATION_SAMPLE_RATIO`.
+
+Frontend integration is snapshot-first. The Learning Overview shows a lightweight `What BLUM Should Learn Next` panel from `GET /api/learning-intelligence/summary`. Full factor tables, capital preservation evidence, focus priorities, noise flags and meta-cognition events are loaded only inside Deep Diagnostics through an explicit `Load panel` action.
+
+BLUM Chat can answer questions such as:
+
+- which factor is creating or destroying alpha;
+- which module is noisy;
+- what BLUM should study next;
+- which no-trade rule preserved the most capital;
+- whether learning actions improved or degraded outcomes.
+
+What it does not do:
+
+- it does not self-modify source code;
+- it does not apply risky factor-weight changes automatically;
+- it does not claim a factor creates alpha without benchmark-relative evidence;
+- it does not optimize from invalid benchmark methodology;
+- it does not hide insufficient sample size, noise or overfitting risk.
+
 ### Guardrails
 
 - No decision-superiority claim is valid with insufficient comparable samples.

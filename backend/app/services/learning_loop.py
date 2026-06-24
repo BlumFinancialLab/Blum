@@ -18,6 +18,8 @@ from app.models import (
     Asset,
     FundamentalSnapshot,
     HistoricalPrediction,
+    CapitalPreservationAlpha,
+    LearningFocusPriority,
     LearningEvent,
     LearningMetric,
     LearningRun,
@@ -31,6 +33,7 @@ from app.models import (
     PriceHistory,
     SignalPerformance,
     StrategyMemory,
+    TradingGameTrade,
 )
 from app.services.technical_analysis_engine import TechnicalAnalysisEngine
 
@@ -124,8 +127,7 @@ class LearningLoopService:
         seen_samples: set[tuple[str, str]] = set()
         for _ in range(batch):
             try:
-                sample = self.sampler.alpha_loss_sample(db, seen_samples=seen_samples) if trigger == "alpha_loss_replay" else None
-                sample = sample or self.sampler.random_sample(db, seen_samples=seen_samples)
+                sample = self.sampler.blended_sample(db, seen_samples=seen_samples, trigger=trigger)
                 if not sample:
                     errors.append({"stage": "sample", "error": "No eligible historical sample found."})
                     continue
@@ -305,6 +307,26 @@ class HistoricalSamplerService:
     def __init__(self) -> None:
         self.rng = random.Random(self.seed())
 
+    def blended_sample(self, db: Session, seen_samples: set[tuple[str, str]] | None = None, trigger: str = "manual") -> dict | None:
+        if trigger == "alpha_loss_replay":
+            return self.alpha_loss_sample(db, seen_samples=seen_samples) or self.random_sample(db, seen_samples=seen_samples)
+        roll = self.rng.random()
+        random_ratio = clamp_ratio(settings.learning_random_sample_ratio)
+        alpha_ratio = clamp_ratio(settings.learning_alpha_loss_sample_ratio)
+        factor_ratio = clamp_ratio(settings.learning_factor_focus_sample_ratio)
+        preservation_ratio = clamp_ratio(settings.learning_capital_preservation_sample_ratio)
+        total = max(0.01, random_ratio + alpha_ratio + factor_ratio + preservation_ratio)
+        random_cut = random_ratio / total
+        alpha_cut = random_cut + alpha_ratio / total
+        factor_cut = alpha_cut + factor_ratio / total
+        if roll < random_cut:
+            return self.random_sample(db, seen_samples=seen_samples)
+        if roll < alpha_cut:
+            return self.alpha_loss_sample(db, seen_samples=seen_samples) or self.random_sample(db, seen_samples=seen_samples)
+        if roll < factor_cut:
+            return self.focus_priority_sample(db, seen_samples=seen_samples) or self.random_sample(db, seen_samples=seen_samples)
+        return self.capital_preservation_sample(db, seen_samples=seen_samples) or self.random_sample(db, seen_samples=seen_samples)
+
     def alpha_loss_sample(self, db: Session, seen_samples: set[tuple[str, str]] | None = None) -> dict | None:
         missed = db.scalars(
             select(MissedWinner)
@@ -320,6 +342,54 @@ class HistoricalSamplerService:
                 sample["sampling_reason"] = "alpha_loss_replay"
                 sample["missed_winner_id"] = row.id
                 sample["benchmark_relative_return"] = row.benchmark_relative_return
+                return sample
+        return None
+
+    def focus_priority_sample(self, db: Session, seen_samples: set[tuple[str, str]] | None = None) -> dict | None:
+        priorities = db.scalars(
+            select(LearningFocusPriority)
+            .where(LearningFocusPriority.status.in_(["proposed", "active"]))
+            .order_by(desc(LearningFocusPriority.expected_learning_value), desc(LearningFocusPriority.created_at))
+            .limit(80)
+        ).all()
+        for priority in priorities:
+            target = str(priority.target or "").upper()
+            asset = db.scalar(select(Asset).where(Asset.ticker == target, Asset.is_active.is_(True)).limit(1))
+            if not asset:
+                asset = db.scalar(select(Asset).where(Asset.sector.ilike(priority.target), Asset.is_active.is_(True)).limit(1))
+            if not asset:
+                linked_trade = db.scalar(
+                    select(TradingGameTrade)
+                    .where(TradingGameTrade.setup_type == priority.target)
+                    .order_by(desc(TradingGameTrade.created_at))
+                    .limit(1)
+                )
+                asset = db.scalar(select(Asset).where(Asset.ticker == linked_trade.ticker, Asset.is_active.is_(True)).limit(1)) if linked_trade else None
+            if not asset:
+                continue
+            sample = self.sample_for_asset(db, asset, preferred_date=None, seen_samples=seen_samples)
+            if sample:
+                sample["sampling_reason"] = "learning_focus_priority"
+                sample["learning_focus_priority_id"] = priority.id
+                sample["priority_type"] = priority.priority_type
+                return sample
+        return None
+
+    def capital_preservation_sample(self, db: Session, seen_samples: set[tuple[str, str]] | None = None) -> dict | None:
+        rows = db.scalars(
+            select(CapitalPreservationAlpha)
+            .where(CapitalPreservationAlpha.missed_gain > CapitalPreservationAlpha.avoided_loss)
+            .order_by(desc(CapitalPreservationAlpha.missed_gain), desc(CapitalPreservationAlpha.created_at))
+            .limit(80)
+        ).all()
+        for row in rows:
+            asset = db.scalar(select(Asset).where(Asset.ticker == row.ticker, Asset.is_active.is_(True)).limit(1))
+            if not asset:
+                continue
+            sample = self.sample_for_asset(db, asset, preferred_date=as_date(row.decision_date), seen_samples=seen_samples)
+            if sample:
+                sample["sampling_reason"] = "capital_preservation_replay"
+                sample["capital_preservation_alpha_id"] = row.id
                 return sample
         return None
 
@@ -1534,6 +1604,10 @@ def safe_float(value) -> float:
 
 def clamp(value: float, low: float = 0.0, high: float = 100.0) -> float:
     return max(low, min(high, float(value)))
+
+
+def clamp_ratio(value: float) -> float:
+    return max(0.0, min(1.0, safe_float(value)))
 
 
 def round_float(value) -> float | None:

@@ -511,7 +511,7 @@ class ChartAnalysis(Base):
     ticker: Mapped[str | None] = mapped_column(String(32), index=True)
     timeframe: Mapped[str] = mapped_column(String(40), default="6M", index=True)
     period: Mapped[str] = mapped_column(String(40), default="1y", index=True)
-    image_hash: Mapped[str | None] = mapped_column(String(128), index=True)
+    image_hash: Mapped[str | None] = mapped_column(String(128))
     model_used: Mapped[str] = mapped_column(String(180), default="deterministic_technical_analysis", index=True)
     visual_analysis_json: Mapped[dict] = mapped_column(JsonType, default=dict)
     deterministic_analysis_json: Mapped[dict] = mapped_column(JsonType, default=dict)
@@ -1167,7 +1167,7 @@ class CompetingThesis(Base):
     supporting_evidence_json: Mapped[dict] = mapped_column(JsonType, default=dict)
     contradicting_evidence_json: Mapped[dict] = mapped_column(JsonType, default=dict)
     confidence: Mapped[float] = mapped_column(Float, default=0.0, index=True)
-    judge_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    judge_score: Mapped[float] = mapped_column(Float, default=0.0)
     invalidation_conditions_json: Mapped[dict] = mapped_column(JsonType, default=dict)
     expected_horizon: Mapped[str] = mapped_column(String(80), default="multi", index=True)
     outcome_status: Mapped[str] = mapped_column(String(40), default="pending", index=True)
@@ -2639,7 +2639,7 @@ class PortfolioCorrelation(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     calculated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
-    scope: Mapped[str] = mapped_column(String(120), default="active_game", index=True)
+    scope: Mapped[str] = mapped_column(String(120), default="active_game")
     asset_a: Mapped[str] = mapped_column(String(32), index=True)
     asset_b: Mapped[str] = mapped_column(String(32), index=True)
     correlation: Mapped[float | None] = mapped_column(Float, index=True)
@@ -2852,6 +2852,139 @@ class AlphaRecoveryAction(Base):
     priority: Mapped[str] = mapped_column(String(40), default="medium", index=True)
     validation_status: Mapped[str] = mapped_column(String(80), default="untested", index=True)
     evidence_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+
+
+class LearningFactorImportance(Base):
+    __tablename__ = "learning_factor_importance"
+    __table_args__ = (
+        Index("ix_learning_factor_importance_factor_created", "factor_name", "calculated_at"),
+        Index("ix_learning_factor_importance_scope", "factor_family", "horizon", "regime", "sector"),
+        Index("ix_learning_factor_importance_reliability", "reliability_score", "confidence"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    calculated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    factor_name: Mapped[str] = mapped_column(String(120), index=True)
+    factor_family: Mapped[str] = mapped_column(String(120), index=True)
+    horizon: Mapped[str | None] = mapped_column(String(80), index=True)
+    regime: Mapped[str | None] = mapped_column(String(120), index=True)
+    sector: Mapped[str | None] = mapped_column(String(120), index=True)
+    sample_size: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    alpha_contribution: Mapped[float] = mapped_column(Float, default=0.0)
+    alpha_loss_contribution: Mapped[float] = mapped_column(Float, default=0.0)
+    missed_winner_contribution: Mapped[float] = mapped_column(Float, default=0.0)
+    capital_preservation_contribution: Mapped[float] = mapped_column(Float, default=0.0)
+    noise_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    overvaluation_score: Mapped[float] = mapped_column(Float, default=0.0)
+    undervaluation_score: Mapped[float] = mapped_column(Float, default=0.0)
+    reliability_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    evidence_quality: Mapped[float] = mapped_column(Float, default=0.0)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    recommended_weight_action: Mapped[str] = mapped_column(String(80), default="freeze_until_more_samples", index=True)
+    explanation: Mapped[str] = mapped_column(Text, default="")
+    warnings_json: Mapped[list] = mapped_column(JsonType, default=list)
+
+
+class MetaCognitionEvent(Base):
+    __tablename__ = "meta_cognition_events"
+    __table_args__ = (
+        Index("ix_meta_cognition_events_module_created", "evaluated_module", "created_at"),
+        Index("ix_meta_cognition_events_outcome", "improvement_observed", "degradation_observed", "confidence"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    source_event_type: Mapped[str] = mapped_column(String(120), index=True)
+    source_event_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    evaluated_module: Mapped[str] = mapped_column(String(120), index=True)
+    evaluated_action: Mapped[str] = mapped_column(Text, default="")
+    before_metric: Mapped[float | None] = mapped_column(Float)
+    after_metric: Mapped[float | None] = mapped_column(Float)
+    delta: Mapped[float | None] = mapped_column(Float, index=True)
+    sample_size: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    benchmark_context: Mapped[dict] = mapped_column(JsonType, default=dict)
+    live_or_historical: Mapped[str] = mapped_column(String(80), default="historical", index=True)
+    improvement_observed: Mapped[bool | None] = mapped_column(Boolean, index=True)
+    degradation_observed: Mapped[bool | None] = mapped_column(Boolean, index=True)
+    overfitting_risk: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    conclusion: Mapped[str] = mapped_column(Text, default="")
+    recommended_next_step: Mapped[str] = mapped_column(Text, default="")
+    notes_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+
+
+class CapitalPreservationAlpha(Base):
+    __tablename__ = "capital_preservation_alpha"
+    __table_args__ = (
+        Index("ix_capital_preservation_ticker_date", "ticker", "decision_date"),
+        Index("ix_capital_preservation_quality", "was_correct", "quality_score"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    no_trade_decision_id: Mapped[int | None] = mapped_column(ForeignKey("trading_game_trades.id", ondelete="SET NULL"), index=True)
+    ticker: Mapped[str] = mapped_column(String(32), index=True)
+    decision_date: Mapped[datetime | None] = mapped_column(Date, index=True)
+    setup_type: Mapped[str | None] = mapped_column(String(120), index=True)
+    no_trade_reason: Mapped[str] = mapped_column(Text, default="")
+    horizon: Mapped[str | None] = mapped_column(String(80), index=True)
+    future_return: Mapped[float | None] = mapped_column(Float)
+    benchmark_return: Mapped[float | None] = mapped_column(Float)
+    avoided_loss: Mapped[float] = mapped_column(Float, default=0.0)
+    missed_gain: Mapped[float] = mapped_column(Float, default=0.0)
+    capital_preserved: Mapped[float] = mapped_column(Float, default=0.0)
+    opportunity_cost: Mapped[float] = mapped_column(Float, default=0.0)
+    was_correct: Mapped[bool | None] = mapped_column(Boolean, index=True)
+    quality_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    explanation: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    no_trade_decision = relationship("TradingGameTrade")
+
+
+class LearningFocusPriority(Base):
+    __tablename__ = "learning_focus_priorities"
+    __table_args__ = (
+        Index("ix_learning_focus_status_urgency", "status", "urgency"),
+        Index("ix_learning_focus_type_target", "priority_type", "target"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    priority_type: Mapped[str] = mapped_column(String(120), index=True)
+    target: Mapped[str] = mapped_column(String(180), index=True)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    expected_learning_value: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    urgency: Mapped[str] = mapped_column(String(40), default="medium", index=True)
+    sample_gap: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    linked_alpha_loss_id: Mapped[int | None] = mapped_column(ForeignKey("alpha_loss_attributions.id", ondelete="SET NULL"), index=True)
+    linked_factor_importance_id: Mapped[int | None] = mapped_column(ForeignKey("learning_factor_importance.id", ondelete="SET NULL"), index=True)
+    linked_recovery_action_id: Mapped[int | None] = mapped_column(ForeignKey("alpha_recovery_actions.id", ondelete="SET NULL"), index=True)
+    status: Mapped[str] = mapped_column(String(80), default="proposed", index=True)
+    notes_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+
+    linked_alpha_loss = relationship("AlphaLossAttribution")
+    linked_factor_importance = relationship("LearningFactorImportance")
+    linked_recovery_action = relationship("AlphaRecoveryAction")
+
+
+class ReasoningNoiseFlag(Base):
+    __tablename__ = "reasoning_noise_flags"
+    __table_args__ = (
+        Index("ix_reasoning_noise_factor_created", "factor_name", "created_at"),
+        Index("ix_reasoning_noise_status_severity", "status", "severity"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    factor_name: Mapped[str] = mapped_column(String(120), index=True)
+    module_name: Mapped[str] = mapped_column(String(120), index=True)
+    noise_type: Mapped[str] = mapped_column(String(120), index=True)
+    sample_size: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    evidence: Mapped[dict] = mapped_column(JsonType, default=dict)
+    severity: Mapped[str] = mapped_column(String(40), default="medium", index=True)
+    recommended_action: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(80), default="open", index=True)
+    explanation: Mapped[str] = mapped_column(Text, default="")
 
 
 class OpportunityCapitalScore(Base):

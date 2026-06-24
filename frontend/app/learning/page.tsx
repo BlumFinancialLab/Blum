@@ -314,6 +314,8 @@ function OverviewTab({ summary, loading, error, truthPanel, onRefresh }: { summa
           </div>
         </div>
       </section>
+
+      <MetaLearningPanel payload={summary?.what_blum_should_learn_next} />
     </>
   );
 }
@@ -401,6 +403,7 @@ function DeepDiagnosticsTab({ diagnostics, loadPanel }: { diagnostics: Record<st
     { id: "portfolio_intelligence", title: "Portfolio Intelligence", loader: () => api.portfolioIntelligenceDashboard(), summary: objectSummary },
     { id: "capital_allocation", title: "Capital Allocation", loader: () => api.capitalAllocationDashboard(), summary: objectSummary },
     { id: "alpha_recovery", title: "Alpha Recovery", loader: () => api.alphaRecoveryDashboard(), summary: alphaRecoverySummary },
+    { id: "meta_cognition", title: "Meta-Cognition Lab", loader: () => api.metaCognitionSummary(), summary: metaCognitionSummary },
     { id: "performance_diagnostics", title: "Performance Diagnostics", loader: () => api.performanceDiagnostics(), summary: performanceSummary },
   ];
 
@@ -428,6 +431,62 @@ function DeepDiagnosticsTab({ diagnostics, loadPanel }: { diagnostics: Record<st
           </AsyncPanel>
         );
       })}
+    </section>
+  );
+}
+
+function MetaLearningPanel({ payload }: { payload: any }) {
+  const topAlpha = payload?.top_alpha_factor ?? payload?.top_alpha_creating_factor;
+  const destroyer = payload?.top_alpha_destroyer ?? payload?.top_alpha_destroying_factor;
+  const noisy = payload?.noisiest_factor;
+  const undervalued = payload?.most_undervalued_factor;
+  const preservation = payload?.strongest_capital_preservation_rule;
+  const focus = payload?.next_learning_focus;
+  const conclusion = payload?.meta_cognition_conclusion;
+  return (
+    <section className="panel" style={{ marginTop: 12 }}>
+      <div className="panel-head">
+        <span>What BLUM Should Learn Next</span>
+        <strong>snapshot only</strong>
+      </div>
+      <div className="grid-3">
+        <div className="brain-list dense">
+          <div>
+            <StatusBadge label="alpha creator" />
+            <strong>{factorTitle(topAlpha)}</strong>
+            <p>Contribution {formatNumber(topAlpha?.alpha_contribution)} | samples {topAlpha?.sample_size ?? "n/a"} | action {topAlpha?.recommended_weight_action ?? "n/a"}</p>
+          </div>
+          <div>
+            <StatusBadge label="alpha destroyer" />
+            <strong>{factorTitle(destroyer)}</strong>
+            <p>Loss {formatNumber(destroyer?.alpha_loss_contribution)} | noise {formatNumber(destroyer?.noise_score)}/100 | action {destroyer?.recommended_weight_action ?? "n/a"}</p>
+          </div>
+        </div>
+        <div className="brain-list dense">
+          <div>
+            <StatusBadge label="noise" />
+            <strong>{factorTitle(noisy)}</strong>
+            <p>{noisy?.explanation ?? noisy?.recommended_action ?? "No noisy factor snapshot yet."}</p>
+          </div>
+          <div>
+            <StatusBadge label="undervalued" />
+            <strong>{factorTitle(undervalued)}</strong>
+            <p>Undervaluation {formatNumber(undervalued?.undervaluation_score)}/100 | confidence {formatNumber(undervalued?.confidence)}/100</p>
+          </div>
+        </div>
+        <div className="brain-list dense">
+          <div>
+            <StatusBadge label="capital preservation" />
+            <strong>{preservation?.ticker ?? preservation?.factor_name ?? "No preserved-capital rule yet"}</strong>
+            <p>Preserved {formatCurrency(preservation?.capital_preserved)} | opportunity cost {formatCurrency(preservation?.opportunity_cost)} | quality {formatNumber(preservation?.quality_score)}/100</p>
+          </div>
+          <div>
+            <StatusBadge label="next focus" />
+            <strong>{focus?.target ?? "No active focus priority"}</strong>
+            <p>{focus?.reason ?? conclusion?.summary ?? "Meta-cognition will populate this after background recalculation."}</p>
+          </div>
+        </div>
+      </div>
     </section>
   );
 }
@@ -525,6 +584,20 @@ function alphaRecoverySummary(data: any) {
   const actions = data?.recovery_actions?.rows ?? [];
   if (truth.length) return truth[0];
   return `${missed.length} missed winners, ${actions.length} recovery actions`;
+}
+
+function metaCognitionSummary(data: any) {
+  const snapshot = data?.snapshot?.payload ?? {};
+  const focus = snapshot?.next_learning_focus ?? data?.learning_focus?.rows?.[0];
+  const destroyer = snapshot?.top_alpha_destroyer ?? data?.factor_importance?.summary?.top_alpha_destroyers?.[0];
+  if (focus?.target) return `Next focus: ${focus.target}`;
+  if (destroyer?.factor_name) return `Top alpha destroyer: ${destroyer.factor_name}`;
+  return data?.conclusion?.summary ?? "Meta-cognition evidence loaded";
+}
+
+function factorTitle(row: any) {
+  if (!row) return "No evidence yet";
+  return String(row.factor_name ?? row.module_name ?? row.ticker ?? row.target ?? "No evidence yet").replaceAll("_", " ");
 }
 
 function compactPreview(data: any) {

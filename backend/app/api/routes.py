@@ -41,6 +41,7 @@ from app.models import (
     BusinessQualityScore,
     CapitalAllocationSnapshot,
     CapitalInteractionRisk,
+    CapitalPreservationAlpha,
     CashAllocationDecision,
     ChartAnalysis,
     ChartPatternMemory,
@@ -106,6 +107,9 @@ from app.models import (
     HistoricalLiveComparison,
     EquityCurveAnnotation,
     LearningBenchmarkComparison,
+    LearningFactorImportance,
+    LearningFocusPriority,
+    MetaCognitionEvent,
     MetaLearningEvent,
     LearningProgressSnapshot,
     LearningStrengthWeaknessMap,
@@ -122,6 +126,7 @@ from app.models import (
     SizingLogicAllocation,
     RankingAccuracyMetric,
     SelfImprovementAction,
+    ReasoningNoiseFlag,
     ThesisCompetition,
     ThesisConvictionHistory,
     ThesisLifecycleEvent,
@@ -202,6 +207,13 @@ from app.services.macro import macro_overview, update_macro_snapshots
 from app.services.market_brain import build_market_brain, latest_market_brain, market_brain_history
 from app.services.market_data import MarketDataService, market_snapshot_for_asset
 from app.services.market_sniper import MarketSniperEngine
+from app.services.meta_cognition import (
+    CapitalPreservationAlphaEngine,
+    LearningFocusOptimizer,
+    LearningImportanceEngine,
+    MetaCognitionEngine,
+    ReasoningNoiseDetector,
+)
 from app.services.persistence import backup_embedded_postgres_if_configured, database_persistence_status
 from app.services.pipeline import PipelineService
 from app.services.realtime import realtime_status
@@ -1245,6 +1257,66 @@ def alpha_recovery_generate_actions(db: Session = Depends(get_db)) -> dict:
 @router.get("/api/alpha-recovery/replay-priorities")
 def alpha_recovery_replay_priorities(limit: int = Query(default=30, ge=1, le=100), db: Session = Depends(get_db)) -> dict:
     return AlphaRecoveryActionEngine().replay_priorities(db, limit=limit)
+
+
+@router.get("/api/meta-cognition/summary")
+def meta_cognition_summary(db: Session = Depends(get_db)) -> dict:
+    return MetaCognitionEngine().summary(db)
+
+
+@router.get("/api/meta-cognition/factor-importance")
+def meta_cognition_factor_importance(limit: int = Query(default=120, ge=1, le=400), db: Session = Depends(get_db)) -> dict:
+    return LearningImportanceEngine().latest(db, limit=limit)
+
+
+@router.post("/api/meta-cognition/factor-importance/recalculate")
+def meta_cognition_factor_importance_recalculate(db: Session = Depends(get_db)) -> dict:
+    return LearningImportanceEngine().recalculate(db, persist=True)
+
+
+@router.get("/api/meta-cognition/events")
+def meta_cognition_events(limit: int = Query(default=120, ge=1, le=400), db: Session = Depends(get_db)) -> dict:
+    return MetaCognitionEngine().events(db, limit=limit)
+
+
+@router.post("/api/meta-cognition/evaluate")
+def meta_cognition_evaluate(db: Session = Depends(get_db)) -> dict:
+    return MetaCognitionEngine().evaluate(db, persist=True)
+
+
+@router.post("/api/meta-cognition/recalculate")
+def meta_cognition_recalculate(db: Session = Depends(get_db)) -> dict:
+    return MetaCognitionEngine().recalculate_all(db)
+
+
+@router.get("/api/meta-cognition/capital-preservation")
+def meta_cognition_capital_preservation(limit: int = Query(default=120, ge=1, le=400), db: Session = Depends(get_db)) -> dict:
+    return CapitalPreservationAlphaEngine().latest(db, limit=limit)
+
+
+@router.post("/api/meta-cognition/capital-preservation/evaluate")
+def meta_cognition_capital_preservation_evaluate(db: Session = Depends(get_db)) -> dict:
+    return CapitalPreservationAlphaEngine().evaluate(db, persist=True)
+
+
+@router.get("/api/meta-cognition/learning-focus")
+def meta_cognition_learning_focus(limit: int = Query(default=80, ge=1, le=300), db: Session = Depends(get_db)) -> dict:
+    return LearningFocusOptimizer().latest(db, limit=limit)
+
+
+@router.post("/api/meta-cognition/learning-focus/generate")
+def meta_cognition_learning_focus_generate(db: Session = Depends(get_db)) -> dict:
+    return LearningFocusOptimizer().generate(db, persist=True)
+
+
+@router.get("/api/meta-cognition/noise")
+def meta_cognition_noise(limit: int = Query(default=80, ge=1, le=300), db: Session = Depends(get_db)) -> dict:
+    return ReasoningNoiseDetector().latest(db, limit=limit)
+
+
+@router.post("/api/meta-cognition/noise/detect")
+def meta_cognition_noise_detect(db: Session = Depends(get_db)) -> dict:
+    return ReasoningNoiseDetector().detect(db, persist=True)
 
 
 @router.get("/api/decision-intelligence/dashboard")

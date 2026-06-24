@@ -3,15 +3,19 @@ from __future__ import annotations
 from datetime import datetime
 import time
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, inspect, select
 from sqlalchemy.orm import Session
 
 from app.models import (
     BlumTradingPowerScore,
     DashboardSnapshot,
+    CapitalPreservationAlpha,
     LearningBenchmarkComparison,
+    LearningFactorImportance,
+    LearningFocusPriority,
     LearningRun,
     LearningStrengthWeaknessMap,
+    ReasoningNoiseFlag,
     TradingCapitalCycle,
     TradingGame,
     TradingIntelligenceMetric,
@@ -39,6 +43,7 @@ class LearningSummaryService:
             "benchmark_summary",
             "intelligence_growth_summary",
             "truth_panel_summary",
+            "meta_cognition_summary",
         ]
         snapshots = {snapshot_type: DashboardSnapshotService().latest(db, snapshot_type) for snapshot_type in snapshot_types}
         stale_snapshots = [snapshot_type for snapshot_type, payload in snapshots.items() if payload.get("status") == "stale"]
@@ -84,8 +89,11 @@ class LearningSummaryService:
             missing_sections.append("benchmark_summary")
 
         live_snapshot = DashboardSnapshotService().latest(db, "live_vs_historical_summary")
+        meta_snapshot = snapshots.get("meta_cognition_summary") or {}
         if live_snapshot["status"] == "missing":
             warnings.append("Live vs historical summary snapshot is missing.")
+        if meta_snapshot.get("status") == "missing":
+            warnings.append("Meta-Cognition summary snapshot is missing.")
 
         current_capital = getattr(current_cycle, "final_capital", None) if current_cycle else getattr(game, "current_capital", None)
         target_capital = getattr(current_cycle, "target_capital", None) if current_cycle else getattr(game, "target_capital", None)
@@ -121,6 +129,7 @@ class LearningSummaryService:
             "top_weakness": serialize_weakness(top_weakness),
             "latest_lesson_learned": serialize_lesson(latest_lesson),
             "truth_panel": truth_panel_lines,
+            "what_blum_should_learn_next": what_blum_should_learn_next(db, meta_snapshot),
             "backend_training_status": backend_training_status,
             "last_snapshot_timestamp": last_snapshot_timestamp,
             "snapshots": summarize_snapshots(snapshots),
@@ -191,6 +200,160 @@ def build_truth_panel(power: BlumTradingPowerScore | None, benchmark_summary: di
             output.append(f"BLUM vs {name}: {label}; no strong conclusion.")
     output.extend(warnings[:3])
     return output[:7]
+
+
+def what_blum_should_learn_next(db: Session, meta_snapshot: dict) -> dict:
+    snapshot_payload = meta_snapshot.get("payload") or {}
+    if snapshot_payload:
+        return {
+            "status": meta_snapshot.get("status", "ready"),
+            "top_alpha_creating_factor": compact_factor(snapshot_payload.get("top_alpha_factor")),
+            "top_alpha_destroying_factor": compact_factor(snapshot_payload.get("top_alpha_destroyer")),
+            "noisiest_factor": compact_factor(snapshot_payload.get("noisiest_factor")),
+            "most_undervalued_factor": compact_factor(snapshot_payload.get("most_undervalued_factor")),
+            "strongest_capital_preservation_rule": compact_preservation(snapshot_payload.get("strongest_capital_preservation_rule")),
+            "weakest_current_module": compact_noise(snapshot_payload.get("weakest_current_module")),
+            "next_learning_focus": compact_focus(snapshot_payload.get("next_learning_focus")),
+            "conclusion": snapshot_payload.get("meta_cognition_conclusion", {}).get("summary") or "Meta-Cognition snapshot available.",
+            "source": "snapshot",
+        }
+    if not all(table_exists(db, model.__tablename__) for model in [LearningFactorImportance, LearningFocusPriority, ReasoningNoiseFlag, CapitalPreservationAlpha]):
+        return {
+            "status": "missing",
+            "top_alpha_creating_factor": None,
+            "top_alpha_destroying_factor": None,
+            "noisiest_factor": None,
+            "most_undervalued_factor": None,
+            "strongest_capital_preservation_rule": None,
+            "weakest_current_module": None,
+            "next_learning_focus": None,
+            "conclusion": "Meta-Cognition tables are not available yet; showing the rest of the Learning snapshot without recalculation.",
+            "source": "schema_not_ready",
+        }
+    factor_rows = db.scalars(select(LearningFactorImportance).order_by(desc(LearningFactorImportance.calculated_at)).limit(40)).all()
+    focus = db.scalar(
+        select(LearningFocusPriority)
+        .where(LearningFocusPriority.status.in_(["proposed", "active"]))
+        .order_by(desc(LearningFocusPriority.expected_learning_value), desc(LearningFocusPriority.created_at))
+        .limit(1)
+    )
+    noise = db.scalar(select(ReasoningNoiseFlag).where(ReasoningNoiseFlag.status == "open").order_by(desc(ReasoningNoiseFlag.created_at)).limit(1))
+    preservation = db.scalar(select(CapitalPreservationAlpha).order_by(desc(CapitalPreservationAlpha.capital_preserved), desc(CapitalPreservationAlpha.created_at)).limit(1))
+    top_alpha = max(factor_rows, key=lambda row: row.alpha_contribution, default=None)
+    top_loss = max(factor_rows, key=lambda row: row.alpha_loss_contribution, default=None)
+    noisiest = max(factor_rows, key=lambda row: row.noise_score, default=None)
+    undervalued = max(factor_rows, key=lambda row: row.undervaluation_score, default=None)
+    return {
+        "status": "ready" if factor_rows or focus or noise or preservation else "missing",
+        "top_alpha_creating_factor": compact_factor_obj(top_alpha),
+        "top_alpha_destroying_factor": compact_factor_obj(top_loss),
+        "noisiest_factor": compact_factor_obj(noisiest),
+        "most_undervalued_factor": compact_factor_obj(undervalued),
+        "strongest_capital_preservation_rule": compact_preservation_obj(preservation),
+        "weakest_current_module": compact_noise_obj(noise),
+        "next_learning_focus": compact_focus_obj(focus),
+        "conclusion": "Meta-Cognition snapshot missing; showing latest stored evidence only." if factor_rows else "Meta-Cognition evidence is not available yet.",
+        "source": "latest_rows_no_recalculation",
+    }
+
+
+def table_exists(db: Session, table_name: str) -> bool:
+    try:
+        return inspect(db.get_bind()).has_table(table_name)
+    except Exception:
+        return False
+
+
+def compact_factor(item: dict | None) -> dict | None:
+    if not item:
+        return None
+    return {
+        "factor_name": item.get("factor_name"),
+        "sample_size": item.get("sample_size"),
+        "confidence": item.get("confidence"),
+        "recommended_weight_action": item.get("recommended_weight_action"),
+        "alpha_contribution": item.get("alpha_contribution"),
+        "alpha_loss_contribution": item.get("alpha_loss_contribution"),
+        "noise_score": item.get("noise_score"),
+    }
+
+
+def compact_factor_obj(row: LearningFactorImportance | None) -> dict | None:
+    return compact_factor({
+        "factor_name": row.factor_name,
+        "sample_size": row.sample_size,
+        "confidence": row.confidence,
+        "recommended_weight_action": row.recommended_weight_action,
+        "alpha_contribution": row.alpha_contribution,
+        "alpha_loss_contribution": row.alpha_loss_contribution,
+        "noise_score": row.noise_score,
+    }) if row else None
+
+
+def compact_focus(item: dict | None) -> dict | None:
+    if not item:
+        return None
+    return {
+        "priority_type": item.get("priority_type"),
+        "target": item.get("target"),
+        "expected_learning_value": item.get("expected_learning_value"),
+        "urgency": item.get("urgency"),
+        "reason": item.get("reason"),
+    }
+
+
+def compact_focus_obj(row: LearningFocusPriority | None) -> dict | None:
+    return compact_focus({
+        "priority_type": row.priority_type,
+        "target": row.target,
+        "expected_learning_value": row.expected_learning_value,
+        "urgency": row.urgency,
+        "reason": row.reason,
+    }) if row else None
+
+
+def compact_preservation(item: dict | None) -> dict | None:
+    if not item:
+        return None
+    return {
+        "ticker": item.get("ticker"),
+        "setup_type": item.get("setup_type"),
+        "capital_preserved": item.get("capital_preserved"),
+        "opportunity_cost": item.get("opportunity_cost"),
+        "quality_score": item.get("quality_score"),
+    }
+
+
+def compact_preservation_obj(row: CapitalPreservationAlpha | None) -> dict | None:
+    return compact_preservation({
+        "ticker": row.ticker,
+        "setup_type": row.setup_type,
+        "capital_preserved": row.capital_preserved,
+        "opportunity_cost": row.opportunity_cost,
+        "quality_score": row.quality_score,
+    }) if row else None
+
+
+def compact_noise(item: dict | None) -> dict | None:
+    if not item:
+        return None
+    return {
+        "factor_name": item.get("factor_name"),
+        "module_name": item.get("module_name"),
+        "noise_type": item.get("noise_type"),
+        "severity": item.get("severity"),
+        "recommended_action": item.get("recommended_action"),
+    }
+
+
+def compact_noise_obj(row: ReasoningNoiseFlag | None) -> dict | None:
+    return compact_noise({
+        "factor_name": row.factor_name,
+        "module_name": row.module_name,
+        "noise_type": row.noise_type,
+        "severity": row.severity,
+        "recommended_action": row.recommended_action,
+    }) if row else None
 
 
 def safe_progress(capital: float | None, target: float | None) -> float | None:
