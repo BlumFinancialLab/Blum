@@ -37,6 +37,8 @@ const requestStats = {
   cacheHits: 0,
   initialLearningPage: [] as Array<{ path: string; method: string; duration_ms: number; status: string; duplicate?: boolean; cache_hit?: boolean }>
 };
+let learningPagePath = "";
+let learningPageStartedAt: number | null = null;
 
 async function getJson<T>(path: string): Promise<T> {
   const response = await fetchBlum(path, { method: "GET", cacheTtlMs: 2500, timeoutMs: 12000 });
@@ -147,15 +149,31 @@ function reportFrontendTiming(path: string, method: string, duration_ms: number,
 }
 
 function recordInitialLearningRequest(path: string, method: string, duration_ms: number, status: string, duplicate: boolean, cache_hit: boolean) {
-  if (typeof location === "undefined" || !location.pathname.startsWith("/learning")) return;
+  if (!isWithinLearningInitialWindow()) return;
   requestStats.initialLearningPage.push({ path, method, duration_ms: Number(duration_ms.toFixed(2)), status, duplicate, cache_hit });
   if (requestStats.initialLearningPage.length > 160) requestStats.initialLearningPage.shift();
 }
 
 function shouldBlockLearningHeavyPost(path: string) {
   if (typeof location === "undefined" || !location.pathname.startsWith("/learning")) return false;
-  if (typeof performance === "undefined" || performance.now() > LEARNING_INITIAL_RENDER_GUARD_MS) return false;
+  if (!isWithinLearningInitialWindow()) return false;
   return heavyLearningPostFragments.some((fragment) => path.includes(fragment));
+}
+
+function isWithinLearningInitialWindow() {
+  if (typeof location === "undefined" || !location.pathname.startsWith("/learning")) {
+    learningPagePath = "";
+    learningPageStartedAt = null;
+    return false;
+  }
+  const currentPath = `${location.pathname}${location.search}`;
+  const currentTime = nowMs();
+  if (learningPagePath !== currentPath || learningPageStartedAt === null) {
+    learningPagePath = currentPath;
+    learningPageStartedAt = currentTime;
+    requestStats.initialLearningPage = [];
+  }
+  return currentTime - learningPageStartedAt <= LEARNING_INITIAL_RENDER_GUARD_MS;
 }
 
 function nowMs() {
