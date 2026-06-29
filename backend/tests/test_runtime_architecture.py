@@ -60,6 +60,19 @@ def test_background_job_state_records_start_complete_and_budget_stop():
         assert service.should_stop(time.perf_counter(), 5, max_items=5, max_seconds=100) is True
 
 
+def test_background_job_state_recovers_interrupted_running_jobs():
+    with setup_db() as db:
+        service = BackgroundJobStateService()
+        service.start(db, "autonomous_research_engine", max_items=4)
+
+        recovered = service.recover_interrupted(db, reason="test_restart")
+        row = db.scalar(select(BackgroundJobState).where(BackgroundJobState.job_name == "autonomous_research_engine"))
+
+        assert recovered["recovered"] == 1
+        assert row.status == "interrupted"
+        assert row.error_message == "test_restart"
+
+
 def test_snapshot_producer_writes_missing_sections_and_watchdog_detects_stale():
     with setup_db() as db:
         produced = SnapshotProducerService().produce(db, "benchmark_summary")

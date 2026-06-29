@@ -178,6 +178,30 @@ class BackgroundJobStateService:
         BrainEventBus().publish(db, "module_failed", job_name, status="error", duration_ms=duration_ms, error_message=error_message)
         return row
 
+    def recover_interrupted(self, db: Session, *, reason: str = "process_startup_recovery") -> dict:
+        """Mark stale in-process jobs as interrupted after a process restart."""
+
+        now = datetime.utcnow()
+        rows = db.scalars(select(BackgroundJobState).where(BackgroundJobState.status == "running")).all()
+        recovered = []
+        for row in rows:
+            row.status = "interrupted"
+            row.last_completed_at = now
+            if row.last_started_at:
+                row.duration_ms = max(0.0, (now - row.last_started_at).total_seconds() * 1000)
+            row.error_message = reason
+            recovered.append({"job_name": row.job_name, "stage_name": row.stage_name})
+        db.commit()
+        if recovered:
+            BrainEventBus().publish(
+                db,
+                "worker_recovered",
+                "runtime_startup",
+                status="ok",
+                payload={"recovered_interrupted_jobs": recovered, "reason": reason},
+            )
+        return {"recovered": len(recovered), "jobs": recovered, "reason": reason}
+
     def list(self, db: Session, limit: int = 80) -> list[dict]:
         rows = db.scalars(select(BackgroundJobState).order_by(desc(BackgroundJobState.last_started_at)).limit(limit)).all()
         return [serialize_job(row) for row in rows]

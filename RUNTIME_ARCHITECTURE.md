@@ -128,6 +128,7 @@ It replaces the scheduler-wide lock with worker-name isolation:
 - `snapshot_producer` no longer blocks `blum_professional_learning_cycle`;
 - `runtime_snapshot_watchdog` no longer blocks `market_refresh`;
 - state is visible through `running_jobs`, `running_count` and `worker_registry`.
+- stale `running` job rows from a previous process are marked `interrupted` on startup.
 
 Registered workers include:
 
@@ -235,4 +236,3 @@ The new worker runtime is in-process and backward-compatible with APScheduler.
 - Central Brain reports active workers, missing snapshots, stale modules and readiness.
 
 No performance improvement should be claimed without live `/performance/diagnostics` measurements after deploy and warm-up.
-
