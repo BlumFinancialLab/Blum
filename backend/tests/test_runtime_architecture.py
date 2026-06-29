@@ -10,6 +10,7 @@ from app.models import BackgroundJobState, BrainRuntimeEvent, DashboardSnapshot
 from app.services.central_brain_runtime import (
     BackgroundJobStateService,
     BrainEventBus,
+    CRITICAL_SNAPSHOT_TYPES,
     CentralBrainRuntime,
     LearningHealthService,
     SnapshotProducerService,
@@ -86,6 +87,25 @@ def test_dashboard_snapshot_service_keeps_missing_sections_round_trip():
         assert latest["missing_sections"] == ["trading_game"]
 
 
+def test_dashboard_snapshot_service_serializes_datetime_payloads():
+    now = datetime(2026, 1, 2, 3, 4, 5)
+    with setup_db() as db:
+        DashboardSnapshotService().write(
+            db,
+            "dashboard_overview_summary",
+            {"generated_at": now, "rows": [{"created_at": now}]},
+            source_modules={"checked_at": now},
+            warnings=[{"created_at": now}],
+            ttl_seconds=60,
+        )
+        latest = DashboardSnapshotService().latest(db, "dashboard_overview_summary")
+
+        assert latest["payload"]["generated_at"] == "2026-01-02T03:04:05"
+        assert latest["payload"]["rows"][0]["created_at"] == "2026-01-02T03:04:05"
+        assert latest["source_modules"]["checked_at"] == "2026-01-02T03:04:05"
+        assert latest["warnings"][0]["created_at"] == "2026-01-02T03:04:05"
+
+
 def test_runtime_state_and_learning_health_work_with_empty_database():
     with setup_db() as db:
         state = CentralBrainRuntime().state(db)
@@ -104,3 +124,30 @@ def test_get_side_effect_detection_guard_is_in_middleware_source():
     assert "GET_ENDPOINT_SIDE_EFFECT_DETECTED" in text
     assert "X-BLUM-GET-SIDE-EFFECT-RISK" in text
     assert "persist=true" in text
+
+
+def test_dashboard_overview_snapshot_is_in_startup_warmup_budget():
+    assert "learning_summary" in CRITICAL_SNAPSHOT_TYPES[:8]
+    assert "dashboard_overview_summary" in CRITICAL_SNAPSHOT_TYPES[:8]
+
+
+def test_snapshot_producer_batch_continues_after_failed_snapshot(monkeypatch):
+    with setup_db() as db:
+        original_payload = SnapshotProducerService._payload
+
+        def fail_one(self, session, snapshot_type, missing_sections, warnings):
+            if snapshot_type == "dashboard_overview_summary":
+                raise RuntimeError("forced snapshot failure")
+            return original_payload(self, session, snapshot_type, missing_sections, warnings)
+
+        monkeypatch.setattr(SnapshotProducerService, "_payload", fail_one)
+        result = SnapshotProducerService().produce_many(
+            db,
+            snapshot_types=["dashboard_overview_summary", "benchmark_summary"],
+            max_items=2,
+        )
+        latest = DashboardSnapshotService().latest(db, "benchmark_summary")
+
+        assert result["produced"] == 1
+        assert result["failed"][0]["snapshot_type"] == "dashboard_overview_summary"
+        assert latest["snapshot_type"] == "benchmark_summary"

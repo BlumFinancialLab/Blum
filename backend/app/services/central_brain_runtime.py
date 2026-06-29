@@ -46,6 +46,7 @@ RUNTIME_MODULES = [
 
 CRITICAL_SNAPSHOT_TYPES = [
     "learning_summary",
+    "dashboard_overview_summary",
     "trading_game_summary",
     "benchmark_summary",
     "intelligence_growth_summary",
@@ -56,7 +57,6 @@ CRITICAL_SNAPSHOT_TYPES = [
     "capital_allocation_summary",
     "alpha_recovery_summary",
     "meta_cognition_summary",
-    "dashboard_overview_summary",
     "trading_game_ledger_snapshot",
     "equity_curve_snapshot",
 ]
@@ -226,6 +226,7 @@ class SnapshotProducerService:
             )
             return result
         except Exception as exc:
+            db.rollback()
             BrainEventBus().publish(db, "snapshot_failed", "snapshot_producer", status="error", error_message=f"{type(exc).__name__}: {exc}", payload={"snapshot_type": snapshot_type})
             raise
 
@@ -238,6 +239,7 @@ class SnapshotProducerService:
             try:
                 produced.append(self.produce(db, snapshot_type))
             except Exception as exc:
+                db.rollback()
                 failed.append({"snapshot_type": snapshot_type, "error": f"{type(exc).__name__}: {exc}"})
         return {"produced": len(produced), "failed": failed, "requested": len(selected), "budget_items": limit}
 

@@ -1337,6 +1337,8 @@ Endpoint:
 
 This endpoint is explicit and should not be called by page render.
 
+The lightweight startup batch prioritizes first-screen readiness. `learning_summary` and `dashboard_overview_summary` are generated before deeper diagnostic snapshots, so the Learning and Dashboard surfaces can show stored evidence quickly while advanced panels continue warming in the background.
+
 ### Snapshot Watchdog
 
 `SnapshotWatchdogService` checks missing snapshots, stale snapshots, failed producers and long-running jobs.
@@ -1357,6 +1359,8 @@ Configuration:
 - `BLUM_ENABLE_LIVE_STARTUP=true`
 
 With the default configuration, startup warms runtime snapshots and scheduler state instead of running the full autonomous engine immediately. Heavy work remains scheduled/background-first.
+
+Historical OHLCV startup seeding is resilient. If the packaged cache is missing, unresolved as a Git LFS pointer or not a valid gzip payload, BLUM reports `missing`, `git_lfs_pointer` or `invalid`, creates no synthetic prices and continues booting so live/background hydration can repair the data gap.
 
 ### Read-Only Frontend Rule
 
