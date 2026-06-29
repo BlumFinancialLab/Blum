@@ -424,7 +424,12 @@ def top_bottlenecks(api_events: list[dict[str, Any]], db_events: list[dict[str, 
 
 
 def learning_page_load_summary(api_events: list[dict[str, Any]], widget_events: list[dict[str, Any]], frontend_widget_events: list[dict[str, Any]]) -> dict[str, Any]:
-    frontend_api_events = [event for event in frontend_widget_events if str(event.get("name", "")).startswith("frontend.api.")]
+    all_frontend_api_events = [event for event in frontend_widget_events if str(event.get("name", "")).startswith("frontend.api.")]
+    frontend_api_events = [
+        event for event in all_frontend_api_events
+        if str((event.get("metadata") or {}).get("route") or "").startswith("/learning")
+        and bool((event.get("metadata") or {}).get("initial_learning_window"))
+    ]
     status_counts: dict[str, int] = defaultdict(int)
     for event in frontend_api_events:
         status_counts[str((event.get("metadata") or {}).get("status") or "unknown")] += 1
@@ -450,6 +455,7 @@ def learning_page_load_summary(api_events: list[dict[str, Any]], widget_events: 
     ]
     return {
         "frontend_request_count": len(frontend_api_events),
+        "unscoped_frontend_request_count": len(all_frontend_api_events),
         "duplicate_request_count": status_counts.get("deduped", 0),
         "cache_hit_count": status_counts.get("cache_hit", 0) + status_counts.get("cache", 0),
         "status_counts": dict(status_counts),

@@ -139,11 +139,13 @@ async function fetchBlum(path: string, options: RequestInit & { timeoutMs?: numb
 function reportFrontendTiming(path: string, method: string, duration_ms: number, status: string, force = false) {
   if (path.includes("/performance/frontend-widget") || path.includes("/api/performance/frontend-widget")) return;
   const onLearningPage = typeof location !== "undefined" && location.pathname.startsWith("/learning");
+  const route = typeof location !== "undefined" ? `${location.pathname}${location.search}` : "";
+  const initialLearningWindow = onLearningPage && isWithinLearningInitialWindow();
   if (!force && !onLearningPage && duration_ms < 400 && !path.includes("/learning")) return;
   fetch(`${API_BASE}/api/performance/frontend-widget`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name: `frontend.api.${method}.${path}`, duration_ms, status, source: "fetchBlum" }),
+    body: JSON.stringify({ name: `frontend.api.${method}.${path}`, duration_ms, status, source: "fetchBlum", route, initial_learning_window: initialLearningWindow }),
     keepalive: true
   }).catch(() => undefined);
 }
