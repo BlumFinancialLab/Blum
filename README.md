@@ -157,6 +157,18 @@ The Learning page is intentionally reduced to three modes:
 
 Backend learning remains independent through APScheduler/autonomous jobs or explicit manual actions. The frontend observes snapshots and evidence; it does not train, recalculate, repair data or run pipelines during page render. If snapshots are stale while background recalculation is running, the UI shows the last snapshot timestamp and a stale-data warning instead of blocking first paint.
 
+The production scheduler also includes a bounded professional learning lane, `blum_professional_learning_cycle`, enabled by default. It runs server-side mini-batches that update Financial Brain learning, Blum Financial Model memory, point-in-time Learning Loop predictions, Trading Game evidence and dashboard snapshots without waiting for a user refresh. Jobs are staggered with first-run offsets and jitter so snapshot refreshes do not repeatedly starve autonomous or learning cycles behind the global background lock.
+
+Professional learning configuration:
+
+```bash
+export BLUM_PROFESSIONAL_LEARNING_ENABLED=true
+export BLUM_PROFESSIONAL_LEARNING_MINUTES=30
+export BLUM_PROFESSIONAL_LEARNING_BATCH_SIZE=20
+```
+
+The Learning Loop still enforces anti-overfitting budgets. When a requested batch would exceed `LEARNING_MAX_DAILY_RUNS`, BLUM now consumes the remaining daily budget as a smaller partial batch. Only a fully exhausted daily budget is reported as `budget_wait`, not as a silent skipped training failure.
+
 ## Deep Diagnostics UX
 
 Deep Diagnostics remains lazy-loaded and human-readable by default. Each advanced panel is opened explicitly with `Load panel`; no model, thesis, reliability, training-quality, decision, business, portfolio, capital-allocation or performance payload is fetched during the initial Learning Overview render.
@@ -327,6 +339,9 @@ Configuration:
 export LEARNING_LOOP_ENABLED=true
 export LEARNING_BATCH_SIZE=100
 export LEARNING_MAX_DAILY_RUNS=1000
+export BLUM_PROFESSIONAL_LEARNING_ENABLED=true
+export BLUM_PROFESSIONAL_LEARNING_MINUTES=30
+export BLUM_PROFESSIONAL_LEARNING_BATCH_SIZE=20
 export LEARNING_RANDOM_SEED=
 export LEARNING_MIN_HISTORY_YEARS=3
 export LEARNING_ASSET_UNIVERSE=stocks,etfs

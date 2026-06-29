@@ -6,7 +6,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from app.core.database import Base
-from app.models import BackgroundJobState, BrainRuntimeEvent, DashboardSnapshot
+from app.models import BackgroundJobState, BrainRuntimeEvent, DashboardSnapshot, LearningRun
 from app.services.central_brain_runtime import (
     BackgroundJobStateService,
     BrainEventBus,
@@ -17,6 +17,7 @@ from app.services.central_brain_runtime import (
     SnapshotWatchdogService,
 )
 from app.services.dashboard_snapshots import DashboardSnapshotService
+from app.services.learning_loop import LearningLoopService
 from app.services.realtime import startup_snapshot_warmup_budget
 
 
@@ -139,6 +140,57 @@ def test_startup_snapshot_warmup_budget_covers_all_critical_snapshots():
     assert "meta_cognition_summary" in CRITICAL_SNAPSHOT_TYPES[: startup_snapshot_warmup_budget()]
     assert "trading_game_ledger_snapshot" in CRITICAL_SNAPSHOT_TYPES[: startup_snapshot_warmup_budget()]
     assert "equity_curve_snapshot" in CRITICAL_SNAPSHOT_TYPES[: startup_snapshot_warmup_budget()]
+
+
+def test_learning_daily_guard_uses_partial_batch_before_budget_wait(monkeypatch):
+    with setup_db() as db:
+        db.add(
+            LearningRun(
+                run_id="existing-today",
+                trigger="test",
+                status="ok",
+                predictions_created=8,
+            )
+        )
+        db.commit()
+        monkeypatch.setattr("app.services.learning_loop.settings.learning_max_daily_runs", 10)
+
+        guard = LearningLoopService().daily_guard(db, requested_batch=5)
+
+        assert guard["allowed"] is True
+        assert guard["effective_batch"] == 2
+        assert guard["partial_batch"] is True
+        assert guard["remaining_daily_budget"] == 2
+
+
+def test_learning_daily_guard_reports_budget_wait_without_skip(monkeypatch):
+    with setup_db() as db:
+        db.add(
+            LearningRun(
+                run_id="full-budget",
+                trigger="test",
+                status="ok",
+                predictions_created=10,
+            )
+        )
+        db.commit()
+        monkeypatch.setattr("app.services.learning_loop.settings.learning_max_daily_runs", 10)
+
+        guard = LearningLoopService().daily_guard(db, requested_batch=5)
+
+        assert guard["allowed"] is False
+        assert guard["effective_batch"] == 0
+        assert "daily learning budget exhausted" in guard["reason"]
+
+
+def test_realtime_scheduler_has_professional_learning_lane_and_staggering():
+    source = (Path(__file__).resolve().parents[1] / "app" / "services" / "realtime.py").read_text()
+
+    assert "blum_professional_learning_cycle" in source
+    assert "run_professional_learning_cycle_job" in source
+    assert "professional_continuous" in source
+    assert "next_run_time=datetime.utcnow() + timedelta" in source
+    assert "another_background_job_running" in source
 
 
 def test_snapshot_producer_batch_continues_after_failed_snapshot(monkeypatch):

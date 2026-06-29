@@ -92,8 +92,9 @@ class LearningLoopService:
 
     def run_batch(self, db: Session, batch_size: int | None = None, trigger: str = "manual") -> dict:
         requested_batch = int(batch_size or settings.learning_batch_size)
-        batch = max(1, min(requested_batch, settings.learning_batch_size, 500))
-        daily_guard = self.daily_guard(db, batch)
+        configured_batch = max(1, min(requested_batch, settings.learning_batch_size, 500))
+        daily_guard = self.daily_guard(db, configured_batch)
+        batch = max(1, int(daily_guard.get("effective_batch", configured_batch) or configured_batch))
         run_id = f"learn-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:8]}"
         run = LearningRun(
             run_id=run_id,
@@ -108,19 +109,19 @@ class LearningLoopService:
         db.flush()
 
         if not daily_guard["allowed"]:
-            run.status = "skipped"
+            run.status = "budget_wait"
             run.completed_at = datetime.utcnow()
-            run.summary = {"reason": daily_guard["reason"], "requested_batch_size": requested_batch}
+            run.summary = {"reason": daily_guard["reason"], "requested_batch_size": requested_batch, "daily_guard": daily_guard}
             event = LearningEvent(
-                event_type="blum_learning_loop_skipped",
+                event_type="blum_learning_loop_budget_wait",
                 severity="Warning",
-                title="BLUM Learning Loop skipped by daily guard",
+                title="BLUM Learning Loop waiting for daily budget",
                 description=daily_guard["reason"],
                 payload={"run_id": run_id, "guard": daily_guard},
             )
             db.add(event)
             db.commit()
-            return {"status": "skipped", "run_id": run_id, "guard": daily_guard}
+            return {"status": "budget_wait", "run_id": run_id, "guard": daily_guard}
 
         reports: list[dict] = []
         errors: list[dict] = []
@@ -179,6 +180,8 @@ class LearningLoopService:
             "status": run.status,
             "run_id": run_id,
             "batch_size": batch,
+            "requested_batch_size": requested_batch,
+            "daily_guard": daily_guard,
             "reports_created": len(reports),
             "errors": errors[:8],
             "metrics": metrics,
@@ -292,14 +295,28 @@ class LearningLoopService:
     def daily_guard(self, db: Session, requested_batch: int) -> dict:
         start = datetime.combine(datetime.utcnow().date(), time.min)
         today_predictions = int(db.scalar(select(func.coalesce(func.sum(LearningRun.predictions_created), 0)).where(LearningRun.started_at >= start)) or 0)
-        projected = today_predictions + requested_batch
-        allowed = projected <= settings.learning_max_daily_runs
+        max_daily = max(0, int(settings.learning_max_daily_runs))
+        remaining = max(0, max_daily - today_predictions)
+        effective_batch = min(max(1, requested_batch), remaining) if remaining else 0
+        projected = today_predictions + effective_batch
+        allowed = effective_batch > 0
+        partial = allowed and effective_batch < requested_batch
         return {
             "allowed": allowed,
             "today_predictions": today_predictions,
             "requested_batch": requested_batch,
-            "max_daily_runs": settings.learning_max_daily_runs,
-            "reason": "within daily limit" if allowed else "Learning max daily run guard prevents overfitting and excessive repeated sampling.",
+            "effective_batch": effective_batch,
+            "remaining_daily_budget": remaining,
+            "projected_predictions": projected,
+            "max_daily_runs": max_daily,
+            "partial_batch": partial,
+            "reason": (
+                "within daily limit"
+                if allowed and not partial
+                else "partial batch: using remaining daily learning budget to keep training without overfitting"
+                if partial
+                else "daily learning budget exhausted; waiting for next UTC window instead of oversampling the same day"
+            ),
         }
 
 

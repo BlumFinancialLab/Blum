@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 import threading
 import time
 import traceback
@@ -57,27 +57,32 @@ def start_realtime_services() -> None:
         threading.Thread(target=run_startup_pipeline, daemon=True).start()
     elif settings.enable_live_startup:
         threading.Thread(target=run_startup_snapshot_warmup, daemon=True).start()
-    _scheduler.add_job(run_runtime_snapshot_watchdog, "interval", minutes=5, id="runtime_snapshot_watchdog", replace_existing=True, max_instances=1)
-    _scheduler.add_job(run_snapshot_refresh_job, "interval", minutes=10, id="snapshot_producer", replace_existing=True, max_instances=1)
+    _add_interval_job(run_runtime_snapshot_watchdog, minutes=5, job_id="runtime_snapshot_watchdog", delay_seconds=45, jitter_seconds=10)
+    _add_interval_job(run_snapshot_refresh_job, minutes=10, job_id="snapshot_producer", delay_seconds=105, jitter_seconds=20)
     if settings.enable_autonomous_engine:
-        _scheduler.add_job(run_autonomous_engine_job, "interval", minutes=settings.autonomous_cycle_minutes, id="autonomous_research_engine", replace_existing=True, max_instances=1)
-        _scheduler.start()
-        with _state_lock:
-            _state["started"] = True
-        return
-    _scheduler.add_job(run_news_refresh, "interval", minutes=settings.news_refresh_minutes, id="news_refresh", replace_existing=True, max_instances=1)
-    _scheduler.add_job(run_market_refresh, "interval", minutes=settings.market_refresh_minutes, id="market_refresh", replace_existing=True, max_instances=1)
-    _scheduler.add_job(run_data_gap_repair, "interval", minutes=settings.data_gap_repair_minutes, id="data_gap_repair", replace_existing=True, max_instances=1)
-    _scheduler.add_job(run_accuracy_audit_job, "interval", minutes=settings.accuracy_audit_minutes, id="accuracy_audit", replace_existing=True, max_instances=1)
-    _scheduler.add_job(run_macro_refresh, "interval", minutes=settings.macro_refresh_minutes, id="macro_refresh", replace_existing=True, max_instances=1)
-    _scheduler.add_job(run_fundamentals_refresh, "interval", minutes=settings.fundamentals_refresh_minutes, id="fundamentals_refresh", replace_existing=True, max_instances=1)
-    _scheduler.add_job(run_ipo_refresh, "interval", minutes=settings.ipo_refresh_minutes, id="ipo_refresh", replace_existing=True, max_instances=1)
+        _add_interval_job(run_autonomous_engine_job, minutes=settings.autonomous_cycle_minutes, job_id="autonomous_research_engine", delay_seconds=180, jitter_seconds=45)
+    _add_interval_job(run_news_refresh, minutes=settings.news_refresh_minutes, job_id="news_refresh", delay_seconds=240, jitter_seconds=30)
+    _add_interval_job(run_market_refresh, minutes=settings.market_refresh_minutes, job_id="market_refresh", delay_seconds=360, jitter_seconds=45)
+    _add_interval_job(run_data_gap_repair, minutes=settings.data_gap_repair_minutes, job_id="data_gap_repair", delay_seconds=480, jitter_seconds=45)
+    _add_interval_job(run_accuracy_audit_job, minutes=settings.accuracy_audit_minutes, job_id="accuracy_audit", delay_seconds=600, jitter_seconds=45)
+    _add_interval_job(run_macro_refresh, minutes=settings.macro_refresh_minutes, job_id="macro_refresh", delay_seconds=720, jitter_seconds=45)
+    _add_interval_job(run_fundamentals_refresh, minutes=settings.fundamentals_refresh_minutes, job_id="fundamentals_refresh", delay_seconds=840, jitter_seconds=45)
+    _add_interval_job(run_ipo_refresh, minutes=settings.ipo_refresh_minutes, job_id="ipo_refresh", delay_seconds=960, jitter_seconds=45)
     if settings.enable_learning_loop:
-        _scheduler.add_job(run_learning_cycle_job, "interval", minutes=settings.learning_loop_minutes, id="financial_brain_learning", replace_existing=True, max_instances=1)
-        _scheduler.add_job(run_blum_model_cycle_job, "interval", minutes=settings.blum_model_cycle_minutes, id="blum_financial_model_cycle", replace_existing=True, max_instances=1)
-        _scheduler.add_job(run_blum_learning_loop_job, "interval", minutes=settings.learning_loop_minutes, id="blum_point_in_time_learning_loop", replace_existing=True, max_instances=1)
-        if settings.trading_game_enabled:
-            _scheduler.add_job(run_trading_game_job, "interval", minutes=settings.learning_loop_minutes, id="blum_trading_game", replace_existing=True, max_instances=1)
+        if settings.professional_learning_enabled:
+            _add_interval_job(
+                run_professional_learning_cycle_job,
+                minutes=settings.professional_learning_minutes,
+                job_id="blum_professional_learning_cycle",
+                delay_seconds=150,
+                jitter_seconds=30,
+            )
+        else:
+            _add_interval_job(run_learning_cycle_job, minutes=settings.learning_loop_minutes, job_id="financial_brain_learning", delay_seconds=1020, jitter_seconds=45)
+            _add_interval_job(run_blum_model_cycle_job, minutes=settings.blum_model_cycle_minutes, job_id="blum_financial_model_cycle", delay_seconds=1080, jitter_seconds=45)
+            _add_interval_job(run_blum_learning_loop_job, minutes=settings.learning_loop_minutes, job_id="blum_point_in_time_learning_loop", delay_seconds=1140, jitter_seconds=45)
+            if settings.trading_game_enabled:
+                _add_interval_job(run_trading_game_job, minutes=settings.learning_loop_minutes, job_id="blum_trading_game", delay_seconds=1200, jitter_seconds=45)
     _scheduler.start()
     with _state_lock:
         _state["started"] = True
@@ -92,7 +97,38 @@ def stop_realtime_services() -> None:
 
 def realtime_status() -> dict:
     with _state_lock:
-        return dict(_state)
+        payload = dict(_state)
+    payload["scheduled_jobs"] = scheduled_jobs()
+    return payload
+
+
+def _add_interval_job(func, *, minutes: int, job_id: str, delay_seconds: int, jitter_seconds: int = 0) -> None:
+    if _scheduler is None:
+        return
+    _scheduler.add_job(
+        func,
+        "interval",
+        minutes=max(1, int(minutes)),
+        id=job_id,
+        replace_existing=True,
+        max_instances=1,
+        next_run_time=datetime.utcnow() + timedelta(seconds=max(0, delay_seconds)),
+        jitter=max(0, jitter_seconds),
+    )
+
+
+def scheduled_jobs() -> list[dict]:
+    if _scheduler is None:
+        return []
+    jobs = []
+    for job in _scheduler.get_jobs():
+        jobs.append(
+            {
+                "id": job.id,
+                "next_run_time": job.next_run_time.isoformat() if job.next_run_time else None,
+            }
+        )
+    return sorted(jobs, key=lambda item: item["id"])
 
 
 def run_startup_pipeline() -> None:
@@ -197,6 +233,29 @@ def run_trading_game_job() -> None:
     _run_job("blum_trading_game", lambda db: TradingGameSimulator().run(db, batch_size=settings.trading_game_batch_size))
 
 
+def run_professional_learning_cycle_job() -> None:
+    def work(db):
+        batch_size = max(1, min(settings.professional_learning_batch_size, settings.learning_batch_size, settings.blum_autonomous_max_items_per_job))
+        trading_batch = max(5, min(settings.trading_game_batch_size, batch_size * 2))
+        learning = run_learning_cycle(db, limit=max(20, min(settings.max_update_assets * 2, batch_size * 6)))
+        model_learning = run_model_learning_cycle(db, limit=max(20, min(settings.blum_model_cycle_limit, batch_size * 8)))
+        point_in_time_learning = LearningLoopService().run_batch(db, batch_size=batch_size, trigger="professional_continuous")
+        trading_game = TradingGameSimulator().run(db, batch_size=trading_batch) if settings.trading_game_enabled else {"status": "disabled"}
+        snapshots = SnapshotProducerService().produce_many(db, max_items=settings.blum_autonomous_max_items_per_job)
+        return {
+            "mode": "professional_continuous_learning",
+            "batch_size": batch_size,
+            "financial_brain_learning": learning,
+            "blum_financial_model": model_learning,
+            "blum_learning_loop": point_in_time_learning,
+            "trading_game": trading_game,
+            "snapshots": snapshots,
+            "policy": "Bounded server-side learning cycle. Frontend pages observe snapshots only and never trigger this work on render.",
+        }
+
+    _run_job("blum_professional_learning_cycle", work)
+
+
 def run_autonomous_engine_job() -> None:
     _run_job(
         "autonomous_research_engine",
@@ -216,6 +275,12 @@ def _update_stage_progress(progress: dict) -> None:
 def _run_job(job_name: str, work):
     with _state_lock:
         if _state["running"]:
+            performance_recorder.record_background_task(
+                job_name,
+                0.0,
+                {"status": "deferred", "reason": "another_background_job_running", "blocking_job": _state.get("last_job")},
+                datetime.utcnow(),
+            )
             return
         _state["running"] = True
         _state["last_started_at"] = datetime.utcnow().isoformat()
