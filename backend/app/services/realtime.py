@@ -236,9 +236,9 @@ def run_trading_game_job() -> None:
 def run_professional_learning_cycle_job() -> None:
     def work(db):
         batch_size = max(1, min(settings.professional_learning_batch_size, settings.learning_batch_size, settings.blum_autonomous_max_items_per_job))
-        trading_batch = max(5, min(settings.trading_game_batch_size, batch_size * 2))
-        learning = run_learning_cycle(db, limit=max(20, min(settings.max_update_assets * 2, batch_size * 6)))
-        model_learning = run_model_learning_cycle(db, limit=max(20, min(settings.blum_model_cycle_limit, batch_size * 8)))
+        trading_batch = max(3, min(settings.trading_game_batch_size, max(3, batch_size // 2)))
+        learning = run_learning_cycle(db, limit=max(20, min(settings.max_update_assets * 2, batch_size * 4)))
+        model_learning = run_model_learning_cycle(db, limit=max(20, min(settings.blum_model_cycle_limit, batch_size * 4)), backup=False)
         point_in_time_learning = LearningLoopService().run_batch(db, batch_size=batch_size, trigger="professional_continuous")
         trading_game = TradingGameSimulator().run(db, batch_size=trading_batch) if settings.trading_game_enabled else {"status": "disabled"}
         snapshots = SnapshotProducerService().produce_many(db, max_items=settings.blum_autonomous_max_items_per_job)

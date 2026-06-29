@@ -189,6 +189,8 @@ def test_realtime_scheduler_has_professional_learning_lane_and_staggering():
     assert "blum_professional_learning_cycle" in source
     assert "run_professional_learning_cycle_job" in source
     assert "professional_continuous" in source
+    assert "backup=False" in source
+    assert "batch_size // 2" in source
     assert "next_run_time=datetime.utcnow() + timedelta" in source
     assert "another_background_job_running" in source
 

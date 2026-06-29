@@ -157,7 +157,9 @@ The Learning page is intentionally reduced to three modes:
 
 Backend learning remains independent through APScheduler/autonomous jobs or explicit manual actions. The frontend observes snapshots and evidence; it does not train, recalculate, repair data or run pipelines during page render. If snapshots are stale while background recalculation is running, the UI shows the last snapshot timestamp and a stale-data warning instead of blocking first paint.
 
-The production scheduler also includes a bounded professional learning lane, `blum_professional_learning_cycle`, enabled by default. It runs server-side mini-batches that update Financial Brain learning, Blum Financial Model memory, point-in-time Learning Loop predictions, Trading Game evidence and dashboard snapshots without waiting for a user refresh. Jobs are staggered with first-run offsets and jitter so snapshot refreshes do not repeatedly starve autonomous or learning cycles behind the global background lock.
+The production scheduler also includes a bounded professional learning lane, `blum_professional_learning_cycle`, enabled by default. It runs server-side mini-batches that update Financial Brain learning, Blum Financial Model memory, point-in-time Learning Loop predictions, sliced Trading Game evidence and dashboard snapshots without waiting for a user refresh. Jobs are staggered with first-run offsets and jitter so snapshot refreshes do not repeatedly starve autonomous or learning cycles behind the global background lock.
+
+The frequent professional lane is deliberately lighter than the full autonomous cycle: it keeps Trading Game work to a small reproducible slice and skips full embedded PostgreSQL backups. Heavy persistence backup remains owned by the deeper autonomous/model cycle, preventing a large `pg_dump` from blocking learning every 30 minutes.
 
 Professional learning configuration:
 
