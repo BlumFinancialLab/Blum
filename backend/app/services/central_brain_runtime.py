@@ -25,6 +25,7 @@ from app.models import (
 from app.services.dashboard_snapshots import DashboardSnapshotService
 from app.services.learning_summary import LearningSummaryService
 from app.services.performance import performance_recorder
+from app.services.worker_runtime import runtime_worker_coordinator
 
 
 settings = get_settings()
@@ -364,6 +365,7 @@ class CentralBrainRuntime:
         return {
             "generated_at": datetime.utcnow().isoformat(),
             "active_modules": RUNTIME_MODULES,
+            "worker_registry": runtime_worker_coordinator.snapshot().get("worker_registry", []),
             "last_event_per_module": events,
             "stale_modules": stale_modules,
             "failed_modules": failed_modules,
@@ -386,12 +388,7 @@ class LearningHealthService:
         now = datetime.utcnow()
         latest_learning = db.scalar(select(LearningRun).order_by(desc(LearningRun.started_at)).limit(1))
         latest_event = db.scalar(select(LearningEvent).order_by(desc(LearningEvent.created_at)).limit(1))
-        try:
-            from app.services.realtime import realtime_status
-
-            runtime = realtime_status()
-        except Exception:
-            runtime = {}
+        runtime = runtime_worker_coordinator.snapshot()
         events_24h = int(db.scalar(select(func.count(LearningEvent.id)).where(LearningEvent.created_at >= now - timedelta(hours=24))) or 0)
         missing = (snapshot_health or SnapshotWatchdogService().health(db)).get("missing_snapshots", [])
         failed_jobs = [job for job in (jobs or BackgroundJobStateService().list(db)) if job.get("status") == "failed"]

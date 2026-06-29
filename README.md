@@ -159,7 +159,7 @@ Backend learning remains independent through APScheduler/autonomous jobs or expl
 
 The production scheduler also includes a bounded professional learning lane, `blum_professional_learning_cycle`, enabled by default. It runs server-side mini-batches that update Financial Brain learning, Blum Financial Model memory, point-in-time Learning Loop predictions, sliced Trading Game evidence and dashboard snapshots without waiting for a user refresh. Jobs are staggered with first-run offsets and jitter so snapshot refreshes do not repeatedly starve autonomous or learning cycles behind the global background lock.
 
-The frequent professional lane is deliberately lighter than the full autonomous cycle: it keeps Trading Game work to a small reproducible slice and skips full embedded PostgreSQL backups. Heavy persistence backup remains owned by the deeper autonomous/model cycle, preventing a large `pg_dump` from blocking learning every 30 minutes.
+The frequent professional lane is deliberately lighter than the full autonomous cycle: it keeps Trading Game work to a small reproducible slice, defers heavy Market Sniper R-multiple simulations to deeper autonomous cycles and skips full embedded PostgreSQL backups. Heavy persistence backup remains owned by the deeper autonomous/model cycle, preventing a large `pg_dump` from blocking learning every 30 minutes.
 
 Professional learning configuration:
 
@@ -1257,6 +1257,8 @@ What it does not do:
 
 BLUM v1.0 separates financial reasoning from runtime orchestration. The goal is to keep the backend autonomous and measurable while the frontend remains light and snapshot-driven.
 
+The detailed runtime dependency graph, worker architecture, event flow, knowledge flow, snapshot flow and migration notes are maintained in `RUNTIME_ARCHITECTURE.md`.
+
 ### Central Brain Runtime
 
 `CentralBrainRuntime` is a read-only operational view. It does not score assets, train models or run financial computation. It composes:
@@ -1272,6 +1274,39 @@ BLUM v1.0 separates financial reasoning from runtime orchestration. The goal is 
 Endpoint:
 
 - `GET /brain/runtime-state`
+
+### Independent Worker Runtime
+
+`RuntimeWorkerCoordinator` turns the APScheduler runtime into named, independently observable workers. It does not replace APScheduler and it does not compute financial logic. Its job is to prevent duplicate runs of the same worker while allowing unrelated workers to proceed independently.
+
+Before this extraction, one process-wide `running` flag could defer every scheduled task behind any long-running job. The runtime now blocks only duplicate executions of the same worker and exposes:
+
+- `running_jobs`;
+- `running_count`;
+- `worker_registry`;
+- per-worker queue name;
+- per-worker max item/time budgets;
+- duplicate-worker deferrals as `module_deferred` events.
+
+Core registered workers:
+
+- `runtime_snapshot_watchdog`
+- `snapshot_producer`
+- `autonomous_research_engine`
+- `news_refresh`
+- `market_refresh`
+- `data_gap_repair`
+- `accuracy_audit`
+- `macro_refresh`
+- `fundamentals_refresh`
+- `ipo_refresh`
+- `financial_brain_learning`
+- `blum_financial_model_cycle`
+- `blum_point_in_time_learning_loop`
+- `blum_trading_game`
+- `blum_professional_learning_cycle`
+
+This keeps the Central Brain as an orchestrator/observer. Learning, Trading Game, Market Data, Snapshot Producer and research workers remain owners of their own state and evidence.
 
 ### Event Bus
 
@@ -1291,6 +1326,7 @@ Event examples:
 - `snapshot_requested`
 - `snapshot_refreshed`
 - `snapshot_failed`
+- `module_deferred`
 
 Events are evidence for observability, not triggers for hidden trading or hidden model changes.
 

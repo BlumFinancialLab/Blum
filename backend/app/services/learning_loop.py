@@ -90,7 +90,13 @@ class LearningLoopService:
         self.memory = StrategyMemoryService()
         self.model_scores = ModelScoreService()
 
-    def run_batch(self, db: Session, batch_size: int | None = None, trigger: str = "manual") -> dict:
+    def run_batch(
+        self,
+        db: Session,
+        batch_size: int | None = None,
+        trigger: str = "manual",
+        sniper_simulation_limit: int | None = None,
+    ) -> dict:
         requested_batch = int(batch_size or settings.learning_batch_size)
         configured_batch = max(1, min(requested_batch, settings.learning_batch_size, 500))
         daily_guard = self.daily_guard(db, configured_batch)
@@ -140,9 +146,16 @@ class LearningLoopService:
         sniper_learning = {"status": "skipped", "reason": "No reports created."}
         if reports:
             try:
-                from app.services.market_sniper import MarketSniperEngine
+                limit = sniper_simulation_limit if sniper_simulation_limit is not None else min(300, max(60, len(reports) * len(TIMEFRAMES) * 6))
+                if limit > 0:
+                    from app.services.market_sniper import MarketSniperEngine
 
-                sniper_learning = MarketSniperEngine().simulate(db, limit=min(300, max(60, len(reports) * len(TIMEFRAMES) * 6)))
+                    sniper_learning = MarketSniperEngine().simulate(db, limit=limit)
+                else:
+                    sniper_learning = {
+                        "status": "deferred",
+                        "reason": "Sniper R-multiple simulation is deferred for this bounded learning lane.",
+                    }
             except Exception as exc:
                 sniper_learning = {"status": "degraded", "error": f"{type(exc).__name__}: {exc}"}
 

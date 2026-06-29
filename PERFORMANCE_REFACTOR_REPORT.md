@@ -2,6 +2,8 @@
 
 Generated: 2026-06-24
 
+Updated: 2026-06-29 for the worker-runtime extraction sprint.
+
 Scope: `backend/app`, `backend/alembic/versions`, `frontend/app`, `frontend/lib`, scheduler/runtime services, snapshot services, Learning Loop, Trading Game, Decision Intelligence, Capital Allocation, Alpha Recovery, Meta-Cognition, Chat and Performance diagnostics.
 
 This sprint measures and reduces runtime coupling. It does not add financial features, does not claim performance is fixed, and does not change BLUM's trading or learning algorithms.
@@ -95,7 +97,9 @@ graph TD
 
 Mode: Architecture Audit
 
-Health Score: 55/100 before refactor.
+Health Score: 55/100 before the first runtime refactor.
+
+Health Score: 64/100 after worker-runtime extraction. The score improves because unrelated background jobs are no longer forced through one global scheduler lock, but `routes.py` and several composite jobs remain architectural debt.
 
 ### Critical Findings
 
@@ -104,6 +108,12 @@ Symptom: `backend/app/api/routes.py` imports almost every model and service, the
 Source: Clean Architecture - Dependency Inversion Principle and Stable Dependencies Principle.
 Consequence: every new financial engine increases route import fan-out, startup import time and change propagation risk.
 Remedy: route new runtime behavior through small orchestration services (`CentralBrainRuntime`, `SnapshotWatchdogService`, `SnapshotProducerService`) and keep financial computation out of generic runtime endpoints.
+
+**Runtime Coupling - global background lock**
+Symptom: `backend/app/services/realtime.py` used one `_state["running"]` guard for every scheduled job.
+Source: Clean Architecture - Single Responsibility Principle; Pragmatic Programmer - Orthogonality.
+Consequence: a long snapshot refresh, market refresh or professional learning cycle could defer unrelated workers even when no real dependency existed.
+Remedy: add `RuntimeWorkerCoordinator`, register workers explicitly and block only duplicate runs of the same worker.
 
 **Change Propagation - scheduler runs monolithic jobs**
 Symptom: `backend/app/services/realtime.py` schedules full research, market refresh, Learning Loop, model learning and Trading Game work as coarse jobs.
@@ -200,6 +210,8 @@ Added:
 - `SnapshotProducerService`
 - `SnapshotWatchdogService`
 - `LearningHealthService`
+- `RuntimeWorkerCoordinator`
+- `WorkerDefinition` registry for the scheduler workers
 
 Added endpoints:
 
@@ -216,6 +228,45 @@ Added tables:
 Extended:
 
 - `dashboard_snapshots.missing_sections_json`
+
+Runtime extraction added:
+
+- scheduler state now exposes `running_jobs`, `running_count` and `worker_registry`;
+- unrelated workers can run independently;
+- duplicate runs of the same worker are deferred as `same_worker_already_running`;
+- deferrals are persisted as `module_deferred` events;
+- Central Brain Runtime now reads worker state without importing `realtime.py`;
+- the frequent professional Learning Loop lane defers heavy Market Sniper R-multiple simulation to deeper cycles.
+
+## 2026-06-29 Dependency Graph Update
+
+```mermaid
+graph TD
+  Scheduler["APScheduler realtime.py"] --> WorkerRuntime["RuntimeWorkerCoordinator"]
+  WorkerRuntime --> JobState["background_job_state"]
+  WorkerRuntime --> EventBus["BrainEventBus"]
+  Scheduler --> Workers["Independent named workers"]
+  Workers --> FinancialServices["Existing financial services"]
+  FinancialServices --> DB["PostgreSQL"]
+  Workers --> SnapshotProducer["SnapshotProducerService"]
+  SnapshotProducer --> Snapshots["dashboard_snapshots"]
+  EventBus --> CentralBrain["CentralBrainRuntime"]
+  JobState --> CentralBrain
+  Snapshots --> CentralBrain
+  WorkerRuntime --> CentralBrain
+  CentralBrain --> API["/brain/runtime-state"]
+  Snapshots --> Frontend["Snapshot-first frontend"]
+```
+
+### Full Audit Highlights
+
+- Backend service surface: 152 Python files under `backend`.
+- Frontend source surface: 45 TypeScript/TSX files under `frontend`.
+- Main API router: 257 route decorators in `backend/app/api/routes.py`.
+- Highest fan-out service/router observed: `app.api.routes`, with direct imports from almost every runtime and financial module.
+- Largest service files remain `financial_chat.py`, `learning_loop.py`, `reasoning_precision.py`, `market_sniper.py`, `trade_transparency.py`, `blum_financial_model.py`, `financial_brain_learning.py`, `meta_cognition.py`, `trading_game.py`, `alpha_recovery.py`, `learning_intelligence.py` and `trading_intelligence_lab.py`.
+- Existing runtime/snapshot migrations are already present (`0024_runtime_architecture.py`, `0025_tg_runtime_snap.py`).
+- The primary new bottleneck fixed in this sprint is scheduler-level coupling, not SQL latency.
 
 ## Performance Before / After
 

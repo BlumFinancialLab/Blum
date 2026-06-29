@@ -19,6 +19,7 @@ from app.services.central_brain_runtime import (
 from app.services.dashboard_snapshots import DashboardSnapshotService
 from app.services.learning_loop import LearningLoopService
 from app.services.realtime import startup_snapshot_warmup_budget
+from app.services.worker_runtime import RuntimeWorkerCoordinator, WORKER_DEFINITIONS
 
 
 def setup_db() -> Session:
@@ -114,9 +115,44 @@ def test_runtime_state_and_learning_health_work_with_empty_database():
         health = LearningHealthService().health(db)
 
         assert state["system_readiness"]["api_ready"] is True
+        assert any(worker["name"] == "blum_professional_learning_cycle" for worker in state["worker_registry"])
         assert "learning_summary" in state["missing_snapshots"]
         assert health["status"] in {"degraded", "stale"}
         assert health["frontend_policy"] == "read_only_snapshot_observer"
+
+
+def test_runtime_worker_coordinator_blocks_only_duplicate_worker():
+    coordinator = RuntimeWorkerCoordinator()
+
+    acquired_learning, learning_state = coordinator.begin("blum_professional_learning_cycle", max_items=10)
+    acquired_duplicate, duplicate_state = coordinator.begin("blum_professional_learning_cycle", max_items=10)
+    acquired_snapshot, snapshot_state = coordinator.begin("snapshot_producer", max_items=10)
+
+    assert acquired_learning is True
+    assert learning_state["queue_name"] == "professional_learning"
+    assert acquired_duplicate is False
+    assert duplicate_state["reason"] == "same_worker_already_running"
+    assert acquired_snapshot is True
+    assert snapshot_state["queue_name"] == "snapshots"
+    assert coordinator.snapshot()["running_count"] == 2
+
+    coordinator.complete("blum_professional_learning_cycle")
+    coordinator.complete("snapshot_producer")
+
+    assert coordinator.snapshot()["running_count"] == 0
+
+
+def test_worker_registry_covers_core_runtime_modules():
+    required = {
+        "snapshot_producer",
+        "runtime_snapshot_watchdog",
+        "market_refresh",
+        "blum_professional_learning_cycle",
+        "blum_trading_game",
+        "autonomous_research_engine",
+    }
+
+    assert required.issubset(set(WORKER_DEFINITIONS))
 
 
 def test_get_side_effect_detection_guard_is_in_middleware_source():
@@ -184,15 +220,20 @@ def test_learning_daily_guard_reports_budget_wait_without_skip(monkeypatch):
 
 
 def test_realtime_scheduler_has_professional_learning_lane_and_staggering():
-    source = (Path(__file__).resolve().parents[1] / "app" / "services" / "realtime.py").read_text()
+    realtime_source = (Path(__file__).resolve().parents[1] / "app" / "services" / "realtime.py").read_text()
+    worker_source = (Path(__file__).resolve().parents[1] / "app" / "services" / "worker_runtime.py").read_text()
+    source = realtime_source + worker_source
 
     assert "blum_professional_learning_cycle" in source
     assert "run_professional_learning_cycle_job" in source
     assert "professional_continuous" in source
     assert "backup=False" in source
     assert "batch_size // 2" in source
+    assert "sniper_simulation_limit=0" in source
     assert "next_run_time=datetime.utcnow() + timedelta" in source
-    assert "another_background_job_running" in source
+    assert "same_worker_already_running" in source
+    assert "running_jobs" in source
+    assert "runtime_worker_coordinator.begin" in source
 
 
 def test_snapshot_producer_batch_continues_after_failed_snapshot(monkeypatch):

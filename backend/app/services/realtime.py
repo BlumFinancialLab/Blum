@@ -13,7 +13,7 @@ from app.ingestion.news_ingestor import NewsIngestor
 from app.services.accuracy import run_accuracy_audit
 from app.services.autonomous_engine import AutonomousResearchEngine
 from app.services.blum_financial_model import run_model_learning_cycle
-from app.services.central_brain_runtime import BackgroundJobStateService, SnapshotProducerService, SnapshotWatchdogService
+from app.services.central_brain_runtime import BrainEventBus, BackgroundJobStateService, SnapshotProducerService, SnapshotWatchdogService
 from app.services.data_continuity import repair_data_gaps
 from app.services.etf import update_etf_trends
 from app.services.fundamentals import update_fundamentals
@@ -25,6 +25,7 @@ from app.services.market_data import MarketDataService
 from app.services.performance import performance_recorder
 from app.services.pipeline import PipelineService
 from app.services.trading_game import TradingGameSimulator
+from app.services.worker_runtime import runtime_worker_coordinator
 from app.signals.engine import SignalEngine
 
 
@@ -34,6 +35,8 @@ _state_lock = threading.RLock()
 _state = {
     "started": False,
     "running": False,
+    "running_count": 0,
+    "running_jobs": {},
     "last_started_at": None,
     "last_completed_at": None,
     "last_job": None,
@@ -84,6 +87,7 @@ def start_realtime_services() -> None:
             if settings.trading_game_enabled:
                 _add_interval_job(run_trading_game_job, minutes=settings.learning_loop_minutes, job_id="blum_trading_game", delay_seconds=1200, jitter_seconds=45)
     _scheduler.start()
+    runtime_worker_coordinator.mark_scheduler_started()
     with _state_lock:
         _state["started"] = True
 
@@ -93,11 +97,29 @@ def stop_realtime_services() -> None:
     if _scheduler is not None:
         _scheduler.shutdown(wait=False)
         _scheduler = None
+    runtime_worker_coordinator.mark_scheduler_stopped()
 
 
 def realtime_status() -> dict:
+    runtime_snapshot = runtime_worker_coordinator.snapshot()
     with _state_lock:
         payload = dict(_state)
+    payload.update(
+        {
+            "started": bool(payload.get("started") or runtime_snapshot.get("started")),
+            "running": bool(runtime_snapshot.get("running")),
+            "running_count": runtime_snapshot.get("running_count", 0),
+            "running_jobs": runtime_snapshot.get("running_jobs", {}),
+            "last_started_at": runtime_snapshot.get("last_started_at") or payload.get("last_started_at"),
+            "last_completed_at": runtime_snapshot.get("last_completed_at") or payload.get("last_completed_at"),
+            "last_job": runtime_snapshot.get("last_job") or payload.get("last_job"),
+            "last_status": runtime_snapshot.get("last_status") or payload.get("last_status"),
+            "last_error": runtime_snapshot.get("last_error") or payload.get("last_error"),
+            "last_result": runtime_snapshot.get("last_result") or payload.get("last_result"),
+            "worker_registry": runtime_snapshot.get("worker_registry", []),
+            "runtime_policy": runtime_snapshot.get("policy"),
+        }
+    )
     payload["scheduled_jobs"] = scheduled_jobs()
     return payload
 
@@ -239,7 +261,12 @@ def run_professional_learning_cycle_job() -> None:
         trading_batch = max(3, min(settings.trading_game_batch_size, max(3, batch_size // 2)))
         learning = run_learning_cycle(db, limit=max(20, min(settings.max_update_assets * 2, batch_size * 4)))
         model_learning = run_model_learning_cycle(db, limit=max(20, min(settings.blum_model_cycle_limit, batch_size * 4)), backup=False)
-        point_in_time_learning = LearningLoopService().run_batch(db, batch_size=batch_size, trigger="professional_continuous")
+        point_in_time_learning = LearningLoopService().run_batch(
+            db,
+            batch_size=batch_size,
+            trigger="professional_continuous",
+            sniper_simulation_limit=0,
+        )
         trading_game = TradingGameSimulator().run(db, batch_size=trading_batch) if settings.trading_game_enabled else {"status": "disabled"}
         snapshots = SnapshotProducerService().produce_many(db, max_items=settings.blum_autonomous_max_items_per_job)
         return {
@@ -273,16 +300,29 @@ def _update_stage_progress(progress: dict) -> None:
 
 
 def _run_job(job_name: str, work):
-    with _state_lock:
-        if _state["running"]:
-            performance_recorder.record_background_task(
+    max_items = runtime_worker_coordinator.definition(job_name).max_items
+    acquired, worker_state = runtime_worker_coordinator.begin(job_name, max_items=max_items)
+    if not acquired:
+        perf_started_at = datetime.utcnow()
+        performance_recorder.record_background_task(
+            job_name,
+            0.0,
+            {"status": "deferred", "reason": worker_state.get("reason"), "blocking_job": worker_state.get("blocking_job")},
+            perf_started_at,
+        )
+        with SessionLocal() as db:
+            BrainEventBus().publish(
+                db,
+                "module_deferred",
                 job_name,
-                0.0,
-                {"status": "deferred", "reason": "another_background_job_running", "blocking_job": _state.get("last_job")},
-                datetime.utcnow(),
+                status="deferred",
+                payload=worker_state,
             )
-            return
+        return
+    with _state_lock:
         _state["running"] = True
+        _state["running_jobs"] = runtime_worker_coordinator.snapshot().get("running_jobs", {})
+        _state["running_count"] = len(_state["running_jobs"])
         _state["last_started_at"] = datetime.utcnow().isoformat()
         _state["last_job"] = job_name
         _state["last_status"] = "running"
@@ -296,10 +336,9 @@ def _run_job(job_name: str, work):
     perf_started = time.perf_counter()
     perf_status = "ok"
     perf_error = ""
-    max_items = settings.blum_autonomous_max_items_per_job
-    with SessionLocal() as db:
-        BackgroundJobStateService().start(db, job_name, max_items=max_items)
     try:
+        with SessionLocal() as db:
+            BackgroundJobStateService().start(db, job_name, max_items=max_items)
         with SessionLocal() as db:
             result = work(db)
             duration_ms = (time.perf_counter() - perf_started) * 1000
@@ -313,16 +352,21 @@ def _run_job(job_name: str, work):
             _state["last_completed_at"] = datetime.utcnow().isoformat()
             _state["last_status"] = "ok"
             _state["last_result"] = _compact_payload(result or {})
+        runtime_worker_coordinator.complete(job_name, result=_compact_payload(result or {}))
     except Exception as exc:
         perf_status = "error"
         perf_error = f"{type(exc).__name__}: {str(exc)}"
-        with SessionLocal() as db:
-            BackgroundJobStateService().fail(db, job_name, duration_ms=(time.perf_counter() - perf_started) * 1000, error_message=perf_error)
+        try:
+            with SessionLocal() as db:
+                BackgroundJobStateService().fail(db, job_name, duration_ms=(time.perf_counter() - perf_started) * 1000, error_message=perf_error)
+        except Exception:
+            pass
         with _state_lock:
             _state["last_completed_at"] = datetime.utcnow().isoformat()
             _state["last_status"] = "error"
             _state["last_error"] = perf_error
             _state["last_result"] = {"traceback": traceback.format_exc(limit=4)}
+        runtime_worker_coordinator.fail(job_name, error=perf_error, result={"traceback": traceback.format_exc(limit=4)})
     finally:
         performance_recorder.record_background_task(
             job_name,
@@ -331,7 +375,10 @@ def _run_job(job_name: str, work):
             perf_started_at,
         )
         with _state_lock:
-            _state["running"] = False
+            runtime_snapshot = runtime_worker_coordinator.snapshot()
+            _state["running_jobs"] = runtime_snapshot.get("running_jobs", {})
+            _state["running_count"] = runtime_snapshot.get("running_count", 0)
+            _state["running"] = bool(_state["running_jobs"])
 
 
 def _compact_payload(value, depth: int = 0):
