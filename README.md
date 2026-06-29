@@ -1337,7 +1337,7 @@ Endpoint:
 
 This endpoint is explicit and should not be called by page render.
 
-The lightweight startup batch prioritizes first-screen readiness. `learning_summary` and `dashboard_overview_summary` are generated before deeper diagnostic snapshots, so the Learning and Dashboard surfaces can show stored evidence quickly while advanced panels continue warming in the background.
+The lightweight startup batch prioritizes first-screen readiness. `learning_summary` and `dashboard_overview_summary` are generated first, then the same background warm-up continues through every critical snapshot type, including Trading Game ledger/equity snapshots and deeper intelligence summaries. This keeps the API/UI responsive while preventing the Central Brain Runtime from staying degraded after deploy because critical snapshots were never produced.
 
 ### Snapshot Watchdog
 

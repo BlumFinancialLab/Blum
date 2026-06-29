@@ -17,6 +17,7 @@ from app.services.central_brain_runtime import (
     SnapshotWatchdogService,
 )
 from app.services.dashboard_snapshots import DashboardSnapshotService
+from app.services.realtime import startup_snapshot_warmup_budget
 
 
 def setup_db() -> Session:
@@ -129,6 +130,15 @@ def test_get_side_effect_detection_guard_is_in_middleware_source():
 def test_dashboard_overview_snapshot_is_in_startup_warmup_budget():
     assert "learning_summary" in CRITICAL_SNAPSHOT_TYPES[:8]
     assert "dashboard_overview_summary" in CRITICAL_SNAPSHOT_TYPES[:8]
+
+
+def test_startup_snapshot_warmup_budget_covers_all_critical_snapshots():
+    assert startup_snapshot_warmup_budget() == len(CRITICAL_SNAPSHOT_TYPES)
+    assert "capital_allocation_summary" in CRITICAL_SNAPSHOT_TYPES[: startup_snapshot_warmup_budget()]
+    assert "alpha_recovery_summary" in CRITICAL_SNAPSHOT_TYPES[: startup_snapshot_warmup_budget()]
+    assert "meta_cognition_summary" in CRITICAL_SNAPSHOT_TYPES[: startup_snapshot_warmup_budget()]
+    assert "trading_game_ledger_snapshot" in CRITICAL_SNAPSHOT_TYPES[: startup_snapshot_warmup_budget()]
+    assert "equity_curve_snapshot" in CRITICAL_SNAPSHOT_TYPES[: startup_snapshot_warmup_budget()]
 
 
 def test_snapshot_producer_batch_continues_after_failed_snapshot(monkeypatch):

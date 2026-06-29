@@ -117,10 +117,19 @@ def run_startup_pipeline() -> None:
 def run_startup_snapshot_warmup() -> None:
     def work(db):
         health = SnapshotWatchdogService().health(db, queue_rebuild=True)
-        snapshots = SnapshotProducerService().produce_many(db, max_items=min(settings.blum_autonomous_max_items_per_job, 8))
+        snapshots = SnapshotProducerService().produce_many(db, max_items=startup_snapshot_warmup_budget())
         return {"snapshot_health": health, "snapshots": snapshots, "policy": "startup_light_mode"}
 
     _run_job("startup_snapshot_warmup", work)
+
+
+def startup_snapshot_warmup_budget() -> int:
+    """Warm every critical snapshot after API startup without page-triggered work."""
+
+    from app.services.central_brain_runtime import CRITICAL_SNAPSHOT_TYPES
+
+    configured_limit = max(1, settings.blum_autonomous_max_items_per_job)
+    return min(configured_limit, len(CRITICAL_SNAPSHOT_TYPES))
 
 
 def run_runtime_snapshot_watchdog() -> None:
