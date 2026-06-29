@@ -56,7 +56,7 @@ def start_realtime_services() -> None:
     if _scheduler is not None:
         return
     with SessionLocal() as db:
-        BackgroundJobStateService().recover_interrupted(db)
+        BackgroundJobStateService().recover_interrupted(db, archive_failed=True)
     _scheduler = BackgroundScheduler(timezone="UTC")
     if settings.enable_live_startup and settings.startup_run_full_autonomous:
         threading.Thread(target=run_startup_pipeline, daemon=True).start()

@@ -64,13 +64,17 @@ def test_background_job_state_recovers_interrupted_running_jobs():
     with setup_db() as db:
         service = BackgroundJobStateService()
         service.start(db, "autonomous_research_engine", max_items=4)
+        service.fail(db, "market_refresh", error_message="old failure")
 
-        recovered = service.recover_interrupted(db, reason="test_restart")
-        row = db.scalar(select(BackgroundJobState).where(BackgroundJobState.job_name == "autonomous_research_engine"))
+        recovered = service.recover_interrupted(db, reason="test_restart", archive_failed=True)
+        running_row = db.scalar(select(BackgroundJobState).where(BackgroundJobState.job_name == "autonomous_research_engine"))
+        failed_row = db.scalar(select(BackgroundJobState).where(BackgroundJobState.job_name == "market_refresh"))
 
-        assert recovered["recovered"] == 1
-        assert row.status == "interrupted"
-        assert row.error_message == "test_restart"
+        assert recovered["recovered"] == 2
+        assert running_row.status == "interrupted"
+        assert running_row.error_message == "test_restart"
+        assert failed_row.status == "previous_failed"
+        assert "old failure" in failed_row.error_message
 
 
 def test_snapshot_producer_writes_missing_sections_and_watchdog_detects_stale():

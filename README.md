@@ -1355,7 +1355,7 @@ Default runtime budgets:
 
 These budgets make long jobs visible and constrain new runtime work. Existing financial engines are not rewritten by this layer.
 
-On process startup, stale `running` rows left by a previous container are marked `interrupted`. This prevents a restarted Space from reporting a dead worker as still active.
+On process startup, stale `running` rows left by a previous container are marked `interrupted`, and previous-process `failed` rows are archived as `previous_failed`. This prevents a restarted Space from reporting dead workers or old failures as current-process health failures while keeping the audit trail in `brain_runtime_events`.
 
 ### Snapshot Producer
 

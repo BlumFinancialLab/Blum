@@ -236,6 +236,7 @@ Runtime extraction added:
 - duplicate runs of the same worker are deferred as `same_worker_already_running`;
 - deferrals are persisted as `module_deferred` events;
 - stale `running` jobs from a previous container are marked `interrupted` at startup;
+- previous-process failed jobs are archived as `previous_failed` so current health is not blocked by dead process state;
 - Central Brain Runtime now reads worker state without importing `realtime.py`;
 - the frequent professional Learning Loop lane defers heavy Market Sniper R-multiple simulation to deeper cycles.
 

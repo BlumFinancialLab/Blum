@@ -128,7 +128,8 @@ It replaces the scheduler-wide lock with worker-name isolation:
 - `snapshot_producer` no longer blocks `blum_professional_learning_cycle`;
 - `runtime_snapshot_watchdog` no longer blocks `market_refresh`;
 - state is visible through `running_jobs`, `running_count` and `worker_registry`.
-- stale `running` job rows from a previous process are marked `interrupted` on startup.
+- stale `running` job rows from a previous process are marked `interrupted` on startup;
+- previous-process `failed` rows are archived as `previous_failed` while their events remain audit evidence.
 
 Registered workers include:
 

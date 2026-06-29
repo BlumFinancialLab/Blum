@@ -178,20 +178,35 @@ class BackgroundJobStateService:
         BrainEventBus().publish(db, "module_failed", job_name, status="error", duration_ms=duration_ms, error_message=error_message)
         return row
 
-    def recover_interrupted(self, db: Session, *, reason: str = "process_startup_recovery") -> dict:
-        """Mark stale in-process jobs as interrupted after a process restart."""
+    def recover_interrupted(self, db: Session, *, reason: str = "process_startup_recovery", archive_failed: bool = False) -> dict:
+        """Mark stale in-process job state after a process restart."""
 
         now = datetime.utcnow()
-        rows = db.scalars(select(BackgroundJobState).where(BackgroundJobState.status == "running")).all()
+        statuses = ["running"]
+        if archive_failed:
+            statuses.append("failed")
+        rows = db.scalars(select(BackgroundJobState).where(BackgroundJobState.status.in_(statuses))).all()
         recovered = []
         for row in rows:
-            row.status = "interrupted"
+            previous_status = row.status
+            row.status = "interrupted" if previous_status == "running" else "previous_failed"
             row.last_completed_at = now
-            if row.last_started_at:
+            if previous_status == "running" and row.last_started_at:
                 row.duration_ms = max(0.0, (now - row.last_started_at).total_seconds() * 1000)
-            row.error_message = reason
-            recovered.append({"job_name": row.job_name, "stage_name": row.stage_name})
+            if previous_status == "running":
+                row.error_message = reason
+            else:
+                row.error_message = f"{reason}; archived previous failure: {row.error_message or 'unknown'}"[:4000]
+            recovered.append({"job_name": row.job_name, "stage_name": row.stage_name, "previous_status": previous_status, "new_status": row.status})
         db.commit()
+        for item in recovered:
+            BrainEventBus().publish(
+                db,
+                "worker_recovered",
+                item["job_name"],
+                status="ok",
+                payload={**item, "reason": reason},
+            )
         if recovered:
             BrainEventBus().publish(
                 db,
