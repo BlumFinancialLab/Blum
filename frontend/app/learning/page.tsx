@@ -59,6 +59,14 @@ export default function LearningPage() {
     async function loadTradingGame() {
       setTradingLoading(true);
       setTradingError("");
+      const readiness = await api.tradingGameReadiness();
+      if (!mounted) return;
+      const canLoadEvidence = ["READY", "STALE_BUT_USABLE", "INSUFFICIENT_EVIDENCE"].includes(readiness?.status);
+      if (!canLoadEvidence) {
+        setTrading({ readiness });
+        setTradingLoading(false);
+        return;
+      }
       const [equityResult, ledgerResult, ledgerSummaryResult, realityCheckResult, benchmarkResult] = await Promise.allSettled([
         api.tradingGameAnnotatedEquity(240),
         api.tradingGameLedger(25),
@@ -68,6 +76,7 @@ export default function LearningPage() {
       ] as const);
       if (!mounted) return;
       setTrading({
+        readiness,
         equity: equityResult.status === "fulfilled" ? equityResult.value : null,
         ledger: ledgerResult.status === "fulfilled" ? ledgerResult.value : null,
         ledgerSummary: ledgerSummaryResult.status === "fulfilled" ? ledgerSummaryResult.value : null,
@@ -141,6 +150,7 @@ export default function LearningPage() {
   const ledgerSummary = trading?.ledgerSummary?.summary ?? trading?.ledger?.summary ?? {};
   const realityCheck = trading?.realityCheck ?? {};
   const benchmark = trading?.benchmark ?? summary?.benchmark_summary ?? {};
+  const tradingReadiness = trading?.readiness ?? null;
   const truthPanel = summary?.truth_panel ?? [];
 
   return (
@@ -192,6 +202,7 @@ export default function LearningPage() {
           realityCheck={realityCheck}
           benchmark={benchmark}
           equityPayload={trading?.equity}
+          readiness={tradingReadiness}
           onRetry={() => setTrading(null)}
           onLoadMore={loadMoreLedger}
         />
@@ -325,10 +336,46 @@ function OverviewTab({ summary, loading, error, truthPanel, onRefresh }: { summa
   );
 }
 
-function TradingGameTab({ summary, cycle, loading, error, equityChart, equityPayload, ledgerRows, ledgerSummary, realityCheck, benchmark, onRetry, onLoadMore }: any) {
+function TradingGameTab({ summary, cycle, loading, error, equityChart, equityPayload, readiness, ledgerRows, ledgerSummary, realityCheck, benchmark, onRetry, onLoadMore }: any) {
   const equityInfo = equityPayloadSummary(equityPayload, equityChart);
+  const readinessStatus = readiness?.status ?? (loading ? "BUILDING" : "UNKNOWN");
+  const canShowEvidence = ["READY", "STALE_BUT_USABLE", "INSUFFICIENT_EVIDENCE"].includes(readinessStatus);
   return (
     <>
+      <section className={`panel trading-readiness-panel readiness-${String(readinessStatus).toLowerCase()}`}>
+        <div className="panel-head">
+          <span>Trading Game Readiness</span>
+          <strong>{readinessStatus.replaceAll("_", " ")}</strong>
+        </div>
+        <div className="evidence-grid">
+          <SmallDatum label="Evidence Grade" value={readiness?.evidence_grade ?? "pending"} />
+          <SmallDatum label="Source Decisions" value={readiness?.source_decision_count ?? "n/a"} />
+          <SmallDatum label="Trades" value={readiness?.source_trade_count ?? "n/a"} />
+          <SmallDatum label="Eligible Trades" value={readiness?.eligible_trade_count ?? "n/a"} />
+          <SmallDatum label="Ledger Snapshot" value={readiness?.ledger_snapshot_status ?? "n/a"} />
+          <SmallDatum label="Equity Snapshot" value={readiness?.equity_snapshot_status ?? "n/a"} />
+        </div>
+        {(readiness?.blocker || readiness?.next_required_action) && (
+          <p>
+            {readiness?.blocker ? `${readiness.blocker} ` : ""}
+            {readiness?.next_required_action ?? ""}
+          </p>
+        )}
+        {(readiness?.warnings ?? []).length > 0 && (
+          <div className="status-row">
+            {(readiness?.warnings ?? []).slice(0, 4).map((warning: string) => <StatusBadge key={warning} label={warning} />)}
+          </div>
+        )}
+      </section>
+
+      {!canShowEvidence && (
+        <div className="empty-state" style={{ marginTop: 12 }}>
+          Trading evidence is not renderable yet. The backend can keep building it autonomously; the UI will not trigger heavy work from this page.
+        </div>
+      )}
+
+      {canShowEvidence && (
+      <>
       <AsyncPanel title="Trading Game Evidence" loading={loading && !ledgerRows.length} error={error} updatedAt={summary?.data_freshness?.game_updated_at} onRetry={onRetry} fallback="Loading focused trading evidence">
         <section className="grid-3">
           <div className="panel">
@@ -399,6 +446,8 @@ function TradingGameTab({ summary, cycle, loading, error, equityChart, equityPay
           {ledgerRows.length === 0 && <div className="empty-state">No trade ledger rows loaded yet.</div>}
         </div>
       </section>
+      </>
+      )}
     </>
   );
 }

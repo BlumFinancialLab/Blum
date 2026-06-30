@@ -58,6 +58,12 @@ CRITICAL_SNAPSHOT_TYPES = [
     "capital_allocation_summary",
     "alpha_recovery_summary",
     "meta_cognition_summary",
+    "trading_game_readiness",
+    "brain_command_summary",
+    "alpha_readiness_summary",
+    "alpha_edge_map_summary",
+    "alpha_gates_summary",
+    "paper_copy_summary",
     "trading_game_ledger_snapshot",
     "equity_curve_snapshot",
 ]
@@ -355,6 +361,30 @@ class SnapshotProducerService:
             from app.services.meta_cognition import MetaCognitionEngine
 
             return MetaCognitionEngine().summary(db)
+        if snapshot_type == "trading_game_readiness":
+            from app.services.alpha_operating_system import TradingGameReadinessService
+
+            return TradingGameReadinessService().readiness(db)
+        if snapshot_type == "brain_command_summary":
+            from app.services.alpha_operating_system import BrainCommandSummaryService
+
+            return BrainCommandSummaryService().summary(db)
+        if snapshot_type == "alpha_readiness_summary":
+            from app.services.alpha_operating_system import AlphaReadinessEngine
+
+            return AlphaReadinessEngine().readiness(db)
+        if snapshot_type == "alpha_edge_map_summary":
+            from app.services.alpha_operating_system import EdgeMapService
+
+            return EdgeMapService().edge_map(db)
+        if snapshot_type == "alpha_gates_summary":
+            from app.services.alpha_operating_system import AlphaGateService
+
+            return AlphaGateService().gates(db)
+        if snapshot_type == "paper_copy_summary":
+            from app.services.alpha_operating_system import PaperCopyTradingService
+
+            return PaperCopyTradingService().summary(db)
         missing_sections.append("unknown_snapshot_type")
         return {"status": "unknown_snapshot_type", "snapshot_type": snapshot_type}
 

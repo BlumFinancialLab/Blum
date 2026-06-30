@@ -3186,3 +3186,214 @@ class CapitalInteractionRisk(Base):
     evidence_json: Mapped[dict] = mapped_column(JsonType, default=dict)
 
     game = relationship("TradingGame")
+
+
+class TradingGameReadinessSnapshot(Base):
+    __tablename__ = "trading_game_readiness_snapshots"
+    __table_args__ = (
+        Index("ix_tg_readiness_generated", "generated_at"),
+        Index("ix_tg_readiness_status_grade", "status", "evidence_grade"),
+        Index("ix_tg_readiness_game_generated", "game_id", "generated_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    game_id: Mapped[int | None] = mapped_column(ForeignKey("trading_games.id", ondelete="SET NULL"), index=True)
+    status: Mapped[str] = mapped_column(String(80), default="WAITING_FOR_SOURCE_DATA", index=True)
+    evidence_grade: Mapped[str] = mapped_column(String(80), default="insufficient", index=True)
+    blocker: Mapped[str] = mapped_column(Text, default="")
+    next_required_action: Mapped[str] = mapped_column(Text, default="")
+    payload_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    warnings_json: Mapped[list] = mapped_column(JsonType, default=list)
+    methodology_version: Mapped[str] = mapped_column(String(80), default="trading-game-readiness-v1", index=True)
+    generated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    is_stale: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+
+    game = relationship("TradingGame")
+
+
+class AlphaReadinessSnapshot(Base):
+    __tablename__ = "alpha_readiness_snapshots"
+    __table_args__ = (
+        Index("ix_alpha_readiness_generated", "generated_at"),
+        Index("ix_alpha_readiness_score", "alpha_readiness_score", "evidence_grade"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    status: Mapped[str] = mapped_column(String(80), default="INSUFFICIENT_EVIDENCE", index=True)
+    alpha_readiness_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    evidence_grade: Mapped[str] = mapped_column(String(80), default="insufficient", index=True)
+    classification: Mapped[str] = mapped_column(String(120), default="not_ready", index=True)
+    payload_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    warnings_json: Mapped[list] = mapped_column(JsonType, default=list)
+    methodology_version: Mapped[str] = mapped_column(String(80), default="alpha-readiness-v1", index=True)
+    generated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    is_stale: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+
+
+class AlphaGateSnapshot(Base):
+    __tablename__ = "alpha_gate_snapshots"
+    __table_args__ = (
+        Index("ix_alpha_gate_generated", "generated_at"),
+        Index("ix_alpha_gate_status", "gate_name", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    gate_name: Mapped[str] = mapped_column(String(120), index=True)
+    status: Mapped[str] = mapped_column(String(80), default="blocked", index=True)
+    score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    payload_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    warnings_json: Mapped[list] = mapped_column(JsonType, default=list)
+    generated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class EdgeMapSnapshot(Base):
+    __tablename__ = "edge_map_snapshots"
+    __table_args__ = (
+        Index("ix_edge_map_generated", "generated_at"),
+        Index("ix_edge_map_scope", "scope", "evidence_grade"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    scope: Mapped[str] = mapped_column(String(120), default="global", index=True)
+    evidence_grade: Mapped[str] = mapped_column(String(80), default="insufficient", index=True)
+    payload_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    warnings_json: Mapped[list] = mapped_column(JsonType, default=list)
+    generated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class PaperCopyStrategy(Base):
+    __tablename__ = "paper_copy_strategies"
+    __table_args__ = (
+        Index("ix_paper_copy_strategy_status_created", "status", "created_at"),
+        Index("ix_paper_copy_strategy_score", "copyability_score"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    strategy_id: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(180), default="BLUM Paper Copy Strategy")
+    status: Mapped[str] = mapped_column(String(80), default="paper_only", index=True)
+    strategy_type: Mapped[str] = mapped_column(String(120), default="conditional_copy_watchlist", index=True)
+    copyability_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    risk_budget_percent: Mapped[float] = mapped_column(Float, default=1.0)
+    max_open_positions: Mapped[int] = mapped_column(Integer, default=5)
+    rules_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    evidence_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    warnings_json: Mapped[list] = mapped_column(JsonType, default=list)
+    paper_only: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    no_broker_execution: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
+class PaperCopyPortfolio(Base):
+    __tablename__ = "paper_copy_portfolios"
+    __table_args__ = (
+        Index("ix_paper_copy_portfolio_status_updated", "status", "updated_at"),
+        Index("ix_paper_copy_portfolio_strategy", "strategy_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    portfolio_id: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    strategy_id: Mapped[int | None] = mapped_column(ForeignKey("paper_copy_strategies.id", ondelete="SET NULL"), index=True)
+    status: Mapped[str] = mapped_column(String(80), default="paper_active", index=True)
+    starting_capital: Mapped[float] = mapped_column(Float, default=100.0)
+    current_capital: Mapped[float] = mapped_column(Float, default=100.0, index=True)
+    cash: Mapped[float] = mapped_column(Float, default=100.0)
+    exposure: Mapped[float] = mapped_column(Float, default=0.0)
+    realized_pnl: Mapped[float] = mapped_column(Float, default=0.0)
+    unrealized_pnl: Mapped[float] = mapped_column(Float, default=0.0)
+    benchmark_ticker: Mapped[str] = mapped_column(String(32), default="SPY", index=True)
+    risk_state: Mapped[str] = mapped_column(String(80), default="conservative", index=True)
+    evidence_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    warnings_json: Mapped[list] = mapped_column(JsonType, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+    strategy = relationship("PaperCopyStrategy")
+
+
+class PaperCopyOrder(Base):
+    __tablename__ = "paper_copy_orders"
+    __table_args__ = (
+        Index("ix_paper_copy_orders_portfolio_created", "portfolio_id", "created_at"),
+        Index("ix_paper_copy_orders_ticker_status", "ticker", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    portfolio_id: Mapped[int | None] = mapped_column(ForeignKey("paper_copy_portfolios.id", ondelete="CASCADE"), index=True)
+    strategy_id: Mapped[int | None] = mapped_column(ForeignKey("paper_copy_strategies.id", ondelete="SET NULL"), index=True)
+    source_trade_plan_id: Mapped[int | None] = mapped_column(ForeignKey("trade_plans.id", ondelete="SET NULL"), index=True)
+    ticker: Mapped[str] = mapped_column(String(32), index=True)
+    side: Mapped[str] = mapped_column(String(40), default="paper_buy", index=True)
+    status: Mapped[str] = mapped_column(String(80), default="planned", index=True)
+    order_type: Mapped[str] = mapped_column(String(80), default="conditional_paper", index=True)
+    trigger_condition: Mapped[str] = mapped_column(Text, default="")
+    paper_price: Mapped[float | None] = mapped_column(Float)
+    paper_quantity: Mapped[float | None] = mapped_column(Float)
+    risk_amount: Mapped[float | None] = mapped_column(Float)
+    invalidation_level: Mapped[float | None] = mapped_column(Float)
+    target_1: Mapped[float | None] = mapped_column(Float)
+    target_2: Mapped[float | None] = mapped_column(Float)
+    evidence_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    portfolio = relationship("PaperCopyPortfolio")
+    strategy = relationship("PaperCopyStrategy")
+    source_trade_plan = relationship("TradePlan")
+
+
+class PaperCopyPosition(Base):
+    __tablename__ = "paper_copy_positions"
+    __table_args__ = (
+        Index("ix_paper_copy_positions_portfolio_status", "portfolio_id", "status"),
+        Index("ix_paper_copy_positions_ticker_opened", "ticker", "opened_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    portfolio_id: Mapped[int | None] = mapped_column(ForeignKey("paper_copy_portfolios.id", ondelete="CASCADE"), index=True)
+    strategy_id: Mapped[int | None] = mapped_column(ForeignKey("paper_copy_strategies.id", ondelete="SET NULL"), index=True)
+    source_order_id: Mapped[int | None] = mapped_column(ForeignKey("paper_copy_orders.id", ondelete="SET NULL"), index=True)
+    ticker: Mapped[str] = mapped_column(String(32), index=True)
+    status: Mapped[str] = mapped_column(String(80), default="open", index=True)
+    quantity: Mapped[float] = mapped_column(Float, default=0.0)
+    entry_price: Mapped[float | None] = mapped_column(Float)
+    current_price: Mapped[float | None] = mapped_column(Float)
+    market_value: Mapped[float | None] = mapped_column(Float)
+    unrealized_pnl: Mapped[float | None] = mapped_column(Float)
+    realized_pnl: Mapped[float | None] = mapped_column(Float)
+    invalidation_level: Mapped[float | None] = mapped_column(Float)
+    target_1: Mapped[float | None] = mapped_column(Float)
+    target_2: Mapped[float | None] = mapped_column(Float)
+    opened_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    evidence_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+
+    portfolio = relationship("PaperCopyPortfolio")
+    strategy = relationship("PaperCopyStrategy")
+    source_order = relationship("PaperCopyOrder")
+
+
+class PaperCopyPortfolioSnapshot(Base):
+    __tablename__ = "paper_copy_portfolio_snapshots"
+    __table_args__ = (
+        Index("ix_paper_copy_portfolio_snapshots_portfolio_created", "portfolio_id", "created_at"),
+        Index("ix_paper_copy_portfolio_snapshots_score", "copyability_score", "evidence_grade"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    portfolio_id: Mapped[int | None] = mapped_column(ForeignKey("paper_copy_portfolios.id", ondelete="CASCADE"), index=True)
+    strategy_id: Mapped[int | None] = mapped_column(ForeignKey("paper_copy_strategies.id", ondelete="SET NULL"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    capital: Mapped[float | None] = mapped_column(Float)
+    exposure: Mapped[float | None] = mapped_column(Float)
+    open_positions: Mapped[int] = mapped_column(Integer, default=0)
+    pending_orders: Mapped[int] = mapped_column(Integer, default=0)
+    copyability_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    evidence_grade: Mapped[str] = mapped_column(String(80), default="insufficient", index=True)
+    payload_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    warnings_json: Mapped[list] = mapped_column(JsonType, default=list)
+
+    portfolio = relationship("PaperCopyPortfolio")
+    strategy = relationship("PaperCopyStrategy")

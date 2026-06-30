@@ -143,6 +143,15 @@ from app.services.alpha_recovery import (
     BenchmarkMethodologyValidator,
     MissedWinnersEngine,
 )
+from app.services.alpha_operating_system import (
+    AlphaGateService,
+    AlphaReadinessEngine,
+    BrainCommandSummaryService,
+    EdgeMapService,
+    PaperCopyTradingService,
+    TradingGameReadinessService,
+    V1_FEATURE_SET,
+)
 from app.services.autonomous_engine import AutonomousResearchEngine, latest_autonomous_status
 from app.services.blum_financial_model import (
     build_training_dataset,
@@ -324,6 +333,21 @@ def brain_runtime_state(db: Session = Depends(get_db)) -> dict:
     return CentralBrainRuntime().state(db)
 
 
+@router.get("/brain/command-summary")
+def brain_command_summary(db: Session = Depends(get_db)) -> dict:
+    return BrainCommandSummaryService().summary(db)
+
+
+@router.get("/brain/capabilities")
+def brain_capabilities(db: Session = Depends(get_db)) -> dict:
+    return BrainCommandSummaryService().capabilities(db)
+
+
+@router.get("/brain/evolution")
+def brain_evolution(db: Session = Depends(get_db)) -> dict:
+    return BrainCommandSummaryService().evolution(db)
+
+
 @router.get("/snapshots/health")
 def snapshots_health(db: Session = Depends(get_db)) -> dict:
     return SnapshotWatchdogService().health(db, queue_rebuild=False)
@@ -390,7 +414,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
     return {
         "service": "blum-ai-financial-intelligence",
         "app_version": settings.app_version,
-        "feature_set": "market-sniper-engine-v1",
+        "feature_set": V1_FEATURE_SET,
         "environment": settings.environment,
         "generated_at": datetime.utcnow().isoformat(),
         "hugging_face": {
@@ -627,7 +651,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "Hugging Face serves the previous image until the Docker build finishes successfully.",
             "The finance-domain 7B model is disabled by default unless BLUM_ENABLE_FINANCIAL_BRAIN_MODEL=true.",
             "Existing snapshots are refreshed by the autonomous engine after a successful deployment.",
-            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 0.20.0.",
+            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 1.0.0.",
         ],
     }
 
@@ -815,6 +839,12 @@ def trading_game_status(db: Session = Depends(get_db)) -> dict:
     return TradingGameSimulator().status(db)
 
 
+@router.get("/trading-game/readiness")
+@router.get("/api/trading-game/readiness")
+def trading_game_readiness(db: Session = Depends(get_db)) -> dict:
+    return TradingGameReadinessService().readiness(db)
+
+
 @router.get("/api/copy-trading/status")
 def copy_trading_status(db: Session = Depends(get_db)) -> dict:
     return CopyTradingIntelligenceService().status(db)
@@ -828,6 +858,54 @@ def copy_trading_candidates(limit: int = Query(default=25, ge=1, le=100), db: Se
 @router.get("/api/copy-trading/dashboard")
 def copy_trading_dashboard(limit: int = Query(default=25, ge=1, le=100), db: Session = Depends(get_db)) -> dict:
     return CopyTradingIntelligenceService().dashboard(db, limit=limit)
+
+
+@router.get("/alpha/readiness")
+@router.get("/api/alpha/readiness")
+def alpha_readiness(db: Session = Depends(get_db)) -> dict:
+    return AlphaReadinessEngine().readiness(db)
+
+
+@router.get("/alpha/edge-map")
+@router.get("/api/alpha/edge-map")
+def alpha_edge_map(limit: int = Query(default=12, ge=1, le=50), db: Session = Depends(get_db)) -> dict:
+    return EdgeMapService().edge_map(db, limit=limit)
+
+
+@router.get("/alpha/gates")
+@router.get("/api/alpha/gates")
+def alpha_gates(db: Session = Depends(get_db)) -> dict:
+    return AlphaGateService().gates(db)
+
+
+@router.get("/paper-copy/summary")
+@router.get("/api/paper-copy/summary")
+def paper_copy_summary(limit: int = Query(default=12, ge=1, le=50), db: Session = Depends(get_db)) -> dict:
+    return PaperCopyTradingService().summary(db, limit=limit)
+
+
+@router.get("/paper-copy/readiness")
+@router.get("/api/paper-copy/readiness")
+def paper_copy_readiness(db: Session = Depends(get_db)) -> dict:
+    return PaperCopyTradingService().readiness(db)
+
+
+@router.get("/paper-copy/strategies")
+@router.get("/api/paper-copy/strategies")
+def paper_copy_strategies(limit: int = Query(default=40, ge=1, le=100), db: Session = Depends(get_db)) -> dict:
+    return PaperCopyTradingService().strategies(db, limit=limit)
+
+
+@router.get("/paper-copy/positions")
+@router.get("/api/paper-copy/positions")
+def paper_copy_positions(limit: int = Query(default=80, ge=1, le=200), db: Session = Depends(get_db)) -> dict:
+    return PaperCopyTradingService().positions(db, limit=limit)
+
+
+@router.get("/paper-copy/portfolio/{portfolio_id}")
+@router.get("/api/paper-copy/portfolio/{portfolio_id}")
+def paper_copy_portfolio(portfolio_id: str, db: Session = Depends(get_db)) -> dict:
+    return PaperCopyTradingService().portfolio(db, portfolio_id=portfolio_id)
 
 
 @router.post("/api/trading-game/run")

@@ -15,7 +15,7 @@ export default function CopyTradingPage() {
   useEffect(() => {
     let mounted = true;
     setLoading(true);
-    api.copyTradingDashboard(25)
+    api.paperCopySummary(25)
       .then((payload) => {
         if (mounted) setData(payload);
       })
@@ -47,7 +47,7 @@ export default function CopyTradingPage() {
           { label: "Mode", value: data?.mode ?? "paper_copy_intelligence", tone: "info" },
           { label: "Guardrail", value: data?.paper_only ? "paper only" : "blocked", tone: data?.paper_only ? "positive" : "negative" },
           { label: "Candidates", value: String(summary?.candidate_count ?? rows.length), tone: rows.length ? "positive" : "attention" },
-          { label: "Execution", value: data?.no_broker_execution ? "disabled" : "unknown", tone: "attention" },
+          { label: "Readiness", value: data?.readiness?.status ?? "building", tone: "attention" },
         ]}
       />
 
@@ -56,6 +56,26 @@ export default function CopyTradingPage() {
         <MetricCard label="Trigger-ready" value={summary?.actionable_if_triggered ?? 0} subvalue="Still conditional, never direct orders" icon={<Zap size={15} />} tone="positive" />
         <MetricCard label="Wait for Trigger" value={summary?.wait_for_trigger ?? 0} subvalue="Setup not active yet" icon={<Target size={15} />} tone="info" />
         <MetricCard label="Blocked" value={summary?.blocked ?? 0} subvalue="Avoid/reduce/insufficient risk plan" icon={<ShieldAlert size={15} />} tone="negative" />
+      </section>
+
+      <section className="grid-2" style={{ marginBottom: 12 }}>
+        <BloombergPanel title="Paper Copy Operating State" value={data?.readiness?.status ?? "pending"} subtitle="Durable state remains paper-only and brokerless">
+          <div className="professional-grid-3">
+            <MetricCard label="Strategies" value={data?.readiness?.strategy_count ?? 0} />
+            <MetricCard label="Portfolios" value={data?.readiness?.portfolio_count ?? 0} />
+            <MetricCard label="Open Positions" value={data?.readiness?.open_position_count ?? 0} />
+          </div>
+          <p>{data?.policy ?? "Paper copy intelligence is informational only."}</p>
+        </BloombergPanel>
+
+        <BloombergPanel title="Latest Paper Portfolio" value={data?.portfolio?.portfolio_id ?? "not created"} subtitle="Paper capital state is shown only when stored">
+          <div className="professional-grid-3">
+            <MetricCard label="Capital" value={formatCurrency(data?.portfolio?.current_capital)} />
+            <MetricCard label="Exposure" value={formatCurrency(data?.portfolio?.exposure)} />
+            <MetricCard label="Risk State" value={data?.portfolio?.risk_state ?? "n/a"} />
+          </div>
+          {!!data?.warnings?.length && <p>{data.warnings.slice(0, 3).join(" | ")}</p>}
+        </BloombergPanel>
       </section>
 
       <section className="grid-2" style={{ marginBottom: 12 }}>
@@ -155,4 +175,9 @@ function formatNumber(value: any) {
 function formatPrice(value: any) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return "n/a";
   return Number(value).toFixed(2);
+}
+
+function formatCurrency(value: any) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "n/a";
+  return `${Number(value).toFixed(2)} EUR`;
 }

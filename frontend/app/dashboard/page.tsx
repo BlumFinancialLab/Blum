@@ -41,7 +41,7 @@ export default function DashboardPage() {
   const [pipelineStatus, setPipelineStatus] = useState<PipelineStatus | null>(null);
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [brainStatus, setBrainStatus] = useState<BrainStatus | null>(null);
-  const [learningSummary, setLearningSummary] = useState<any | null>(null);
+  const [commandSummary, setCommandSummary] = useState<any | null>(null);
   const [executive, setExecutive] = useState<ExecutiveDashboardPayload | null>(null);
   const [error, setError] = useState("");
   const [liveError, setLiveError] = useState("");
@@ -53,7 +53,7 @@ export default function DashboardPage() {
       const overview = await api.overview();
       setData(overview);
 
-      const [newsResult, sentimentResult, statusResult, systemResult, executiveResult, brainResult, learningResult] =
+      const [newsResult, sentimentResult, statusResult, systemResult, executiveResult, brainResult, commandResult] =
         await Promise.allSettled([
           api.liveNews(60),
           api.marketSentiment(48),
@@ -61,7 +61,7 @@ export default function DashboardPage() {
           api.systemStatus(),
           api.executiveDashboard(),
           api.brainStatus(),
-          api.learningSummary()
+          api.brainCommandSummary()
         ] as const);
 
       if (newsResult.status === "fulfilled") setLiveNews(newsResult.value);
@@ -70,7 +70,7 @@ export default function DashboardPage() {
       if (systemResult.status === "fulfilled") setSystemStatus(systemResult.value);
       if (executiveResult.status === "fulfilled") setExecutive(executiveResult.value);
       if (brainResult.status === "fulfilled") setBrainStatus(brainResult.value);
-      if (learningResult.status === "fulfilled") setLearningSummary(learningResult.value);
+      if (commandResult.status === "fulfilled") setCommandSummary(commandResult.value);
 
       setLiveError(
         [
@@ -80,7 +80,7 @@ export default function DashboardPage() {
           systemResult.status === "rejected" ? `system ${errorMessage(systemResult.reason)}` : "",
           executiveResult.status === "rejected" ? `executive ${errorMessage(executiveResult.reason)}` : "",
           brainResult.status === "rejected" ? `brain ${errorMessage(brainResult.reason)}` : "",
-          learningResult.status === "rejected" ? `learning ${errorMessage(learningResult.reason)}` : ""
+          commandResult.status === "rejected" ? `command ${errorMessage(commandResult.reason)}` : ""
         ]
           .filter(Boolean)
           .join(" | ")
@@ -234,7 +234,7 @@ export default function DashboardPage() {
         />
       </section>
 
-      <BrainLevelPanel summary={learningSummary} accuracy={data.accuracy} brainStatus={brainStatus} />
+      <BrainLevelPanel summary={commandSummary} accuracy={data.accuracy} brainStatus={brainStatus} />
 
       <section className="market-command-layout">
         <div className="market-pulse-grid">
@@ -340,13 +340,16 @@ export default function DashboardPage() {
 }
 
 function BrainLevelPanel({ summary, accuracy, brainStatus }: { summary: any; accuracy?: AccuracyOverview; brainStatus: BrainStatus | null }) {
-  const benchmarks = Object.entries(summary?.benchmark_summary?.major_benchmarks ?? {}).slice(0, 4) as Array<[string, any]>;
-  const whatNext = summary?.what_blum_should_learn_next ?? {};
-  const topWeakness = summary?.top_weakness;
-  const latestLesson = summary?.latest_lesson_learned;
-  const tradingPower = summary?.trading_power_score ?? accuracy?.blum_confidence_score;
-  const powerLabel = summary?.trading_power_classification ?? accuracy?.confidence_label ?? "evidence building";
+  const learning = summary?.learning_evolution ?? summary ?? {};
+  const improvement = summary?.improvement_regression ?? {};
+  const benchmarks = Object.entries(summary?.benchmark_truth?.major_benchmarks ?? summary?.benchmark_summary?.major_benchmarks ?? {}).slice(0, 4) as Array<[string, any]>;
+  const whatNext = summary?.what_blum_should_learn_next ?? improvement;
+  const topWeakness = improvement?.top_weakness ?? summary?.top_weakness;
+  const latestLesson = improvement?.latest_lesson ?? summary?.latest_lesson_learned;
+  const tradingPower = summary?.brain_capability_score ?? learning?.trading_power_score ?? accuracy?.blum_confidence_score;
+  const powerLabel = summary?.brain_classification ?? learning?.trading_power_classification ?? accuracy?.confidence_label ?? "evidence building";
   const evidenceStatus = evidenceLabel(summary);
+  const statusStrip = summary?.brain_status_strip ?? {};
   return (
     <BloombergPanel
       title="BLUM Brain Level"
@@ -361,10 +364,10 @@ function BrainLevelPanel({ summary, accuracy, brainStatus }: { summary: any; acc
             <span>{powerLabel}</span>
           </div>
           <div className="brain-level-facts">
-            <MetricCard label="Learning status" value={summary?.learning_loop_status ?? brainStatus?.learning_state ?? "pending"} subvalue={`latest ${formatDateTime(summary?.latest_learning_run_at)}`} tone="info" />
-            <MetricCard label="Win / Expectancy" value={`${formatPct(summary?.win_rate)} / ${formatR(summary?.expectancy_r)}`} subvalue="paper Trading Game evidence" tone="attention" />
-            <MetricCard label="Capital progress" value={formatPct(summary?.target_progress)} subvalue={`${summary?.completed_target_cycles ?? 0} target cycles | ${summary?.bankrupt_cycles ?? 0} bankrupt`} tone="positive" />
-            <MetricCard label="Evidence level" value={evidenceStatus} subvalue={summary?.live_vs_historical_status ?? "live evidence pending"} tone={evidenceStatus.includes("weak") ? "attention" : "info"} />
+            <MetricCard label="Learning status" value={statusStrip?.learning_status ?? learning?.latest_run_status ?? brainStatus?.learning_state ?? "pending"} subvalue={`latest ${formatDateTime(statusStrip?.latest_run_at ?? learning?.latest_run_at)}`} tone="info" />
+            <MetricCard label="Win / Expectancy" value={`${formatPct(learning?.win_rate)} / ${formatR(learning?.expectancy_r)}`} subvalue="paper Trading Game evidence" tone="attention" />
+            <MetricCard label="Capital progress" value={formatPct(learning?.target_progress)} subvalue={`copy ${statusStrip?.paper_copy_readiness ?? "pending"} | alpha ${statusStrip?.alpha_readiness ?? "pending"}`} tone="positive" />
+            <MetricCard label="Evidence level" value={evidenceStatus} subvalue={statusStrip?.trading_game_readiness ?? summary?.live_vs_historical_status ?? "live evidence pending"} tone={evidenceStatus.includes("weak") ? "attention" : "info"} />
           </div>
         </div>
 
@@ -390,8 +393,8 @@ function BrainLevelPanel({ summary, accuracy, brainStatus }: { summary: any; acc
             </div>
             <div>
               <span className="regime-badge tone-positive">next focus</span>
-              <strong>{whatNext?.next_learning_focus?.target ?? whatNext?.conclusion?.summary ?? "No active focus priority"}</strong>
-              <p>{whatNext?.next_learning_focus?.reason ?? "When evidence is sufficient, BLUM will show which factor/module should be studied next."}</p>
+              <strong>{whatNext?.next_learning_focus?.target ?? whatNext?.target ?? whatNext?.conclusion?.summary ?? "No active focus priority"}</strong>
+              <p>{whatNext?.next_learning_focus?.reason ?? whatNext?.reason ?? "When evidence is sufficient, BLUM will show which factor/module should be studied next."}</p>
             </div>
           </div>
         </div>
@@ -616,9 +619,11 @@ function formatR(value: unknown) {
 function evidenceLabel(summary: any) {
   if (!summary) return "loading";
   const warnings = summary?.warnings ?? [];
+  if (summary?.brain_status_strip?.alpha_readiness === "INSUFFICIENT_EVIDENCE") return "weak evidence";
+  if (summary?.brain_capability_score == null && summary?.trading_power_score == null) return "initializing";
   if (summary?.live_vs_historical_status === "missing") return "weak evidence";
   if (warnings.length > 2) return "limited evidence";
-  if (summary?.trading_power_score == null) return "initializing";
+  if (summary?.brain_capability_score == null && summary?.trading_power_score == null) return "initializing";
   return "tracked evidence";
 }
 

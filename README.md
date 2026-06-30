@@ -1534,25 +1534,61 @@ The Space serves the FastAPI backend and the exported Next.js frontend on port `
 
 Backtesting is included for research validation only. It reports historical hit rate, average forward return over 5D/20D/60D, max adverse excursion, max favorable excursion and false positives. It does not predict or guarantee future returns.
 
+## BLUM v1.0.0 Alpha Operating System
+
+`v1.0.0 | alpha-operating-system` turns BLUM's existing learning, trading, benchmark and meta-cognition layers into a clearer operating layer:
+
+- `GET /brain/command-summary` returns the compact Command Center brain state.
+- `GET /brain/capabilities` exposes capability rows for trading, decision, business, portfolio, alpha and paper-copy readiness.
+- `GET /brain/evolution` reads stored Trading Power snapshots.
+- `GET /trading-game/readiness` explains why Trading Game evidence is ready, building, stale, insufficient, failed or data-quality blocked.
+- `GET /alpha/readiness`, `GET /alpha/edge-map` and `GET /alpha/gates` expose strict alpha-readiness evidence without running recalculation.
+- `GET /paper-copy/summary`, `GET /paper-copy/strategies`, `GET /paper-copy/positions`, `GET /paper-copy/readiness` and `GET /paper-copy/portfolio/{id}` expose paper-only copy intelligence state.
+
+The release preserves the snapshot-first runtime architecture: Command, Learning and Copy surfaces read lightweight stored evidence and do not trigger training, recalculation, broker activity or heavy Trading Game rebuilds during render.
+
+## Trading Game Readiness
+
+The Learning page now asks `GET /api/trading-game/readiness` before loading equity, ledger and benchmark details. The UI must never remain in generic loading. It shows one of:
+
+- `READY`
+- `BUILDING`
+- `WAITING_FOR_SOURCE_DATA`
+- `STALE_BUT_USABLE`
+- `FAILED`
+- `INSUFFICIENT_EVIDENCE`
+- `DATA_QUALITY_BLOCKED`
+
+Readiness includes source decision counts, source trade counts, eligible trade counts, ledger/equity/benchmark snapshot status, worker status, blocker, next required action, evidence grade and methodology version. It is diagnostic evidence, not a trading signal.
+
 ## Command Brain Level
 
-The Command Center includes a lightweight `BLUM Brain Level` panel powered by `GET /api/learning-intelligence/summary`. It is snapshot-first and shows:
+The Command Center includes a lightweight `BLUM Brain Level` panel powered primarily by `GET /brain/command-summary`. It is snapshot-first and shows:
 
 - current learning status and latest run timestamp;
 - Trading Power / evidence classification when precomputed;
 - Trading Game capital progress, win rate and expectancy R;
 - benchmark pressure versus stored market benchmarks;
-- latest weakness, latest lesson and next learning focus.
+- latest weakness, latest lesson and next learning focus;
+- alpha readiness and paper-copy readiness.
 
 This panel does not run training, recalculation or heavy diagnostics. It is intended to answer quickly whether BLUM's learning evidence is improving, deteriorating or still insufficient.
 
-## Copy Trading Intelligence
+## Paper Copy Trading Intelligence
 
-`/copy-trading` is a paper-only intelligence surface for conditional mirror plans. The backend exposes:
+`/copy-trading` is a paper-only intelligence surface for conditional mirror plans. The backend keeps the original compatibility endpoints:
 
 - `GET /api/copy-trading/status`
 - `GET /api/copy-trading/candidates`
 - `GET /api/copy-trading/dashboard`
+
+and adds the v1.0 paper-copy operating endpoints:
+
+- `GET /paper-copy/summary`
+- `GET /paper-copy/readiness`
+- `GET /paper-copy/strategies`
+- `GET /paper-copy/positions`
+- `GET /paper-copy/portfolio/{portfolio_id}`
 
 The service reads persisted `TradePlan`, `SniperScore` and Trading Game evidence. It does not recalculate signals, connect to brokers, place orders or claim performance. A candidate is downgraded when it is missing entry trigger, invalidation or target/risk-plan evidence.
 
@@ -1563,7 +1599,7 @@ The output is designed to answer:
 - which setups are blocked by risk-plan gaps or weak actionability;
 - what BLUM has learned from recent paper trades tied to the same ticker.
 
-Copy Trading Intelligence is a decision-audit layer, not an execution system.
+Paper Copy Trading Intelligence is a decision-audit layer and paper portfolio research surface, not an execution system. It never connects to a broker and never emits direct financial advice.
 
 ## Limitations
 
