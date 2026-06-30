@@ -1,5 +1,22 @@
 # Changelog
 
+## v2.0.0 | project-split
+
+- Introduced the formal BLUM Engine / BLUM Analyst / BLUM Runtime architecture split.
+- Added `backend/app/engine` with headless Engine contracts, module catalog, event contract and `BlumEngineFacade`.
+- Added `backend/app/runtime` with runtime responsibility contracts and `BlumRuntimeFacade`.
+- Added `backend/app/analyst` with the future `Italianhype/Blum-Analyst` dataset contract and export pipeline wrapper.
+- Added API endpoints:
+  - `GET /api/engine/status`
+  - `GET /api/engine/contracts`
+  - `GET /api/runtime/status`
+  - `GET /api/runtime/contracts`
+  - `GET /api/analyst/status`
+  - `GET /api/architecture/contracts`
+- Updated runtime identity to `2.0.0 | project-split`.
+- Kept existing application APIs and financial services backward-compatible.
+- Updated the training dataset export script to route through the Analyst dataset boundary.
+
 ## v1.1.0 | trader-brain
 
 - Re-centered BLUM around one product objective: becoming progressively better at paper-trading decisions through evidence and learning.

@@ -10,6 +10,109 @@ tags: [financial-analysis, finance, stock-market, ai, fastapi, nextjs, postgresq
 pinned: false
 ---
 
+# BLUM v2.0 Project Split
+
+BLUM is now organized as a Financial Intelligence Operating System with three independent layers:
+
+1. **BLUM Engine**: the headless source of truth. It owns learning, decisions, alpha validation, paper trading, portfolio intelligence, confidence calibration, meta-learning, historical memory and dataset export.
+2. **BLUM Analyst**: the future trainable reasoning model hosted as `Italianhype/Blum-Analyst`. It learns how BLUM reasons from curated Engine datasets. It does not own market data and is never the source of truth.
+3. **BLUM Runtime**: the application layer. It owns API delivery, scheduling, snapshots, observability and the product interface. It asks the Engine; it never decides.
+
+The operating principle is strict:
+
+`Market -> Engine evidence -> Decision -> Paper outcome -> Learning -> Better Engine decision -> Analyst dataset -> Validated reasoning assistant`
+
+The Runtime is replaceable. The Engine must continue learning if the frontend disappears.
+
+## v2.0 Layer Contracts
+
+New contract endpoints:
+
+- `GET /api/engine/status`
+- `GET /api/engine/contracts`
+- `GET /api/runtime/status`
+- `GET /api/runtime/contracts`
+- `GET /api/analyst/status`
+- `GET /api/architecture/contracts`
+
+The split is intentionally backward-compatible. Existing APIs remain available, but new development must follow the layer boundary:
+
+| Layer | Owns | Must Not Own |
+| --- | --- | --- |
+| Engine | financial truth, decisions, learning, alpha evidence, paper outcomes, knowledge, datasets | frontend, pages, visual state, product navigation |
+| Analyst | reasoning model dataset contract and future model-training target | market data truth, execution, database authority |
+| Runtime | API, workers, scheduler, snapshots, cache, monitoring, pages | intelligence, alpha logic, trade decisions |
+
+## v2.0 Architecture
+
+```mermaid
+graph TD
+  subgraph Engine["BLUM Engine - Headless Truth Layer"]
+    MarketListener
+    SignalGenerator
+    DecisionEngine
+    PaperTrading
+    OutcomeEvaluator
+    LearningLoop
+    KnowledgeGraph
+    ConfidenceCalibration
+    PortfolioIntelligence
+    AlphaValidation
+    BrainScore
+    DatasetExport
+  end
+
+  subgraph Analyst["BLUM Analyst - Future Model Layer"]
+    ReasoningDataset
+    QualityValidation
+    TrainingDataset
+    BlumAnalystModel["Italianhype/Blum-Analyst"]
+  end
+
+  subgraph Runtime["BLUM Runtime - Application Layer"]
+    FastAPI
+    Scheduler
+    Snapshots
+    Monitoring
+    NextUI
+  end
+
+  MarketListener --> SignalGenerator --> DecisionEngine --> PaperTrading --> OutcomeEvaluator --> LearningLoop
+  LearningLoop --> KnowledgeGraph
+  LearningLoop --> ConfidenceCalibration
+  LearningLoop --> PortfolioIntelligence
+  LearningLoop --> AlphaValidation
+  AlphaValidation --> BrainScore
+  BrainScore --> DatasetExport
+  DatasetExport --> ReasoningDataset --> QualityValidation --> TrainingDataset --> BlumAnalystModel
+  Runtime -->|contract read| Engine
+  Engine -->|curated dataset| Analyst
+  Analyst -->|reasoning assistant only| Engine
+  NextUI --> FastAPI --> Snapshots
+```
+
+## v2.0 Rules
+
+- Engine is the only source of truth.
+- Runtime reads contracts and snapshots; it never owns intelligence.
+- Analyst learns reasoning only; Engine validates all Analyst output.
+- No frontend render may trigger training, recalculation or heavy intelligence.
+- No source-code self-modification.
+- No real broker execution.
+- No alpha claim without benchmark-relative evidence.
+
+## v2.0 Migration Notes
+
+The current codebase still contains legacy services under `backend/app/services` for compatibility. v2.0 introduces the durable split through:
+
+- `backend/app/engine`: Engine contracts and headless facade.
+- `backend/app/runtime`: Runtime contracts and application facade.
+- `backend/app/analyst`: Analyst dataset/model-boundary contracts.
+
+Future migrations should move legacy service implementations behind these boundaries module by module. New code should not import intelligence services directly from product pages or runtime endpoints unless it is adapting them behind an Engine contract.
+
+---
+
 # BLUM v1.1.0 Trader Brain
 
 BLUM is no longer organized as a collection of financial dashboards. BLUM is an autonomous trader-brain research system whose only product objective is to become progressively better at making paper-trading decisions through evidence, outcomes, learning and self-correction.

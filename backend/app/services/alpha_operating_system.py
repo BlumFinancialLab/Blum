@@ -36,13 +36,14 @@ from app.models import (
     TradingGameTrade,
     TradingIntelligenceMetric,
 )
+from app.engine.contracts import ENGINE_VERSION, PROJECT_FEATURE_SET
 from app.services.copy_trading_intelligence import COPY_TRADING_POLICY, CopyTradingIntelligenceService
 from app.services.dashboard_snapshots import DashboardSnapshotService
 from app.services.learning_summary import LearningSummaryService
 
 
-V1_VERSION = "1.1.0"
-V1_FEATURE_SET = "trader-brain"
+V1_VERSION = ENGINE_VERSION
+V1_FEATURE_SET = PROJECT_FEATURE_SET
 READINESS_METHODOLOGY = "trading-game-readiness-v1"
 ALPHA_METHODOLOGY = "alpha-readiness-v1"
 

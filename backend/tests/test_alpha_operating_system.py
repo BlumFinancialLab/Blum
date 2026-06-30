@@ -158,6 +158,6 @@ def test_brain_command_summary_is_compact_and_truth_first():
 
         payload = BrainCommandSummaryService().summary(db)
 
-    assert payload["feature_set"] == "trader-brain"
+    assert payload["feature_set"] == "project-split"
     assert "capability_matrix" in payload
     assert payload["policy"].startswith("Command reads compact evidence")

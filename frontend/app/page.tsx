@@ -39,7 +39,7 @@ export default function BrainPage() {
         title="Is BLUM becoming a better trader?"
         subtitle="One control room for decision quality, alpha readiness, learning velocity and evidence quality. No market noise, no vanity dashboard."
         statusItems={[
-          { label: "Version", value: `v${data.version ?? "1.1.0"}`, tone: "info" },
+          { label: "Version", value: `v${data.version ?? "2.0.0"}`, tone: "info" },
           { label: "Brain", value: data.brain_classification ?? "evaluating", tone: toneForScore(data.brain_score) },
           { label: "Alpha", value: data.readiness?.alpha ?? "pending", tone: data.readiness?.alpha === "READY" ? "positive" : "attention" },
           { label: "Evidence", value: data.readiness?.evidence_grade ?? "unknown", tone: evidenceTone },

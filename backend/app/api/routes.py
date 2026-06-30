@@ -12,7 +12,10 @@ from app.ai.orchestrator import AIOrchestrator
 from app.ai.financial_brain import FinancialBrainModel
 from app.core.config import get_settings
 from app.core.database import get_db
+from app.analyst.dataset_pipeline import BlumAnalystDatasetPipeline
+from app.engine.facade import BlumEngineFacade
 from app.ingestion.news_ingestor import NewsIngestor
+from app.runtime.facade import BlumRuntimeFacade
 from app.models import (
     AIInsight,
     AccuracySnapshot,
@@ -332,6 +335,49 @@ def startup_status() -> dict:
 @router.get("/brain/runtime-state")
 def brain_runtime_state(db: Session = Depends(get_db)) -> dict:
     return CentralBrainRuntime().state(db)
+
+
+@router.get("/engine/status")
+@router.get("/api/engine/status")
+def engine_status(db: Session = Depends(get_db)) -> dict:
+    return BlumEngineFacade().status(db)
+
+
+@router.get("/engine/contracts")
+@router.get("/api/engine/contracts")
+def engine_contracts() -> dict:
+    return BlumEngineFacade().contract()
+
+
+@router.get("/runtime/status")
+@router.get("/api/runtime/status")
+def runtime_status(db: Session = Depends(get_db)) -> dict:
+    return BlumRuntimeFacade().status(db)
+
+
+@router.get("/runtime/contracts")
+@router.get("/api/runtime/contracts")
+def runtime_contracts() -> dict:
+    return BlumRuntimeFacade().contract()
+
+
+@router.get("/analyst/status")
+@router.get("/api/analyst/status")
+def analyst_status(db: Session = Depends(get_db)) -> dict:
+    return BlumAnalystDatasetPipeline().status(db)
+
+
+@router.get("/architecture/contracts")
+@router.get("/api/architecture/contracts")
+def architecture_contracts() -> dict:
+    return {
+        "version": settings.app_version,
+        "feature_set": V1_FEATURE_SET,
+        "engine": BlumEngineFacade().contract(),
+        "runtime": BlumRuntimeFacade().contract(),
+        "analyst": BlumAnalystDatasetPipeline().contract(),
+        "policy": "Engine owns truth, Analyst learns reasoning, Runtime observes and renders.",
+    }
 
 
 @router.get("/brain/command-summary")
@@ -679,7 +725,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "Hugging Face serves the previous image until the Docker build finishes successfully.",
             "The finance-domain 7B model is disabled by default unless BLUM_ENABLE_FINANCIAL_BRAIN_MODEL=true.",
             "Existing snapshots are refreshed by the autonomous engine after a successful deployment.",
-            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 1.1.0.",
+            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 2.0.0.",
         ],
     }
 

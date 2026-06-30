@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
+from app.engine.contracts import ENGINE_VERSION, PROJECT_FEATURE_SET
 from app.models import (
     AlphaRecoveryAction,
     BlumTradingPowerScore,
@@ -35,8 +36,8 @@ from app.services.alpha_operating_system import (
 from app.services.learning_summary import LearningSummaryService
 
 
-TRADER_BRAIN_VERSION = "1.1.0"
-TRADER_BRAIN_FEATURE_SET = "trader-brain"
+TRADER_BRAIN_VERSION = ENGINE_VERSION
+TRADER_BRAIN_FEATURE_SET = PROJECT_FEATURE_SET
 
 
 class TraderBrainService:
