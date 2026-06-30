@@ -56,6 +56,61 @@ def test_training_ground_exposes_hypothesis_validation_and_lessons():
     assert payload["knowledge_gained"][0]["ticker"] == "NVDA"
 
 
+def test_training_ground_does_not_look_empty_when_latest_run_is_budget_wait():
+    with setup_db() as db:
+        db.add(
+            LearningRun(
+                run_id="productive-run",
+                status="completed",
+                trigger="professional_learning",
+                batch_size=10,
+                predictions_created=8,
+                outcomes_evaluated=6,
+                mistakes_found=2,
+                memory_updates=3,
+                started_at=datetime(2026, 6, 30, 9, 0, 0),
+            )
+        )
+        db.add(
+            LearningRun(
+                run_id="budget-wait",
+                status="budget_wait",
+                trigger="professional_learning",
+                batch_size=0,
+                predictions_created=0,
+                outcomes_evaluated=0,
+                mistakes_found=0,
+                memory_updates=0,
+                started_at=datetime(2026, 6, 30, 10, 0, 0),
+            )
+        )
+        for index in range(3):
+            db.add(
+                TradeLearningEvidence(
+                    ticker="IBM",
+                    setup_type="avoid_no_edge",
+                    regime="Recovery",
+                    lesson_type="entry_timing_bad",
+                    observation="avoid no edge was missed; evaluate trigger strictness.",
+                    sample_size=80,
+                    confidence=94.11,
+                    created_at=datetime(2026, 6, 30, 10, 5, index),
+                )
+            )
+        db.commit()
+
+        payload = TraderBrainService().training_ground(db)
+
+    validation = payload["current_validation"]
+    assert validation["status"] == "budget_wait"
+    assert validation["display_status"] == "waiting_budget_using_latest_evidence"
+    assert validation["evidence_total"]["predictions_generated"] == 8
+    assert validation["evidence_total"]["outcomes_evaluated"] == 6
+    assert validation["latest_productive_run"]["predictions_generated"] == 8
+    assert "stored evidence exists" in validation["summary"]
+    assert len(payload["patterns_rejected"]) == 1
+
+
 def test_paper_trading_is_paper_only_and_uses_completed_trade_evidence():
     with setup_db() as db:
         game = TradingGame(game_id="paper-test")

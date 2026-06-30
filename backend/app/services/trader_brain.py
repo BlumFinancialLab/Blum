@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from statistics import mean
 from typing import Any
 
@@ -143,7 +143,9 @@ class TraderBrainService:
 
     def training_ground(self, db: Session) -> dict:
         latest_run = latest_row(db, LearningRun)
-        lessons = db.scalars(select(TradeLearningEvidence).order_by(desc(TradeLearningEvidence.created_at)).limit(16)).all()
+        lessons = dedupe_lessons(
+            db.scalars(select(TradeLearningEvidence).order_by(desc(TradeLearningEvidence.created_at)).limit(80)).all()
+        )
         focus = db.scalars(
             select(LearningFocusPriority)
             .where(LearningFocusPriority.status.in_(["active", "proposed"]))
@@ -159,7 +161,7 @@ class TraderBrainService:
             "generated_at": datetime.utcnow().isoformat(),
             "current_experiment": experiment_from_focus(focus[0] if focus else None, latest_run),
             "current_hypothesis": hypothesis_from_focus(focus[0] if focus else None),
-            "current_validation": validation_from_run(latest_run),
+            "current_validation": validation_summary(db, latest_run),
             "trades_being_analyzed": trade_analysis_payload(db),
             "patterns_discovered": [lesson_payload(row) for row in lessons if row.lesson_type not in ["setup_failed", "entry_timing_bad"]][:8],
             "patterns_rejected": [lesson_payload(row) for row in lessons if row.lesson_type in ["setup_failed", "entry_timing_bad"]][:8],
@@ -560,6 +562,104 @@ def validation_from_run(row: LearningRun | None) -> dict:
         "mistakes_analyzed": row.mistakes_found,
         "memory_updates": row.memory_updates,
     }
+
+
+def validation_summary(db: Session, latest_run: LearningRun | None) -> dict:
+    latest_productive = db.scalar(
+        select(LearningRun)
+        .where(
+            (LearningRun.predictions_created > 0)
+            | (LearningRun.outcomes_evaluated > 0)
+            | (LearningRun.mistakes_found > 0)
+            | (LearningRun.memory_updates > 0)
+        )
+        .order_by(desc(LearningRun.started_at))
+        .limit(1)
+    )
+    since = datetime.utcnow() - timedelta(hours=24)
+    totals = learning_run_totals(db)
+    totals_24h = learning_run_totals(db, since=since)
+    latest_payload = validation_from_run(latest_run)
+    productive_payload = validation_from_run(latest_productive)
+    return {
+        **latest_payload,
+        "latest_run": run_payload(latest_run),
+        "latest_productive_run": run_payload(latest_productive),
+        "display_status": display_training_status(latest_run, latest_productive),
+        "evidence_total": totals,
+        "evidence_24h": totals_24h,
+        "summary": training_validation_summary(latest_payload, productive_payload, totals, totals_24h),
+    }
+
+
+def learning_run_totals(db: Session, since: datetime | None = None) -> dict:
+    query = select(
+        func.count(LearningRun.id),
+        func.coalesce(func.sum(LearningRun.predictions_created), 0),
+        func.coalesce(func.sum(LearningRun.outcomes_evaluated), 0),
+        func.coalesce(func.sum(LearningRun.mistakes_found), 0),
+        func.coalesce(func.sum(LearningRun.memory_updates), 0),
+    )
+    if since is not None:
+        query = query.where(LearningRun.started_at >= since)
+    runs, predictions, outcomes, mistakes, memory = db.execute(query).one()
+    return {
+        "runs": int(runs or 0),
+        "predictions_generated": int(predictions or 0),
+        "outcomes_evaluated": int(outcomes or 0),
+        "mistakes_analyzed": int(mistakes or 0),
+        "memory_updates": int(memory or 0),
+    }
+
+
+def display_training_status(latest_run: LearningRun | None, latest_productive: LearningRun | None) -> str:
+    if latest_run is None and latest_productive is None:
+        return "no_training_data"
+    if latest_run and latest_run.status in {"running", "started"}:
+        return "training_running"
+    if latest_run and latest_run.status in {"budget_wait", "skipped"} and latest_productive is not None:
+        return "waiting_budget_using_latest_evidence"
+    if latest_productive is not None:
+        return "evidence_available"
+    return getattr(latest_run, "status", None) or "unknown"
+
+
+def training_validation_summary(latest: dict, productive: dict, totals: dict, totals_24h: dict) -> str:
+    if totals["runs"] == 0:
+        return "No LearningRun evidence is stored yet."
+    if latest.get("status") in {"budget_wait", "skipped"} and productive.get("status") != "not_started":
+        return (
+            f"Latest run is {latest.get('status')}, but stored evidence exists: "
+            f"{totals['predictions_generated']} predictions, {totals['outcomes_evaluated']} outcomes, "
+            f"{totals['mistakes_analyzed']} mistakes and {totals['memory_updates']} memory updates."
+        )
+    if totals_24h["runs"] > 0:
+        return (
+            f"Last 24h: {totals_24h['runs']} runs, {totals_24h['predictions_generated']} predictions, "
+            f"{totals_24h['outcomes_evaluated']} outcomes and {totals_24h['memory_updates']} memory updates."
+        )
+    return (
+        f"Stored evidence: {totals['runs']} runs, {totals['predictions_generated']} predictions, "
+        f"{totals['outcomes_evaluated']} outcomes and {totals['memory_updates']} memory updates."
+    )
+
+
+def dedupe_lessons(rows: list[TradeLearningEvidence]) -> list[TradeLearningEvidence]:
+    seen: set[tuple[str, str, str, str, str]] = set()
+    unique: list[TradeLearningEvidence] = []
+    for row in rows:
+        key = (
+            row.ticker or "",
+            row.setup_type or "",
+            row.regime or "",
+            row.lesson_type or "",
+            row.observation or "",
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(row)
+    return unique
 
 
 def trade_analysis_payload(db: Session) -> dict:
