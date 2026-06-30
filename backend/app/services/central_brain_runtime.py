@@ -64,6 +64,10 @@ CRITICAL_SNAPSHOT_TYPES = [
     "alpha_edge_map_summary",
     "alpha_gates_summary",
     "paper_copy_summary",
+    "trader_brain_summary",
+    "trader_training_ground_summary",
+    "trader_paper_trading_summary",
+    "trader_alpha_summary",
     "trading_game_ledger_snapshot",
     "equity_curve_snapshot",
 ]
@@ -385,6 +389,22 @@ class SnapshotProducerService:
             from app.services.alpha_operating_system import PaperCopyTradingService
 
             return PaperCopyTradingService().summary(db)
+        if snapshot_type == "trader_brain_summary":
+            from app.services.trader_brain import TraderBrainService
+
+            return TraderBrainService().brain(db)
+        if snapshot_type == "trader_training_ground_summary":
+            from app.services.trader_brain import TraderBrainService
+
+            return TraderBrainService().training_ground(db)
+        if snapshot_type == "trader_paper_trading_summary":
+            from app.services.trader_brain import TraderBrainService
+
+            return TraderBrainService().paper_trading(db)
+        if snapshot_type == "trader_alpha_summary":
+            from app.services.trader_brain import TraderBrainService
+
+            return TraderBrainService().alpha(db)
         missing_sections.append("unknown_snapshot_type")
         return {"status": "unknown_snapshot_type", "snapshot_type": snapshot_type}
 

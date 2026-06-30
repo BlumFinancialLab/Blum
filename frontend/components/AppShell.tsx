@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Activity, Brain, Copy, Crosshair, Cpu, Database, Gauge, LineChart, MessageSquare, Network, Radar, Search, ShieldAlert, Timer, type LucideIcon } from "lucide-react";
+import { Activity, Brain, Copy, Cpu, Database, Dumbbell, ShieldAlert, TrendingUp, type LucideIcon } from "lucide-react";
 import clsx from "clsx";
 import { api } from "@/lib/api";
 import { SystemStatus } from "@/lib/types";
@@ -16,17 +16,10 @@ type NavItem = {
 };
 
 const nav: NavItem[] = [
-  { href: "/", label: "Command", icon: Gauge, aliases: ["/dashboard"] },
-  { href: "/stock-radar", label: "Radar", icon: Radar, aliases: ["/etf-radar", "/ipo-radar", "/assets"] },
-  { href: "/signal-lab", label: "Signals", icon: Search },
-  { href: "/sniper", label: "Sniper", icon: Crosshair },
-  { href: "/copy-trading", label: "Copy", icon: Copy },
-  { href: "/market-brain", label: "Brain", icon: Cpu },
-  { href: "/learning", label: "Learning", icon: Brain },
-  { href: "/narratives", label: "Narratives", icon: Network, aliases: ["/themes"] },
-  { href: "/chart-analyst", label: "Charts", icon: LineChart },
-  { href: "/performance", label: "Performance", icon: Timer },
-  { href: "/chat", label: "Chat", icon: MessageSquare, aliases: ["/chatbot"] }
+  { href: "/", label: "Brain", icon: Brain, aliases: ["/dashboard"] },
+  { href: "/training-ground", label: "Training", icon: Dumbbell, aliases: ["/learning"] },
+  { href: "/paper-trading", label: "Paper Trading", icon: Copy, aliases: ["/copy-trading"] },
+  { href: "/alpha", label: "Alpha", icon: TrendingUp }
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -43,8 +36,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <div className="brand">
           <div className="brand-mark">B</div>
           <div>
-            <strong>Blum</strong>
-            <span>Market Intelligence Officer</span>
+          <strong>Blum</strong>
+            <span>Trader Brain</span>
           </div>
         </div>
         <div className="sidebar-market-state">
@@ -71,7 +64,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div><Cpu size={15} /> {systemStatus?.runtime_flags.financial_brain_model_enabled ? "Finance LLM active" : "Evidence fallback"}</div>
           <div><Brain size={15} /> {systemStatus?.active_models?.financial_brain_configured ?? "model pending"}</div>
           <div><ShieldAlert size={15} /> Research only</div>
-          <Link href="/methodology">Methodology and governance</Link>
+          <Link href="/performance">Developer diagnostics</Link>
         </div>
       </aside>
       <main className="workspace">{children}</main>

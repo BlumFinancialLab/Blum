@@ -282,6 +282,7 @@ from app.services.trading_intelligence_lab import (
     TradingIntelligenceMetricsService,
 )
 from app.services.performance import performance_recorder
+from app.services.trader_brain import TraderBrainService
 from app.signals.backtest import run_simple_backtest
 from app.signals.engine import SignalEngine
 
@@ -346,6 +347,33 @@ def brain_capabilities(db: Session = Depends(get_db)) -> dict:
 @router.get("/brain/evolution")
 def brain_evolution(db: Session = Depends(get_db)) -> dict:
     return BrainCommandSummaryService().evolution(db)
+
+
+@router.get("/trader-brain/brain")
+@router.get("/api/trader-brain/brain")
+def trader_brain(db: Session = Depends(get_db)) -> dict:
+    return TraderBrainService().brain(db)
+
+
+@router.get("/trader-brain/training-ground")
+@router.get("/api/trader-brain/training-ground")
+def trader_brain_training_ground(db: Session = Depends(get_db)) -> dict:
+    return TraderBrainService().training_ground(db)
+
+
+@router.get("/trader-brain/paper-trading")
+@router.get("/api/trader-brain/paper-trading")
+def trader_brain_paper_trading(
+    limit: int = Query(default=20, ge=1, le=80),
+    db: Session = Depends(get_db),
+) -> dict:
+    return TraderBrainService().paper_trading(db, limit=limit)
+
+
+@router.get("/trader-brain/alpha")
+@router.get("/api/trader-brain/alpha")
+def trader_brain_alpha(db: Session = Depends(get_db)) -> dict:
+    return TraderBrainService().alpha(db)
 
 
 @router.get("/snapshots/health")
@@ -651,7 +679,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "Hugging Face serves the previous image until the Docker build finishes successfully.",
             "The finance-domain 7B model is disabled by default unless BLUM_ENABLE_FINANCIAL_BRAIN_MODEL=true.",
             "Existing snapshots are refreshed by the autonomous engine after a successful deployment.",
-            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 1.0.0.",
+            "Browser cache can keep old static Next.js chunks; hard refresh if app_version is not 1.1.0.",
         ],
     }
 

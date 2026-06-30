@@ -84,17 +84,18 @@ def test_dashboard_snapshot_round_trip_and_stale_flag():
 def test_learning_page_keeps_heavy_work_out_of_initial_render():
     page = Path(__file__).resolve().parents[2] / "frontend" / "app" / "learning" / "page.tsx"
     text = page.read_text()
-    initial_effect = text.split("useEffect(() => {", 1)[1].split("}, []);", 1)[0]
 
-    assert "setTimeout(loadVisibleTables" not in text
-    assert "api.learningSummary()" in initial_effect
+    assert text.strip() == 'export { default } from "../training-ground/page";'
+
+    training_page = Path(__file__).resolve().parents[2] / "frontend" / "app" / "training-ground" / "page.tsx"
+    training_text = training_page.read_text()
+    initial_effect = training_text.split("useEffect(() => {", 1)[1].split("}, []);", 1)[0]
+
+    assert "api.traderTrainingGround()" in initial_effect
     assert initial_effect.count("api.") == 1
-    assert "api.tradingGameLedger(25)" in text
-    assert 'activeTab !== "trading"' in text
-    assert "Load panel" in text
-    assert "api.alphaRecoveryDashboard()" in text
-    assert "api.metaCognitionSummary()" in text
-    assert "What BLUM Should Learn Next" in text
+    assert "api.tradingGameLedger" not in training_text
+    assert "api.alphaRecoveryDashboard()" not in training_text
+    assert "api.metaCognitionSummary()" not in training_text
     assert "recalculateLearningTradingPower" not in text
     assert "recalculateDecisionSuperiority" not in text
     assert "recalculateBusinessQuality" not in text
@@ -104,14 +105,13 @@ def test_learning_page_keeps_heavy_work_out_of_initial_render():
 
 
 def test_deep_diagnostics_uses_human_readable_renderer_not_raw_json_dump():
-    page = Path(__file__).resolve().parents[2] / "frontend" / "app" / "learning" / "page.tsx"
+    page = Path(__file__).resolve().parents[2] / "frontend" / "components" / "DiagnosticPanelRenderer.tsx"
     text = page.read_text()
 
-    assert 'from "@/components/DiagnosticPanelRenderer"' in text
-    assert "<DiagnosticPanelRenderer" in text
     assert "compactPreview" not in text
     assert "JSON.stringify(compactPreview" not in text
-    assert "Load panel" in text
+    assert "DiagnosticPanelRenderer" in text
+    assert "Show raw JSON" in text
 
 
 def test_diagnostic_panel_renderer_hides_raw_json_by_default():

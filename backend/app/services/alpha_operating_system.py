@@ -41,8 +41,8 @@ from app.services.dashboard_snapshots import DashboardSnapshotService
 from app.services.learning_summary import LearningSummaryService
 
 
-V1_VERSION = "1.0.0"
-V1_FEATURE_SET = "alpha-operating-system"
+V1_VERSION = "1.1.0"
+V1_FEATURE_SET = "trader-brain"
 READINESS_METHODOLOGY = "trading-game-readiness-v1"
 ALPHA_METHODOLOGY = "alpha-readiness-v1"
 

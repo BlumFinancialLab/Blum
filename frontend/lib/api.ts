@@ -202,6 +202,10 @@ export const api = {
   brainCommandSummary: () => getJson<any>("/brain/command-summary"),
   brainCapabilities: () => getJson<any>("/brain/capabilities"),
   brainEvolution: () => getJson<any>("/brain/evolution"),
+  traderBrain: () => getJson<any>("/api/trader-brain/brain"),
+  traderTrainingGround: () => getJson<any>("/api/trader-brain/training-ground"),
+  traderPaperTrading: (limit = 20) => getJson<any>(`/api/trader-brain/paper-trading?limit=${limit}`),
+  traderAlpha: () => getJson<any>("/api/trader-brain/alpha"),
   snapshotsHealth: () => getJson<any>("/snapshots/health"),
   produceSnapshots: (snapshotType?: string, maxItems = 8) =>
     postJson<any>(`/snapshots/produce?max_items=${maxItems}${snapshotType ? `&snapshot_type=${encodeURIComponent(snapshotType)}` : ""}`, {}),

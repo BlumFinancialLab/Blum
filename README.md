@@ -10,11 +10,38 @@ tags: [financial-analysis, finance, stock-market, ai, fastapi, nextjs, postgresq
 pinned: false
 ---
 
-# Blum AI Financial Intelligence
+# BLUM v1.1.0 Trader Brain
 
-Blum is an open-source technical case study for AI financial intelligence. It is designed to analyze equities and ETFs, filter watchlist candidates, explain market narratives, build transparent signals and validate signal behavior historically.
+BLUM is no longer organized as a collection of financial dashboards. BLUM is an autonomous trader-brain research system whose only product objective is to become progressively better at making paper-trading decisions through evidence, outcomes, learning and self-correction.
 
-This is not a consumer trading app and not a simple dashboard. The project is a full-stack platform that demonstrates how specialized AI modules, quantitative finance features, semantic news analysis and explainable research workflows can be assembled into a credible market intelligence system.
+The runtime philosophy is:
+
+`Market -> Analysis -> Decision -> Paper Trade -> Outcome -> Learning -> Better Decision -> Repeat`
+
+Everything else is internal infrastructure.
+
+## Product Surface
+
+BLUM now exposes only four primary pages:
+
+1. **Brain**: answers whether BLUM is becoming a better trader.
+2. **Training Ground**: shows what the Learning Loop is testing, rejecting and learning.
+3. **Paper Trading**: shows conditional paper-only decisions, outcomes and lessons.
+4. **Alpha**: answers whether BLUM is beating benchmarks with sufficient evidence.
+
+Legacy pages and diagnostic modules are retained for compatibility and engineering inspection, but they are no longer primary product pages. The frontend is a snapshot-first observer. It must not trigger training, recalculation, broker actions or heavy backend work during page render.
+
+## Master Scores
+
+BLUM v1.1.0 introduces a Trader Brain read model:
+
+- **Brain Score**: decision quality, evidence quality, calibration, learning stability, risk management, alpha readiness, reproducibility, explainability, market coverage, portfolio intelligence and knowledge quality.
+- **Decision Quality**: quality of the decision process, not just whether the outcome won.
+- **Learning Velocity**: how quickly validated knowledge improves per experiment.
+- **Knowledge Quality**: validated lessons and meta-cognition evidence, not raw data volume.
+- **Alpha Readiness**: strict benchmark-relative evidence with sample-size and live-evidence gates.
+
+## Architecture
 
 ## Architecture
 
