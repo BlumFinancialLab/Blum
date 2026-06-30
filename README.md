@@ -1534,6 +1534,37 @@ The Space serves the FastAPI backend and the exported Next.js frontend on port `
 
 Backtesting is included for research validation only. It reports historical hit rate, average forward return over 5D/20D/60D, max adverse excursion, max favorable excursion and false positives. It does not predict or guarantee future returns.
 
+## Command Brain Level
+
+The Command Center includes a lightweight `BLUM Brain Level` panel powered by `GET /api/learning-intelligence/summary`. It is snapshot-first and shows:
+
+- current learning status and latest run timestamp;
+- Trading Power / evidence classification when precomputed;
+- Trading Game capital progress, win rate and expectancy R;
+- benchmark pressure versus stored market benchmarks;
+- latest weakness, latest lesson and next learning focus.
+
+This panel does not run training, recalculation or heavy diagnostics. It is intended to answer quickly whether BLUM's learning evidence is improving, deteriorating or still insufficient.
+
+## Copy Trading Intelligence
+
+`/copy-trading` is a paper-only intelligence surface for conditional mirror plans. The backend exposes:
+
+- `GET /api/copy-trading/status`
+- `GET /api/copy-trading/candidates`
+- `GET /api/copy-trading/dashboard`
+
+The service reads persisted `TradePlan`, `SniperScore` and Trading Game evidence. It does not recalculate signals, connect to brokers, place orders or claim performance. A candidate is downgraded when it is missing entry trigger, invalidation or target/risk-plan evidence.
+
+The output is designed to answer:
+
+- which setups are theoretically mirrorable only if confirmation triggers;
+- which setups should remain watch-only;
+- which setups are blocked by risk-plan gaps or weak actionability;
+- what BLUM has learned from recent paper trades tied to the same ticker.
+
+Copy Trading Intelligence is a decision-audit layer, not an execution system.
+
 ## Limitations
 
 - Public RSS, Google News RSS search, Yahoo and Stooq are demo-grade public data sources, not licensed institutional feeds.

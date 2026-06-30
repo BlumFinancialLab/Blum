@@ -208,6 +208,7 @@ from app.services.central_brain_runtime import (
     SnapshotProducerService,
     SnapshotWatchdogService,
 )
+from app.services.copy_trading_intelligence import CopyTradingIntelligenceService
 from app.services.live import live_news, market_sentiment
 from app.services.macro import macro_overview, update_macro_snapshots
 from app.services.market_brain import build_market_brain, latest_market_brain, market_brain_history
@@ -812,6 +813,21 @@ def sniper_lessons(limit: int = Query(default=40, ge=1, le=200), db: Session = D
 @router.get("/api/trading-game/status")
 def trading_game_status(db: Session = Depends(get_db)) -> dict:
     return TradingGameSimulator().status(db)
+
+
+@router.get("/api/copy-trading/status")
+def copy_trading_status(db: Session = Depends(get_db)) -> dict:
+    return CopyTradingIntelligenceService().status(db)
+
+
+@router.get("/api/copy-trading/candidates")
+def copy_trading_candidates(limit: int = Query(default=25, ge=1, le=100), db: Session = Depends(get_db)) -> dict:
+    return CopyTradingIntelligenceService().candidates(db, limit=limit)
+
+
+@router.get("/api/copy-trading/dashboard")
+def copy_trading_dashboard(limit: int = Query(default=25, ge=1, le=100), db: Session = Depends(get_db)) -> dict:
+    return CopyTradingIntelligenceService().dashboard(db, limit=limit)
 
 
 @router.post("/api/trading-game/run")

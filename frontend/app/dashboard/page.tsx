@@ -41,6 +41,7 @@ export default function DashboardPage() {
   const [pipelineStatus, setPipelineStatus] = useState<PipelineStatus | null>(null);
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [brainStatus, setBrainStatus] = useState<BrainStatus | null>(null);
+  const [learningSummary, setLearningSummary] = useState<any | null>(null);
   const [executive, setExecutive] = useState<ExecutiveDashboardPayload | null>(null);
   const [error, setError] = useState("");
   const [liveError, setLiveError] = useState("");
@@ -52,14 +53,15 @@ export default function DashboardPage() {
       const overview = await api.overview();
       setData(overview);
 
-      const [newsResult, sentimentResult, statusResult, systemResult, executiveResult, brainResult] =
+      const [newsResult, sentimentResult, statusResult, systemResult, executiveResult, brainResult, learningResult] =
         await Promise.allSettled([
           api.liveNews(60),
           api.marketSentiment(48),
           api.pipelineStatus(),
           api.systemStatus(),
           api.executiveDashboard(),
-          api.brainStatus()
+          api.brainStatus(),
+          api.learningSummary()
         ] as const);
 
       if (newsResult.status === "fulfilled") setLiveNews(newsResult.value);
@@ -68,6 +70,7 @@ export default function DashboardPage() {
       if (systemResult.status === "fulfilled") setSystemStatus(systemResult.value);
       if (executiveResult.status === "fulfilled") setExecutive(executiveResult.value);
       if (brainResult.status === "fulfilled") setBrainStatus(brainResult.value);
+      if (learningResult.status === "fulfilled") setLearningSummary(learningResult.value);
 
       setLiveError(
         [
@@ -76,7 +79,8 @@ export default function DashboardPage() {
           statusResult.status === "rejected" ? `status ${errorMessage(statusResult.reason)}` : "",
           systemResult.status === "rejected" ? `system ${errorMessage(systemResult.reason)}` : "",
           executiveResult.status === "rejected" ? `executive ${errorMessage(executiveResult.reason)}` : "",
-          brainResult.status === "rejected" ? `brain ${errorMessage(brainResult.reason)}` : ""
+          brainResult.status === "rejected" ? `brain ${errorMessage(brainResult.reason)}` : "",
+          learningResult.status === "rejected" ? `learning ${errorMessage(learningResult.reason)}` : ""
         ]
           .filter(Boolean)
           .join(" | ")
@@ -230,6 +234,8 @@ export default function DashboardPage() {
         />
       </section>
 
+      <BrainLevelPanel summary={learningSummary} accuracy={data.accuracy} brainStatus={brainStatus} />
+
       <section className="market-command-layout">
         <div className="market-pulse-grid">
           <BloombergPanel title="Market Pulse" value="Live evidence" subtitle="Sentiment, narrative volume and signal breadth">
@@ -330,6 +336,81 @@ export default function DashboardPage() {
         </BloombergPanel>
       </section>
     </>
+  );
+}
+
+function BrainLevelPanel({ summary, accuracy, brainStatus }: { summary: any; accuracy?: AccuracyOverview; brainStatus: BrainStatus | null }) {
+  const benchmarks = Object.entries(summary?.benchmark_summary?.major_benchmarks ?? {}).slice(0, 4) as Array<[string, any]>;
+  const whatNext = summary?.what_blum_should_learn_next ?? {};
+  const topWeakness = summary?.top_weakness;
+  const latestLesson = summary?.latest_lesson_learned;
+  const tradingPower = summary?.trading_power_score ?? accuracy?.blum_confidence_score;
+  const powerLabel = summary?.trading_power_classification ?? accuracy?.confidence_label ?? "evidence building";
+  const evidenceStatus = evidenceLabel(summary);
+  return (
+    <BloombergPanel
+      title="BLUM Brain Level"
+      value={tradingPower == null ? "Evidence pending" : `${formatNumber(tradingPower, 1)}/100`}
+      subtitle="Lightweight learning snapshot: decision quality, trading evidence, benchmark pressure and next improvement focus"
+      className="brain-level-panel"
+    >
+      <div className="brain-level-layout">
+        <div className="brain-level-score">
+          <div className="brain-level-ring" style={{ "--score": `${Math.max(0, Math.min(100, safeNumber(tradingPower))) * 3.6}deg` } as any}>
+            <strong>{tradingPower == null ? "n/a" : formatNumber(tradingPower, 0)}</strong>
+            <span>{powerLabel}</span>
+          </div>
+          <div className="brain-level-facts">
+            <MetricCard label="Learning status" value={summary?.learning_loop_status ?? brainStatus?.learning_state ?? "pending"} subvalue={`latest ${formatDateTime(summary?.latest_learning_run_at)}`} tone="info" />
+            <MetricCard label="Win / Expectancy" value={`${formatPct(summary?.win_rate)} / ${formatR(summary?.expectancy_r)}`} subvalue="paper Trading Game evidence" tone="attention" />
+            <MetricCard label="Capital progress" value={formatPct(summary?.target_progress)} subvalue={`${summary?.completed_target_cycles ?? 0} target cycles | ${summary?.bankrupt_cycles ?? 0} bankrupt`} tone="positive" />
+            <MetricCard label="Evidence level" value={evidenceStatus} subvalue={summary?.live_vs_historical_status ?? "live evidence pending"} tone={evidenceStatus.includes("weak") ? "attention" : "info"} />
+          </div>
+        </div>
+
+        <div className="brain-level-benchmarks">
+          <div className="panel-head"><span>Benchmark pressure</span><strong>{summary?.benchmark_summary?.status ?? "snapshot"}</strong></div>
+          {benchmarks.length ? benchmarks.map(([name, payload]) => (
+            <BenchmarkBrainBar key={name} name={name} payload={payload} />
+          )) : <div className="terminal-empty">Benchmark snapshots are not mature enough yet.</div>}
+        </div>
+
+        <div className="brain-level-truth">
+          <div className="panel-head"><span>What is changing</span><strong>truth first</strong></div>
+          <div className="brain-list dense">
+            <div>
+              <span className="regime-badge tone-attention">weakness</span>
+              <strong>{topWeakness?.main_problem ?? "No major weakness snapshot yet"}</strong>
+              <p>{topWeakness?.recommended_action ?? "BLUM is still collecting enough evidence to isolate the next weak point."}</p>
+            </div>
+            <div>
+              <span className="regime-badge tone-info">latest lesson</span>
+              <strong>{latestLesson?.observation ?? "No recent learning lesson stored yet"}</strong>
+              <p>{latestLesson ? `${latestLesson.ticker} | ${latestLesson.setup_type} | samples ${latestLesson.sample_size}` : "The backend learning loop will populate this from completed cycles."}</p>
+            </div>
+            <div>
+              <span className="regime-badge tone-positive">next focus</span>
+              <strong>{whatNext?.next_learning_focus?.target ?? whatNext?.conclusion?.summary ?? "No active focus priority"}</strong>
+              <p>{whatNext?.next_learning_focus?.reason ?? "When evidence is sufficient, BLUM will show which factor/module should be studied next."}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </BloombergPanel>
+  );
+}
+
+function BenchmarkBrainBar({ name, payload }: { name: string; payload: any }) {
+  const excess = safeNumber(payload?.excess_return);
+  const width = Math.max(4, Math.min(100, Math.abs(excess)));
+  const result = String(payload?.result_label ?? "inconclusive").replaceAll("_", " ");
+  return (
+    <div className="brain-benchmark-row">
+      <span>{name}</span>
+      <i className={excess >= 0 ? "positive" : "negative"}><b style={{ width: `${width}%` }} /></i>
+      <strong className={excess >= 0 ? "positive-text" : "negative-text"}>{formatNumber(excess, 1)}%</strong>
+      <em>{result}</em>
+    </div>
   );
 }
 
@@ -506,6 +587,39 @@ function formatTime(value: string | null) {
     minute: "2-digit",
     second: "2-digit"
   }).format(date);
+}
+
+function formatDateTime(value: string | null | undefined) {
+  if (!value) return "pending";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "pending";
+  return new Intl.DateTimeFormat("en", {
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(date);
+}
+
+function formatPct(value: unknown) {
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n)) return "n/a";
+  return `${(n * 100).toFixed(1)}%`;
+}
+
+function formatR(value: unknown) {
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n)) return "n/a";
+  return `${n.toFixed(2)}R`;
+}
+
+function evidenceLabel(summary: any) {
+  if (!summary) return "loading";
+  const warnings = summary?.warnings ?? [];
+  if (summary?.live_vs_historical_status === "missing") return "weak evidence";
+  if (warnings.length > 2) return "limited evidence";
+  if (summary?.trading_power_score == null) return "initializing";
+  return "tracked evidence";
 }
 
 function errorMessage(value: any) {

@@ -111,26 +111,29 @@ export default function LearningPage() {
   }
 
   const equityChart = useMemo(() => {
-    const points = trading?.equity?.equity_curve_points ?? trading?.equity ?? [];
-    if (!Array.isArray(points)) return [];
-    return [
-      {
-        x: points.map((row: any) => row.timestamp || row.equity_date || row.created_at),
-        y: points.map((row: any) => row.equity),
+    const { equity, benchmark } = extractEquitySeries(trading?.equity);
+    const traces: any[] = [];
+    if (equity.length) {
+      traces.push({
+        x: equity.map((point) => point.timestamp),
+        y: equity.map((point) => point.value),
         type: "scatter",
         mode: "lines",
-        name: "BLUM",
+        name: "BLUM capital",
         line: { color: "#ffb000", width: 3 },
-      },
-      {
-        x: points.map((row: any) => row.timestamp || row.equity_date || row.created_at),
-        y: points.map((row: any) => row.benchmark_equity),
+      });
+    }
+    if (benchmark.length) {
+      traces.push({
+        x: benchmark.map((point) => point.timestamp),
+        y: benchmark.map((point) => point.value),
         type: "scatter",
         mode: "lines",
         name: "Benchmark",
         line: { color: "#55aaff", width: 2 },
-      },
-    ];
+      });
+    }
+    return traces;
   }, [trading]);
 
   const cycle = summary?.current_capital_cycle ?? {};
@@ -188,6 +191,7 @@ export default function LearningPage() {
           ledgerSummary={ledgerSummary}
           realityCheck={realityCheck}
           benchmark={benchmark}
+          equityPayload={trading?.equity}
           onRetry={() => setTrading(null)}
           onLoadMore={loadMoreLedger}
         />
@@ -321,7 +325,8 @@ function OverviewTab({ summary, loading, error, truthPanel, onRefresh }: { summa
   );
 }
 
-function TradingGameTab({ summary, cycle, loading, error, equityChart, ledgerRows, ledgerSummary, realityCheck, benchmark, onRetry, onLoadMore }: any) {
+function TradingGameTab({ summary, cycle, loading, error, equityChart, equityPayload, ledgerRows, ledgerSummary, realityCheck, benchmark, onRetry, onLoadMore }: any) {
+  const equityInfo = equityPayloadSummary(equityPayload, equityChart);
   return (
     <>
       <AsyncPanel title="Trading Game Evidence" loading={loading && !ledgerRows.length} error={error} updatedAt={summary?.data_freshness?.game_updated_at} onRetry={onRetry} fallback="Loading focused trading evidence">
@@ -354,7 +359,14 @@ function TradingGameTab({ summary, cycle, loading, error, equityChart, ledgerRow
       </AsyncPanel>
 
       <section className="grid-2" style={{ marginTop: 12 }}>
-        <PlotPanel title="Equity Curve" data={equityChart} height={320} emptyMessage="Open the Trading Game tab after backend snapshots exist to show the equity curve." />
+        <div>
+          <PlotPanel title="Equity Curve" data={equityChart} height={320} emptyMessage="No valid equity curve points are available in the latest Trading Game snapshot." />
+          <div className="plot-diagnostics">
+            <span>{equityInfo.pointLabel}</span>
+            <span>{equityInfo.snapshotLabel}</span>
+            <span>{equityInfo.benchmarkLabel}</span>
+          </div>
+        </div>
         <div className="panel">
           <div className="panel-head"><span>Benchmark Summary</span><strong>{benchmark?.result_label ?? benchmark?.status ?? "snapshot"}</strong></div>
           <div className="evidence-grid">
@@ -486,6 +498,69 @@ function MetaLearningPanel({ payload }: { payload: any }) {
       </div>
     </section>
   );
+}
+
+type NormalizedPoint = { timestamp: string; value: number };
+
+function extractEquitySeries(payload: any): { equity: NormalizedPoint[]; benchmark: NormalizedPoint[] } {
+  const equityRows = firstArray(
+    payload?.equity_curve_points,
+    payload?.payload?.equity_curve_points,
+    payload?.rows,
+    payload?.points,
+    payload?.equity_curve,
+    Array.isArray(payload) ? payload : null
+  );
+  const benchmarkRows = firstArray(payload?.benchmark_curve_points, payload?.payload?.benchmark_curve_points);
+  const equity = equityRows
+    .map((row: any) => normalizePoint(row, ["equity", "capital", "current_capital", "capital_after", "value"]))
+    .filter(Boolean) as NormalizedPoint[];
+  const benchmarkFromDedicatedRows = benchmarkRows
+    .map((row: any) => normalizePoint(row, ["benchmark_equity", "benchmark_value", "benchmark_capital", "value"]))
+    .filter(Boolean) as NormalizedPoint[];
+  const benchmark = benchmarkFromDedicatedRows.length
+    ? benchmarkFromDedicatedRows
+    : (equityRows
+      .map((row: any) => normalizePoint(row, ["benchmark_equity", "benchmark_value", "benchmark_capital"]))
+      .filter(Boolean) as NormalizedPoint[]);
+  return { equity, benchmark };
+}
+
+function normalizePoint(row: any, valueKeys: string[]): NormalizedPoint | null {
+  const timestamp = String(row?.timestamp ?? row?.equity_date ?? row?.date ?? row?.created_at ?? "");
+  if (!timestamp) return null;
+  const value = firstNumber(valueKeys.map((key) => row?.[key]));
+  if (value === null) return null;
+  return { timestamp, value };
+}
+
+function firstArray(...values: any[]) {
+  return values.find((value) => Array.isArray(value)) ?? [];
+}
+
+function firstNumber(values: any[]) {
+  for (const value of values) {
+    if (value === null || value === undefined || value === "") continue;
+    const number = Number(value);
+    if (Number.isFinite(number)) return number;
+  }
+  return null;
+}
+
+function equityPayloadSummary(payload: any, chart: any[]) {
+  const { equity, benchmark } = extractEquitySeries(payload);
+  const warnings = payload?.warnings ?? [];
+  return {
+    pointLabel: `${equity.length} BLUM equity points`,
+    benchmarkLabel: benchmark.length ? `${benchmark.length} benchmark points` : "Benchmark overlay unavailable",
+    snapshotLabel: payload?.snapshot_id
+      ? `Snapshot ${payload.snapshot_id}${payload?.snapshot_status ? ` | ${payload.snapshot_status}` : ""}`
+      : warnings.length
+        ? warnings.slice(0, 2).join(" | ")
+        : chart.length
+          ? "Live payload normalized"
+          : "No equity snapshot loaded",
+  };
 }
 
 function LearningMetric({ icon, label, value, subvalue }: { icon: ReactNode; label: string; value: string | number; subvalue: string }) {
