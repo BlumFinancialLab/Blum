@@ -9,7 +9,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api.routes import router
+from app.api.routers import (
+    alpha_router,
+    analyst_router,
+    brain_router,
+    legacy_router,
+    paper_trading_router,
+    runtime_router,
+    training_router,
+)
 from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.services.bootstrap import bootstrap_database
@@ -38,7 +46,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(router)
+app.include_router(brain_router)
+app.include_router(training_router)
+app.include_router(paper_trading_router)
+app.include_router(alpha_router)
+app.include_router(runtime_router)
+app.include_router(analyst_router)
+app.include_router(legacy_router)
 
 
 @app.middleware("http")

@@ -12,6 +12,49 @@ pinned: false
 
 # BLUM v2.0 Project Split
 
+## BLUM v2.1 Clean Core Release
+
+BLUM v2.1 tightens the v2.0 split around the four product surfaces that matter to the trader brain:
+
+1. **Brain**: answers whether BLUM is becoming a better trading decision system.
+2. **Training Ground**: shows what the Learning Loop is studying and what evidence it has accumulated.
+3. **Paper Trading**: shows auditable paper decisions, outcomes and copyability evidence.
+4. **Alpha**: shows whether BLUM is beating realistic benchmarks with sufficient evidence.
+
+The release is intentionally a cleanup sprint, not a new financial-feature sprint. The main change is dependency direction:
+
+`Frontend product page -> bounded router -> BLUM Engine facade -> Engine read model -> stored evidence`
+
+New bounded routers live under `backend/app/api/routers/`:
+
+- `brain.py`
+- `training.py`
+- `paper_trading.py`
+- `alpha.py`
+- `runtime.py`
+- `analyst.py`
+- `legacy.py`
+
+The old `backend/app/api/routes.py` is still mounted last as a legacy compatibility router. Do not add new product endpoints there.
+
+The Trader Brain read model was moved from `backend/app/services/trader_brain.py` to `backend/app/engine/brain/trader_brain.py`. The old path remains as a compatibility shim so existing tests, jobs and legacy routes continue to work.
+
+### v2.1 Clean-Core Rules
+
+- Product routes must call `BlumEngineFacade`, not low-level services.
+- Runtime routes own application state, snapshots, health and diagnostics, not financial truth.
+- Analyst routes expose dataset/model-boundary contracts, not market-data authority.
+- Frontend product navigation stays reduced to Brain, Training, Paper Trading and Alpha.
+- Legacy endpoints remain available, but new code should move behind bounded routers and facades.
+
+Additional sprint documents:
+
+- `CLEAN_CORE_REPORT_v2.1.md`
+- `MIGRATION_v2.1.md`
+- `DEPRECATION_REPORT.md`
+
+---
+
 BLUM is now organized as a Financial Intelligence Operating System with three independent layers:
 
 1. **BLUM Engine**: the headless source of truth. It owns learning, decisions, alpha validation, paper trading, portfolio intelligence, confidence calibration, meta-learning, historical memory and dataset export.

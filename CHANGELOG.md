@@ -1,5 +1,17 @@
 # Changelog
 
+## v2.1.0 | clean-core
+
+- Tightened the product architecture around the four primary surfaces: Brain, Training Ground, Paper Trading and Alpha.
+- Added bounded API routers under `backend/app/api/routers/` for product, runtime, analyst and legacy boundaries.
+- Moved the Trader Brain read model into `backend/app/engine/brain/trader_brain.py`.
+- Kept `backend/app/services/trader_brain.py` as a compatibility shim for legacy imports.
+- Updated `main.py` so bounded routers are included before the legacy monolithic router.
+- Added route-order and dependency-boundary tests for the clean-core release.
+- Updated runtime identity to `2.1.0 | clean-core`.
+- Added clean-core migration, deprecation and architecture reports.
+- Preserved existing APIs and financial behavior; this release changes ownership and routing boundaries, not trading logic.
+
 ## v2.0.0 | project-split
 
 - Introduced the formal BLUM Engine / BLUM Analyst / BLUM Runtime architecture split.

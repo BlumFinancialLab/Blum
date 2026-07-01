@@ -4,8 +4,8 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 
-ENGINE_VERSION = "2.0.0"
-PROJECT_FEATURE_SET = "project-split"
+ENGINE_VERSION = "2.1.0"
+PROJECT_FEATURE_SET = "clean-core"
 BLUM_ANALYST_REPOSITORY = "Italianhype/Blum-Analyst"
 
 

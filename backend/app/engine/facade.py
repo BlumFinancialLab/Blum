@@ -9,7 +9,7 @@ from app.engine.contracts import (
     engine_module_catalog,
     event_contract,
 )
-from app.services.trader_brain import TraderBrainService
+from app.engine.brain.trader_brain import TraderBrainService
 
 
 class BlumEngineFacade:
@@ -70,6 +70,18 @@ class BlumEngineFacade:
             },
             "policy": "The Engine emits evidence-bound objects only; it does not execute real trades and does not own product delivery.",
         }
+
+    def brain_snapshot(self, db: Session) -> dict:
+        return TraderBrainService().brain(db)
+
+    def training_snapshot(self, db: Session) -> dict:
+        return TraderBrainService().training_ground(db)
+
+    def paper_trading_snapshot(self, db: Session, *, limit: int = 20) -> dict:
+        return TraderBrainService().paper_trading(db, limit=limit)
+
+    def alpha_snapshot(self, db: Session) -> dict:
+        return TraderBrainService().alpha(db)
 
     @staticmethod
     def _brain_status(payload: dict) -> dict:
