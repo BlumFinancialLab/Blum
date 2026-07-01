@@ -5,6 +5,8 @@
 - Tightened the product architecture around the four primary surfaces: Brain, Training Ground, Paper Trading and Alpha.
 - Added bounded API routers under `backend/app/api/routers/` for product, runtime, analyst and legacy boundaries.
 - Moved the Trader Brain read model into `backend/app/engine/brain/trader_brain.py`.
+- Added a cooperative Engine agent layer with 15 evidence-producing boundaries: Market, News, Technical, Fundamental, Pattern, Decision, Risk, Portfolio, Paper Trading, Learning, Research, Memory, Alpha, Validation and Dataset.
+- Added `GET /api/engine/agents` for read-only structured agent evidence.
 - Kept `backend/app/services/trader_brain.py` as a compatibility shim for legacy imports.
 - Updated `main.py` so bounded routers are included before the legacy monolithic router.
 - Added route-order and dependency-boundary tests for the clean-core release.

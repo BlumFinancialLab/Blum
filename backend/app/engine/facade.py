@@ -9,6 +9,7 @@ from app.engine.contracts import (
     engine_module_catalog,
     event_contract,
 )
+from app.engine.agents.registry import agent_boundaries, collect_agent_evidence
 from app.engine.brain.trader_brain import TraderBrainService
 
 
@@ -51,6 +52,7 @@ class BlumEngineFacade:
             "source_of_truth": True,
             "headless_capable": True,
             "modules": [module.to_dict() for module in engine_module_catalog()],
+            "agents": agent_boundaries(),
             "events": event_contract(),
             "decision_object": {
                 "ticker": "string",
@@ -82,6 +84,9 @@ class BlumEngineFacade:
 
     def alpha_snapshot(self, db: Session) -> dict:
         return TraderBrainService().alpha(db)
+
+    def agent_evidence(self, db: Session, *, agents: list[str] | None = None, limit: int = 8) -> dict:
+        return collect_agent_evidence(db, names=agents, limit=limit)
 
     @staticmethod
     def _brain_status(payload: dict) -> dict:

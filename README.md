@@ -47,6 +47,40 @@ The Trader Brain read model was moved from `backend/app/services/trader_brain.py
 - Frontend product navigation stays reduced to Brain, Training, Paper Trading and Alpha.
 - Legacy endpoints remain available, but new code should move behind bounded routers and facades.
 
+### Agent-Based Engine Structure
+
+BLUM now exposes a lightweight cooperative-agent boundary inside the Engine. Agents are not UI components and do not start jobs. They publish structured evidence that other Engine components can inspect.
+
+Implemented agent boundaries:
+
+- Market Agent
+- News Agent
+- Technical Agent
+- Fundamental Agent
+- Pattern Agent
+- Decision Agent
+- Risk Agent
+- Portfolio Agent
+- Paper Trading Agent
+- Learning Agent
+- Research Agent
+- Memory Agent
+- Alpha Agent
+- Validation Agent
+- Dataset Agent
+
+Endpoint:
+
+- `GET /api/engine/agents`
+
+Optional query parameters:
+
+- `agent=learning_agent`
+- `agent=alpha_agent`
+- `limit=8`
+
+Design rule: no empty agent wrappers. Each registered agent owns a real evidence collection responsibility and returns a structured payload with status, evidence type, sample size, confidence and warnings where available.
+
 Additional sprint documents:
 
 - `CLEAN_CORE_REPORT_v2.1.md`

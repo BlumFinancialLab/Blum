@@ -36,6 +36,18 @@ def engine_contracts() -> dict:
     return BlumEngineFacade().contract()
 
 
+@router.get("/engine/agents")
+@router.get("/api/engine/agents")
+def engine_agents(
+    agent: list[str] | None = Query(default=None),
+    limit: int = Query(default=8, ge=1, le=20),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.engine.facade import BlumEngineFacade
+
+    return BlumEngineFacade().agent_evidence(db, agents=agent, limit=limit)
+
+
 @router.get("/runtime/status")
 @router.get("/api/runtime/status")
 def runtime_status(db: Session = Depends(get_db)) -> dict:
