@@ -214,7 +214,11 @@ class LearningLoopService:
         context = self.point_in_time.context_for(db, sample["asset"], sample["analysis_date"])
         prediction_context = dict(context)
         prediction_context.pop("future_prices", None)
-        prediction_payload = self.predictor.predict(prediction_context, db=db, sample_metadata=sample)
+        sample_metadata = dict(sample)
+        sample_metadata["run_trigger"] = run.trigger
+        sample_metadata["evaluation_mode"] = run.evaluation_mode
+        sample_metadata["learning_mode_metadata"] = learning_mode_metadata(run.trigger, sample_metadata)
+        prediction_payload = self.predictor.predict(prediction_context, db=db, sample_metadata=sample_metadata)
         feedback_payload = prediction_payload.get("feedback_loop", {})
         prediction = HistoricalPrediction(
             learning_run_id=run.id,
@@ -623,7 +627,8 @@ class PredictionEngine:
     def predict(self, context: dict, db: Session | None = None, sample_metadata: dict | None = None) -> dict:
         technical = context["technical"]
         signal_scores = self.signal_scores(context)
-        feedback = self.feedback_context(db, context, signal_scores, sample_metadata or {})
+        sample_metadata = sample_metadata or {}
+        feedback = self.feedback_context(db, context, signal_scores, sample_metadata)
         weights_used = feedback["weights_used"]
         aggregate_score = weighted_score(signal_scores, weights_used)
         dominant_direction = direction_from_score(aggregate_score, technical)
@@ -653,6 +658,7 @@ class PredictionEngine:
             "learning_memory_used": feedback["learning_memory_used"],
             "strategy_memory_used": feedback["strategy_memory_used"],
             "research_priority_used": feedback["research_priority_used"],
+            "learning_mode_metadata": feedback["learning_mode_metadata"],
             "anti_leakage": context["point_in_time_policy"],
         }
 
@@ -661,6 +667,7 @@ class PredictionEngine:
         signal_memory = signal_performance_context(db, context, signal_scores)
         strategy_memory = strategy_memory_context(db, context)
         research_priority = research_priority_context(db, sample_metadata)
+        mode_metadata = sample_metadata.get("learning_mode_metadata") or learning_mode_metadata(sample_metadata.get("run_trigger"), sample_metadata)
         confidence_adjustment = round(
             clamp(
                 signal_memory["confidence_delta"] + strategy_memory["confidence_delta"] + research_priority.get("confidence_delta", 0.0),
@@ -684,8 +691,27 @@ class PredictionEngine:
                 "policy": "StrategyMemory lessons modify confidence when their stored conditions match the current point-in-time setup.",
             },
             "research_priority_used": research_priority,
+            "learning_mode_metadata": mode_metadata,
             "confidence_adjustment": confidence_adjustment,
             "policy": "PredictionEngine uses active learned weights when available; otherwise BASE_SIGNAL_WEIGHTS. Learning memory changes confidence, not source code.",
+        }
+
+    def baseline_prediction(self, context: dict) -> dict:
+        signal_scores = self.signal_scores(context)
+        weights = normalize_weights(BASE_SIGNAL_WEIGHTS)
+        aggregate_score = weighted_score(signal_scores, weights)
+        direction = direction_from_score(aggregate_score, context["technical"])
+        confidence = confidence_from_evidence(aggregate_score, context["data_quality_score"], context["market_context"], context["technical"])
+        return {
+            "model_version_used": "base-static",
+            "weights_used": weights,
+            "aggregate_score": round(aggregate_score, 2),
+            "aggregate_confidence": confidence,
+            "dominant_direction": direction,
+            "actionability": feedback_actionability(direction, confidence, aggregate_score),
+            "confidence_adjustment": 0.0,
+            "memory_adjustment_used": False,
+            "policy": "Counterfactual baseline uses BASE_SIGNAL_WEIGHTS and ignores learned memory/confidence adjustments.",
         }
 
     def signal_scores(self, context: dict) -> dict:
@@ -1077,6 +1103,7 @@ class FeedbackLoopAuditService:
             "signal_performance_used": (feedback.get("learning_memory_used") or {}).get("signal_performance", []),
             "strategy_memory_used": (feedback.get("strategy_memory_used") or {}).get("rows", []),
         }
+        counterfactual = self.counterfactual_audit(prediction, prediction_payload, outcomes)
         changes = {
             "model_version_used": feedback.get("model_version_used"),
             "weights_used": feedback.get("weights_used"),
@@ -1084,6 +1111,8 @@ class FeedbackLoopAuditService:
             "base_confidence": feedback.get("base_confidence"),
             "final_confidence": feedback.get("final_confidence"),
             "research_priority_used": feedback.get("research_priority_used"),
+            "learning_mode_metadata": feedback.get("learning_mode_metadata"),
+            "counterfactual_audit": counterfactual,
         }
         decision = {
             "prediction_id": prediction.id,
@@ -1092,6 +1121,7 @@ class FeedbackLoopAuditService:
             "direction": prediction.expected_direction,
             "confidence": prediction.confidence,
             "aggregate_score": (prediction_payload.get("prediction") or {}).get("aggregate_score"),
+            "actionability": counterfactual.get("learned_prediction", {}).get("actionability"),
         }
         outcome_payload = {
             "correct": correct,
@@ -1125,10 +1155,49 @@ class FeedbackLoopAuditService:
             "what_was_learned": learned,
             "what_changed": changes,
             "future_decision_used_change": decision,
+            "counterfactual_audit": counterfactual,
             "outcome": outcome_payload,
             "improvement_detected": improved,
             "evidence_grade": evidence_grade,
             "summary": summary,
+        }
+
+    def counterfactual_audit(self, prediction: HistoricalPrediction, prediction_payload: dict, outcomes: list[dict]) -> dict:
+        context = dict(prediction.point_in_time_context or {})
+        context.pop("future_prices", None)
+        baseline = PredictionEngine().baseline_prediction(context) if context else {}
+        learned_prediction = prediction_payload.get("prediction") or {}
+        learned = {
+            "model_version_used": (prediction_payload.get("feedback_loop") or {}).get("model_version_used") or "base-static",
+            "weights_used": prediction_payload.get("weights_used") or {},
+            "aggregate_score": learned_prediction.get("aggregate_score"),
+            "aggregate_confidence": learned_prediction.get("aggregate_confidence"),
+            "dominant_direction": learned_prediction.get("dominant_direction"),
+            "actionability": feedback_actionability(
+                learned_prediction.get("dominant_direction"),
+                learned_prediction.get("aggregate_confidence"),
+                learned_prediction.get("aggregate_score"),
+            ),
+            "confidence_adjustment": (prediction_payload.get("feedback_loop") or {}).get("confidence_adjustment", 0.0),
+            "memory_adjustment_used": bool((prediction_payload.get("feedback_loop") or {}).get("confidence_adjustment")),
+        }
+        comparison = {
+            "score_delta": round(safe_float(learned.get("aggregate_score")) - safe_float(baseline.get("aggregate_score")), 4),
+            "confidence_delta": round(safe_float(learned.get("aggregate_confidence")) - safe_float(baseline.get("aggregate_confidence")), 4),
+            "direction_changed": baseline.get("dominant_direction") != learned.get("dominant_direction"),
+            "actionability_changed": baseline.get("actionability") != learned.get("actionability"),
+        }
+        return {
+            "baseline_prediction": baseline,
+            "learned_prediction": learned,
+            "differences": comparison,
+            "outcome_comparison": {
+                "outcome_labels": {row.get("timeframe"): row.get("outcome_label") for row in outcomes},
+                "realized_returns": {row.get("timeframe"): row.get("realized_return") for row in outcomes},
+                "learned_direction": learned.get("dominant_direction"),
+                "baseline_direction": baseline.get("dominant_direction"),
+                "policy": "Outcome is observed after prediction persistence; baseline is recomputed only from point-in-time context.",
+            },
         }
 
     def report(self, db: Session, limit: int = 20) -> dict:
@@ -1607,6 +1676,36 @@ def active_weight_context(db: Session | None) -> tuple[str, dict, str]:
     return "base-static", normalize_weights(BASE_SIGNAL_WEIGHTS), "base_signal_weights"
 
 
+def learning_mode_metadata(trigger: str | None, sample_metadata: dict | None = None) -> dict:
+    sample_metadata = sample_metadata or {}
+    sampling_reason = sample_metadata.get("sampling_reason") or "random_point_in_time"
+    mode = "training_replay" if sampling_reason in {"alpha_loss_replay", "learning_focus_priority", "capital_preservation_replay"} or trigger == "alpha_loss_replay" else "walk_forward_validation"
+    if trigger == "paper_forward" or sample_metadata.get("mode") == "paper_forward":
+        mode = "paper_forward"
+    return {
+        "mode": mode,
+        "training_replay": mode == "training_replay",
+        "walk_forward_validation": settings.learning_evaluation_mode == "walk_forward" and mode != "paper_forward",
+        "paper_forward": mode == "paper_forward",
+        "trigger": trigger or sample_metadata.get("run_trigger") or "unknown",
+        "sampling_reason": sampling_reason,
+        "evaluation_mode": sample_metadata.get("evaluation_mode") or settings.learning_evaluation_mode,
+        "policy": "Mode metadata is descriptive. It changes audit traceability, not source code or frontend execution.",
+    }
+
+
+def feedback_actionability(direction: str | None, confidence: float | None, score: float | None = None) -> str:
+    confidence_value = safe_float(confidence)
+    score_value = safe_float(score)
+    if direction == "neutral" or confidence_value < 35:
+        return "watch"
+    if confidence_value >= 68 and direction in {"bullish", "bearish"} and abs(score_value - 50) >= 10:
+        return "active_setup"
+    if confidence_value >= 54 and direction in {"bullish", "bearish"}:
+        return "wait_for_trigger"
+    return "watch"
+
+
 def model_weights_with_fallback(weights: dict) -> dict:
     merged = dict(BASE_SIGNAL_WEIGHTS)
     for key in BASE_SIGNAL_WEIGHTS:
@@ -1870,6 +1969,7 @@ def serialize_feedback_audit(row: FeedbackLoopAudit) -> dict:
         "model_version_used": row.model_version_used,
         "what_was_learned": row.learned_knowledge_json,
         "what_changed": row.changes_applied_json,
+        "counterfactual_audit": (row.changes_applied_json or {}).get("counterfactual_audit"),
         "future_decision_used_change": row.future_decision_json,
         "outcome": row.outcome_json,
         "improvement_detected": row.improvement_detected,

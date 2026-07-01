@@ -428,6 +428,7 @@ class TradingGameSimulator:
                 "simulation": simulation.simulation_payload,
                 "prediction_id": prediction.id if prediction else None,
                 "market_regime": prediction.market_regime if prediction else "unknown",
+                "feedback_loop": prediction_feedback_payload(prediction),
                 "guardrails": guardrails(),
             },
         )
@@ -622,6 +623,26 @@ def trade_reproducibility_score(simulation: ExecutionSimulation, prediction: His
     if simulation.realized_r_multiple is None:
         score -= 20
     return round(clamp(score), 2)
+
+
+def prediction_feedback_payload(prediction: HistoricalPrediction | None) -> dict:
+    if not prediction:
+        return {
+            "status": "missing_prediction",
+            "policy": "No HistoricalPrediction was linked to this simulated trade.",
+        }
+    feedback = (prediction.prediction_payload or {}).get("feedback_loop") or {}
+    return {
+        "status": "ready",
+        "model_version_used": prediction.model_version_used or prediction.model_version or "base-static",
+        "weights_used": prediction.weights_used or feedback.get("weights_used") or {},
+        "confidence_adjustment": feedback.get("confidence_adjustment", 0.0),
+        "learning_memory_used": prediction.learning_memory_used or feedback.get("learning_memory_used") or {},
+        "strategy_memory_used": prediction.strategy_memory_used or feedback.get("strategy_memory_used") or {},
+        "research_priority_used": prediction.research_priority_used or feedback.get("research_priority_used") or {},
+        "learning_mode_metadata": feedback.get("learning_mode_metadata") or (prediction.prediction_payload or {}).get("learning_mode_metadata") or {},
+        "policy": "Paper trade payload records the prediction feedback loop metadata; it does not recalculate learning during trade rendering.",
+    }
 
 
 def decision_state_for(simulation: ExecutionSimulation, reproducibility: float) -> str:

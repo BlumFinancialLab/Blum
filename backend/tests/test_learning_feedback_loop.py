@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.core.database import Base
 from app.models import (
     Asset,
+    ExecutionSimulation,
     FeedbackLoopAudit,
     HistoricalPrediction,
     LearningFocusPriority,
@@ -17,10 +18,12 @@ from app.models import (
 )
 from app.services.learning_loop import (
     BASE_SIGNAL_WEIGHTS,
+    HistoricalSamplerService,
     LearningLoopService,
     ModelScoreService,
     PredictionEngine,
 )
+from app.services.trading_game import TradingGameSimulator
 
 
 def setup_db() -> Session:
@@ -69,7 +72,7 @@ def seed_asset_history(db: Session) -> Asset:
     db.add(asset)
     db.flush()
     start = date(2020, 1, 1)
-    for offset in range(1250):
+    for offset in range(2200):
         close = 100.0 + offset * 0.05
         db.add(
             PriceHistory(
@@ -111,7 +114,16 @@ def test_active_model_version_weights_change_future_prediction_output():
     assert learned["prediction"]["aggregate_score"] != base["prediction"]["aggregate_score"]
 
 
-def test_signal_performance_and_strategy_memory_change_confidence():
+def test_fallback_to_base_weights_without_active_model_version():
+    with setup_db() as db:
+        prediction = PredictionEngine().predict(prediction_context(), db=db)
+
+    assert prediction["model_version_used"] == "base-static"
+    assert prediction["feedback_loop"]["weight_source"] == "base_signal_weights"
+    assert prediction["weights_used"] == BASE_SIGNAL_WEIGHTS
+
+
+def test_signal_performance_changes_confidence():
     with setup_db() as db:
         context = prediction_context()
         base = PredictionEngine().predict(context, db=db)
@@ -128,6 +140,20 @@ def test_signal_performance_and_strategy_memory_change_confidence():
                 weight_adjustment=0.05,
             )
         )
+        db.commit()
+
+        learned = PredictionEngine().predict(context, db=db)
+
+    assert learned["feedback_loop"]["learning_memory_used"]["signal_performance"]
+    assert learned["feedback_loop"]["strategy_memory_used"]["rows"] == []
+    assert learned["feedback_loop"]["confidence_adjustment"] > 0
+    assert learned["prediction"]["aggregate_confidence"] > base["prediction"]["aggregate_confidence"]
+
+
+def test_strategy_memory_changes_confidence():
+    with setup_db() as db:
+        context = prediction_context()
+        base = PredictionEngine().predict(context, db=db)
         db.add(
             StrategyMemory(
                 memory_key="volume_confirmation:relative-volume",
@@ -144,10 +170,32 @@ def test_signal_performance_and_strategy_memory_change_confidence():
 
         learned = PredictionEngine().predict(context, db=db)
 
-    assert learned["feedback_loop"]["learning_memory_used"]["signal_performance"]
+    assert learned["feedback_loop"]["learning_memory_used"]["signal_performance"] == []
     assert learned["feedback_loop"]["strategy_memory_used"]["rows"]
     assert learned["feedback_loop"]["confidence_adjustment"] > 0
     assert learned["prediction"]["aggregate_confidence"] > base["prediction"]["aggregate_confidence"]
+
+
+def test_research_planner_priority_appears_in_sample_metadata():
+    with setup_db() as db:
+        seed_asset_history(db)
+        focus = LearningFocusPriority(
+            priority_type="missed_entry_replay",
+            target="NVDA",
+            reason="Replay high-quality missed entries.",
+            expected_learning_value=88.0,
+            urgency="high",
+            status="active",
+        )
+        db.add(focus)
+        db.commit()
+
+        sample = HistoricalSamplerService().focus_priority_sample(db)
+
+    assert sample is not None
+    assert sample["sampling_reason"] == "learning_focus_priority"
+    assert sample["learning_focus_priority_id"] == focus.id
+    assert sample["priority_type"] == "missed_entry_replay"
 
 
 def test_run_single_sample_persists_weights_memory_research_priority_and_audit():
@@ -193,9 +241,57 @@ def test_run_single_sample_persists_weights_memory_research_priority_and_audit()
     assert prediction.learning_memory_used["policy"].startswith("SignalPerformance")
     assert prediction.strategy_memory_used["policy"].startswith("StrategyMemory")
     assert prediction.research_priority_used["priority_type"] == "missed_entry_replay"
+    assert prediction.prediction_payload["learning_mode_metadata"]["training_replay"] is True
+    assert prediction.prediction_payload["learning_mode_metadata"]["walk_forward_validation"] is True
     assert report["feedback_loop_audit"]["model_version_used"] == "learned-active"
+    assert report["feedback_loop_audit"]["counterfactual_audit"]["baseline_prediction"]["model_version_used"] == "base-static"
+    assert "score_delta" in report["feedback_loop_audit"]["counterfactual_audit"]["differences"]
     assert audit is not None
     assert audit.future_decision_json["ticker"] == "NVDA"
+    assert audit.changes_applied_json["counterfactual_audit"]["learned_prediction"]["model_version_used"] == "learned-active"
+
+
+def test_paper_trade_payload_includes_feedback_loop_metadata():
+    with setup_db() as db:
+        asset = seed_asset_history(db)
+        run = LearningRun(run_id="feedback-trade-run", status="running", trigger="test")
+        db.add(run)
+        db.add(
+            ModelVersion(
+                version="learned-paper",
+                model_name="BLUM Learning Loop",
+                weights={**BASE_SIGNAL_WEIGHTS, "momentum": 0.5},
+                previous_weights=BASE_SIGNAL_WEIGHTS,
+                is_active=True,
+            )
+        )
+        db.commit()
+        LearningLoopService().run_single_sample(db, run, {"asset": asset, "analysis_date": date(2022, 5, 1)})
+        prediction = db.scalar(select(HistoricalPrediction).where(HistoricalPrediction.ticker == "NVDA"))
+        simulation = ExecutionSimulation(
+            prediction_id=prediction.id,
+            ticker="NVDA",
+            setup_type="momentum_breakout",
+            realized_r_multiple=1.4,
+            max_adverse_excursion=-0.4,
+            max_favorable_excursion=1.8,
+            time_in_trade=12,
+            target_hit=True,
+            simulation_payload={"timeframe": "daily"},
+        )
+        db.add(simulation)
+        simulator = TradingGameSimulator()
+        game = simulator.create_game(db, reason="test")
+        db.flush()
+
+        trade = simulator.apply_simulation(db, game, simulation, prediction)
+
+    feedback = trade.payload["feedback_loop"]
+    assert feedback["model_version_used"] == "learned-paper"
+    assert feedback["weights_used"]["momentum"] > BASE_SIGNAL_WEIGHTS["momentum"]
+    assert feedback["learning_memory_used"]["policy"].startswith("SignalPerformance")
+    assert feedback["strategy_memory_used"]["policy"].startswith("StrategyMemory")
+    assert "learning_mode_metadata" in feedback
 
 
 def test_model_version_is_not_created_with_insufficient_evidence():
