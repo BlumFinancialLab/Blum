@@ -5,7 +5,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 
-revision = "0027_close_learning_feedback_loop"
+revision = "0027_feedback_loop"
 down_revision = "0026_alpha_operating_system"
 branch_labels = None
 depends_on = None
