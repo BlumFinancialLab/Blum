@@ -2288,6 +2288,106 @@ class LiveForwardPaperPosition(Base):
     trade = relationship("TradingGameTrade")
 
 
+class LiveForwardPaperTrade(Base):
+    __tablename__ = "live_forward_paper_trades"
+    __table_args__ = (
+        UniqueConstraint("duplicate_key", name="uq_live_forward_paper_trade_duplicate_key"),
+        Index("ix_live_forward_trades_status_created", "status", "created_at"),
+        Index("ix_live_forward_trades_ticker_decision", "ticker", "decision_date"),
+        Index("ix_live_forward_trades_game_status", "game_id", "status", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    trade_uid: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    game_id: Mapped[int] = mapped_column(ForeignKey("live_forward_paper_games.id", ondelete="CASCADE"), index=True)
+    ledger_trade_id: Mapped[int | None] = mapped_column(ForeignKey("trading_game_trades.id", ondelete="SET NULL"), index=True)
+    feedback_loop_audit_id: Mapped[int | None] = mapped_column(ForeignKey("feedback_loop_audits.id", ondelete="SET NULL"), index=True)
+    ticker: Mapped[str] = mapped_column(String(32), index=True)
+    asset_name: Mapped[str | None] = mapped_column(String(220))
+    asset_type: Mapped[str | None] = mapped_column(String(40), index=True)
+    sector: Mapped[str | None] = mapped_column(String(120), index=True)
+    industry: Mapped[str | None] = mapped_column(String(160))
+    setup_type: Mapped[str] = mapped_column(String(100), index=True)
+    status: Mapped[str] = mapped_column(String(60), default="CANDIDATE", index=True)
+    close_reason: Mapped[str | None] = mapped_column(String(80), index=True)
+    decision_timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    decision_date: Mapped[datetime | None] = mapped_column(Date, index=True)
+    model_version_used: Mapped[str] = mapped_column(String(100), default="base-static", index=True)
+    weights_used: Mapped[dict] = mapped_column(JsonType, default=dict)
+    confidence_adjustment: Mapped[float] = mapped_column(Float, default=0.0)
+    learning_memory_used: Mapped[dict] = mapped_column(JsonType, default=dict)
+    strategy_memory_used: Mapped[dict] = mapped_column(JsonType, default=dict)
+    research_priority_used: Mapped[dict] = mapped_column(JsonType, default=dict)
+    frozen_decision_payload: Mapped[dict] = mapped_column(JsonType, default=dict)
+    actionability_state: Mapped[str | None] = mapped_column(String(80), index=True)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    sniper_score: Mapped[float | None] = mapped_column(Float, index=True)
+    benchmark_ticker: Mapped[str | None] = mapped_column(String(32), index=True)
+    entry_trigger: Mapped[str | None] = mapped_column(Text)
+    confirmation_condition: Mapped[str | None] = mapped_column(Text)
+    entry_price: Mapped[float | None] = mapped_column(Float)
+    entry_date: Mapped[datetime | None] = mapped_column(Date, index=True)
+    opened_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    stop_loss: Mapped[float | None] = mapped_column(Float)
+    invalidation_level: Mapped[float | None] = mapped_column(Float)
+    target_1: Mapped[float | None] = mapped_column(Float)
+    target_2: Mapped[float | None] = mapped_column(Float)
+    position_size: Mapped[float] = mapped_column(Float, default=0.0)
+    notional_value: Mapped[float | None] = mapped_column(Float)
+    risk_amount: Mapped[float] = mapped_column(Float, default=0.0)
+    risk_percent: Mapped[float] = mapped_column(Float, default=0.0)
+    expected_risk: Mapped[float | None] = mapped_column(Float)
+    expected_reward: Mapped[float | None] = mapped_column(Float)
+    expected_r_multiple: Mapped[float | None] = mapped_column(Float)
+    current_price: Mapped[float | None] = mapped_column(Float)
+    unrealized_pnl: Mapped[float] = mapped_column(Float, default=0.0)
+    exit_price: Mapped[float | None] = mapped_column(Float)
+    exit_date: Mapped[datetime | None] = mapped_column(Date, index=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    gross_pnl_eur: Mapped[float | None] = mapped_column(Float)
+    net_pnl_eur: Mapped[float | None] = mapped_column(Float)
+    pnl_percent: Mapped[float | None] = mapped_column(Float)
+    pnl_per_share: Mapped[float | None] = mapped_column(Float)
+    r_multiple: Mapped[float | None] = mapped_column(Float, index=True)
+    max_favorable_excursion: Mapped[float] = mapped_column(Float, default=0.0)
+    max_adverse_excursion: Mapped[float] = mapped_column(Float, default=0.0)
+    target_1_hit: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    target_2_hit: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    stop_hit: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    invalidation_hit: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    benchmark_return_same_period: Mapped[float | None] = mapped_column(Float)
+    excess_return_vs_benchmark: Mapped[float | None] = mapped_column(Float)
+    outcome_label: Mapped[str | None] = mapped_column(String(80), index=True)
+    lesson_learned: Mapped[str | None] = mapped_column(Text)
+    duplicate_key: Mapped[str] = mapped_column(String(220), unique=True, index=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+    game = relationship("LiveForwardPaperGame")
+    ledger_trade = relationship("TradingGameTrade")
+    feedback_loop_audit = relationship("FeedbackLoopAudit")
+
+
+class LiveForwardPaperTradeEvent(Base):
+    __tablename__ = "live_forward_paper_trade_events"
+    __table_args__ = (
+        Index("ix_live_forward_events_trade_time", "paper_trade_id", "event_timestamp"),
+        Index("ix_live_forward_events_type_time", "event_type", "event_timestamp"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    paper_trade_id: Mapped[int] = mapped_column(ForeignKey("live_forward_paper_trades.id", ondelete="CASCADE"), index=True)
+    event_timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    event_type: Mapped[str] = mapped_column(String(100), index=True)
+    price_used: Mapped[float | None] = mapped_column(Float)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    payload: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    paper_trade = relationship("LiveForwardPaperTrade")
+
+
 class HistoricalLiveComparison(Base):
     __tablename__ = "historical_live_comparisons"
     __table_args__ = (Index("ix_historical_live_comparisons_created", "created_at"),)

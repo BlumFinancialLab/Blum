@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 import time
 
 from sqlalchemy import desc, select
@@ -38,7 +38,6 @@ class DashboardSnapshotService:
             "is_stale": is_stale,
             "payload": row.payload_json or {},
             "source_modules": row.source_modules_json or {},
-            "missing_sections": getattr(row, "missing_sections_json", None) or [],
             "computation_duration_ms": row.computation_duration_ms,
             "warnings": row.warnings_json or [],
         }
@@ -52,7 +51,6 @@ class DashboardSnapshotService:
         source_modules: dict | None = None,
         ttl_seconds: int = 300,
         warnings: list[str] | None = None,
-        missing_sections: list[str] | None = None,
         computation_duration_ms: float | None = None,
     ) -> dict:
         started = time.perf_counter()
@@ -60,12 +58,11 @@ class DashboardSnapshotService:
             snapshot_type=snapshot_type,
             created_at=datetime.utcnow(),
             expires_at=datetime.utcnow() + timedelta(seconds=max(1, ttl_seconds)),
-            payload_json=json_safe(payload),
-            source_modules_json=json_safe(source_modules or {}),
-            missing_sections_json=json_safe(missing_sections or []),
+            payload_json=payload,
+            source_modules_json=source_modules or {},
             is_stale=False,
             computation_duration_ms=computation_duration_ms,
-            warnings_json=json_safe(warnings or []),
+            warnings_json=warnings or [],
         )
         if row.computation_duration_ms is None:
             row.computation_duration_ms = round((time.perf_counter() - started) * 1000, 3)
@@ -85,22 +82,3 @@ def record_snapshot_cache(snapshot_type: str, *, hit: bool, status: str) -> None
         )
     except Exception:
         pass
-
-
-def json_safe(value):
-    if isinstance(value, (datetime, date)):
-        return value.isoformat()
-    if isinstance(value, dict):
-        return {str(key): json_safe(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [json_safe(item) for item in value]
-    if isinstance(value, tuple):
-        return [json_safe(item) for item in value]
-    try:
-        import numpy as np
-
-        if isinstance(value, np.generic):
-            return json_safe(value.item())
-    except Exception:
-        pass
-    return value

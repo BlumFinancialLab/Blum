@@ -51,79 +51,41 @@ class TradeLedgerService:
         limit: int = 200,
         offset: int = 0,
         refresh: bool = True,
-        use_snapshot: bool = True,
-        include_trace: bool = False,
     ) -> dict:
-        if use_snapshot and self._can_use_ledger_snapshot(
-            ticker=ticker,
-            setup_type=setup_type,
-            outcome_label=outcome_label,
-            start_date=start_date,
-            end_date=end_date,
-            min_r=min_r,
-            max_r=max_r,
-            only_open=only_open,
-            only_closed=only_closed,
-            sort_by=sort_by,
-        ):
-            from app.services.trading_game_runtime import TradingGameRuntimeSnapshotService
-
-            snapshot_payload = TradingGameRuntimeSnapshotService().ledger_from_snapshot(db, game_id=game_id, limit=limit, offset=offset)
-            if snapshot_payload is not None:
-                return snapshot_payload
         game = self.game(db, game_id)
         if not game:
             return {"status": "no_game", "rows": [], "summary": {}, "policy": TRANSPARENCY_POLICY}
-        from app.services.trading_game_runtime import RuntimeTrace, payload_size_bytes
-
-        trace = RuntimeTrace("trading_game_ledger_live_read")
         if refresh:
-            with trace.phase("refresh_transparency"):
-                self.refresh_game_transparency(db, game, commit=False, persist_reality=False)
-        with trace.phase("base_trade_query"):
-            query = select(TradingGameTrade).where(TradingGameTrade.game_id == game.id)
-            if ticker:
-                query = query.where(TradingGameTrade.ticker == ticker.upper())
-            if setup_type:
-                query = query.where(TradingGameTrade.setup_type == setup_type)
-            if outcome_label:
-                query = query.where(TradingGameTrade.outcome_label == outcome_label)
-            parsed_start = parse_date(start_date)
-            parsed_end = parse_date(end_date)
-            if parsed_start:
-                query = query.where(TradingGameTrade.entry_date >= parsed_start)
-            if parsed_end:
-                query = query.where(TradingGameTrade.entry_date <= parsed_end)
-            if min_r is not None:
-                query = query.where(TradingGameTrade.realized_r_multiple >= min_r)
-            if max_r is not None:
-                query = query.where(TradingGameTrade.realized_r_multiple <= max_r)
-            if only_open:
-                query = query.where(TradingGameTrade.exit_date.is_(None))
-            if only_closed:
-                query = query.where(TradingGameTrade.exit_date.is_not(None))
-            total = int(db.scalar(select(func.count()).select_from(query.subquery())) or 0)
-            query = order_trade_query(query, sort_by).limit(limit).offset(offset)
-            rows = db.scalars(query).all()
-        with trace.phase("attribution_loading"):
-            attribution_count = 0
-        with trace.phase("evidence_loading"):
-            evidence_count = 0
-        with trace.phase("benchmark_loading"):
-            benchmark_count = sum(1 for row in rows if row.benchmark_return_same_period is not None or row.benchmark_return is not None)
-        with trace.phase("quality_loading"):
-            quality_count = sum(1 for row in rows if row.trade_quality_score is not None)
-        with trace.phase("prediction_loading"):
-            prediction_count = sum(1 for row in rows if row.thesis_id)
-        with trace.phase("serialization"):
-            serialized_rows = [self.serialize_trade(db, row) for row in rows]
-            summary = self.summary_for_game(db, game)
-        payload = {
+            self.refresh_game_transparency(db, game, commit=False, persist_reality=False)
+        query = select(TradingGameTrade).where(TradingGameTrade.game_id == game.id)
+        if ticker:
+            query = query.where(TradingGameTrade.ticker == ticker.upper())
+        if setup_type:
+            query = query.where(TradingGameTrade.setup_type == setup_type)
+        if outcome_label:
+            query = query.where(TradingGameTrade.outcome_label == outcome_label)
+        parsed_start = parse_date(start_date)
+        parsed_end = parse_date(end_date)
+        if parsed_start:
+            query = query.where(TradingGameTrade.entry_date >= parsed_start)
+        if parsed_end:
+            query = query.where(TradingGameTrade.entry_date <= parsed_end)
+        if min_r is not None:
+            query = query.where(TradingGameTrade.realized_r_multiple >= min_r)
+        if max_r is not None:
+            query = query.where(TradingGameTrade.realized_r_multiple <= max_r)
+        if only_open:
+            query = query.where(TradingGameTrade.exit_date.is_(None))
+        if only_closed:
+            query = query.where(TradingGameTrade.exit_date.is_not(None))
+        total = int(db.scalar(select(func.count()).select_from(query.subquery())) or 0)
+        query = order_trade_query(query, sort_by).limit(limit).offset(offset)
+        rows = db.scalars(query).all()
+        return {
             "status": "ok",
-            "snapshot_status": "miss",
             "game": serialize_game_header(game),
-            "summary": summary,
-            "rows": serialized_rows,
+            "summary": self.summary_for_game(db, game),
+            "rows": [self.serialize_trade(db, row) for row in rows],
             "total": total,
             "limit": limit,
             "offset": offset,
@@ -142,27 +104,6 @@ class TradeLedgerService:
             },
             "policy": TRANSPARENCY_POLICY,
         }
-        with trace.phase("json_generation"):
-            response_size = payload_size_bytes(payload)
-        trace.add(
-            snapshot_miss=True,
-            base_trade_query_count=2,
-            attribution_loading_queries=0,
-            evidence_loading_queries=0,
-            benchmark_loading_queries=0,
-            quality_loading_queries=0,
-            prediction_loading_queries=0,
-            attribution_rows=attribution_count,
-            evidence_rows=evidence_count,
-            benchmark_rows=benchmark_count,
-            quality_rows=quality_count,
-            prediction_links=prediction_count,
-            row_count=len(rows),
-            total_trades=total,
-            response_size_bytes=response_size,
-        )
-        payload["runtime_trace"] = trace.payload()
-        return payload
 
     def detail(self, db: Session, trade_id: int) -> dict:
         trade = db.get(TradingGameTrade, trade_id)
@@ -291,33 +232,6 @@ class TradeLedgerService:
         if game_id:
             return db.get(TradingGame, game_id)
         return db.scalar(select(TradingGame).where(TradingGame.status == "active").order_by(desc(TradingGame.started_at)).limit(1)) or db.scalar(select(TradingGame).order_by(desc(TradingGame.started_at)).limit(1))
-
-    def _can_use_ledger_snapshot(
-        self,
-        *,
-        ticker: str | None,
-        setup_type: str | None,
-        outcome_label: str | None,
-        start_date: str | None,
-        end_date: str | None,
-        min_r: float | None,
-        max_r: float | None,
-        only_open: bool,
-        only_closed: bool,
-        sort_by: str,
-    ) -> bool:
-        return (
-            ticker is None
-            and setup_type is None
-            and outcome_label is None
-            and start_date is None
-            and end_date is None
-            and min_r is None
-            and max_r is None
-            and not only_open
-            and not only_closed
-            and sort_by == "created_at_desc"
-        )
 
     def serialize_trade(self, db: Session, trade: TradingGameTrade) -> dict:
         return {
@@ -516,61 +430,22 @@ class TradeQualityEvaluator:
 
 
 class EquityCurveAnnotationService:
-    def annotated_equity(
-        self,
-        db: Session,
-        game_id: int | None = None,
-        limit: int = 800,
-        *,
-        refresh: bool = False,
-        use_snapshot: bool = True,
-        include_trace: bool = False,
-    ) -> dict:
-        if use_snapshot:
-            from app.services.trading_game_runtime import TradingGameRuntimeSnapshotService
-
-            snapshot_payload = TradingGameRuntimeSnapshotService().equity_from_snapshot(db, game_id=game_id, limit=limit)
-            if snapshot_payload is not None:
-                return snapshot_payload
+    def annotated_equity(self, db: Session, game_id: int | None = None, limit: int = 800) -> dict:
         game = TradeLedgerService().game(db, game_id)
         if not game:
             return {"status": "no_game", "equity_curve_points": [], "benchmark_curve_points": [], "annotations": []}
-        from app.services.trading_game_runtime import RuntimeTrace, payload_size_bytes
-
-        trace = RuntimeTrace("equity_curve_annotated_live_read")
-        if refresh:
-            with trace.phase("annotation_refresh"):
-                trades = db.scalars(select(TradingGameTrade).where(TradingGameTrade.game_id == game.id).order_by(TradingGameTrade.created_at)).all()
-                self.refresh(db, game, trades)
-        with trace.phase("equity_points_loading"):
-            points = db.scalars(select(TradingGameEquityCurve).where(TradingGameEquityCurve.game_id == game.id).order_by(TradingGameEquityCurve.created_at).limit(limit)).all()
-        with trace.phase("annotations_loading"):
-            annotations = db.scalars(select(EquityCurveAnnotation).where(EquityCurveAnnotation.game_id == game.id).order_by(EquityCurveAnnotation.timestamp).limit(limit)).all()
-        with trace.phase("benchmark_loading"):
-            benchmark_curve_points = [{"timestamp": iso(row.equity_date or row.created_at), "value": row.benchmark_equity, "return": row.benchmark_return} for row in points]
-        with trace.phase("serialization"):
-            payload = {
-                "status": "ok",
-                "snapshot_status": "miss",
-                "game": serialize_game_header(game),
-                "equity_curve_points": [serialize_equity_point(row) for row in points],
-                "benchmark_curve_points": benchmark_curve_points,
-                "annotations": [serialize_annotation(row) for row in annotations],
-                "policy": "Markers connect equity movement to trade entries, exits, drawdowns, rule events and benchmark divergence when those events exist.",
-            }
-        with trace.phase("json_generation"):
-            size = payload_size_bytes(payload)
-        trace.add(
-            snapshot_miss=True,
-            equity_points_queries=1,
-            annotations_queries=1,
-            benchmark_loading_queries=0,
-            point_count=len(points),
-            annotation_count=len(annotations),
-            response_size_bytes=size,
-        )
-        payload["runtime_trace"] = trace.payload()
-        return payload
+        trades = db.scalars(select(TradingGameTrade).where(TradingGameTrade.game_id == game.id).order_by(TradingGameTrade.created_at)).all()
+        self.refresh(db, game, trades)
+        points = db.scalars(select(TradingGameEquityCurve).where(TradingGameEquityCurve.game_id == game.id).order_by(TradingGameEquityCurve.created_at).limit(limit)).all()
+        annotations = db.scalars(select(EquityCurveAnnotation).where(EquityCurveAnnotation.game_id == game.id).order_by(EquityCurveAnnotation.timestamp).limit(limit)).all()
+        return {
+            "status": "ok",
+            "game": serialize_game_header(game),
+            "equity_curve_points": [serialize_equity_point(row) for row in points],
+            "benchmark_curve_points": [{"timestamp": iso(row.equity_date or row.created_at), "value": row.benchmark_equity, "return": row.benchmark_return} for row in points],
+            "annotations": [serialize_annotation(row) for row in annotations],
+            "policy": "Markers connect equity movement to trade entries, exits, drawdowns, rule events and benchmark divergence when those events exist.",
+        }
 
     def refresh(self, db: Session, game: TradingGame, trades: list[TradingGameTrade]) -> None:
         for trade in trades:

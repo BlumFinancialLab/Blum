@@ -37,6 +37,7 @@ WORKER_DEFINITIONS: dict[str, WorkerDefinition] = {
     "blum_financial_model_cycle": WorkerDefinition("blum_financial_model_cycle", "model_learning", "configured", settings.blum_autonomous_max_seconds_per_job, settings.blum_model_cycle_limit),
     "blum_point_in_time_learning_loop": WorkerDefinition("blum_point_in_time_learning_loop", "point_in_time_learning", "configured", settings.blum_autonomous_max_seconds_per_job, settings.learning_batch_size),
     "blum_trading_game": WorkerDefinition("blum_trading_game", "trading_game", "configured", settings.blum_autonomous_max_seconds_per_job, settings.trading_game_batch_size),
+    "live_forward_paper_trading": WorkerDefinition("live_forward_paper_trading", "paper_forward", "configured", settings.blum_autonomous_max_seconds_per_job, settings.live_trading_game_max_open_positions),
     "blum_professional_learning_cycle": WorkerDefinition("blum_professional_learning_cycle", "professional_learning", "configured", settings.blum_autonomous_max_seconds_per_job, settings.professional_learning_batch_size),
     "startup_snapshot_warmup": WorkerDefinition("startup_snapshot_warmup", "startup", "startup", 120, settings.blum_autonomous_max_items_per_job),
     "startup_pipeline": WorkerDefinition("startup_pipeline", "startup", "startup", settings.blum_autonomous_max_seconds_per_job, settings.startup_pipeline_limit),
@@ -154,4 +155,3 @@ class RuntimeWorkerCoordinator:
 
 
 runtime_worker_coordinator = RuntimeWorkerCoordinator()
-

@@ -11,8 +11,8 @@ BACKEND = os.path.join(ROOT, "backend")
 if BACKEND not in sys.path:
     sys.path.insert(0, BACKEND)
 
-from app.analyst.dataset_pipeline import BlumAnalystDatasetPipeline  # noqa: E402
 from app.core.database import session_scope  # noqa: E402
+from app.services.blum_financial_model import export_training_jsonl  # noqa: E402
 
 
 def main() -> None:
@@ -23,7 +23,12 @@ def main() -> None:
     args = parser.parse_args()
 
     with session_scope() as db:
-        result = BlumAnalystDatasetPipeline().export(db, limit=args.limit, min_quality=args.min_quality, export_name=args.export_name)
+        result = export_training_jsonl(
+            db,
+            limit=args.limit,
+            min_quality=args.min_quality,
+            export_name=args.export_name,
+        )
     print(json.dumps(result, indent=2, sort_keys=True))
 
 

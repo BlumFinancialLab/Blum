@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import date, datetime, timedelta
+import hashlib
 from statistics import mean, median
 from uuid import uuid4
 
@@ -11,16 +12,24 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.models import (
     Asset,
+    LearningEvent,
     HistoricalLiveComparison,
     LiveForwardPaperGame,
     LiveForwardPaperPosition,
+    LiveForwardPaperTrade,
+    LiveForwardPaperTradeEvent,
     PriceHistory,
+    SignalPerformance,
+    StrategyMemory,
+    TradeLearningEvidence,
     TradingCapitalCycle,
     TradingGame,
     TradingGameEquityCurve,
     TradingGameTrade,
     TradingIntelligenceMetric,
 )
+from app.services.dashboard_snapshots import DashboardSnapshotService
+from app.services.learning_loop import active_weight_context, learning_mode_metadata
 from app.services.trade_transparency import (
     TRANSPARENCY_POLICY,
     TradeLedgerService,
@@ -352,36 +361,70 @@ class TradingIntelligenceMetricsService:
 class LiveForwardPaperTradingService:
     """Forward-only paper mode using current BLUM setup evidence without future data."""
 
+    snapshot_type = "paper_forward_snapshot"
+
     def status(self, db: Session) -> dict:
         game = self.active_or_create_live_game(db)
-        positions = db.scalars(select(LiveForwardPaperPosition).where(LiveForwardPaperPosition.game_id == game.id, LiveForwardPaperPosition.status == "open").order_by(desc(LiveForwardPaperPosition.created_at))).all()
-        return {"status": "active" if settings.live_trading_game_enabled else "disabled", "game": serialize_live_game(game), "open_positions": [serialize_live_position(row) for row in positions], "policy": LAB_POLICY}
+        return self.status_payload(db, game)
+
+    def status_readonly(self, db: Session) -> dict:
+        game = self.active_game(db)
+        if not game:
+            return {"status": "NO_SNAPSHOTS", "readiness": "NO_SNAPSHOTS", "enabled": settings.live_trading_game_enabled, "policy": LAB_POLICY}
+        return self.status_payload(db, game)
+
+    def status_payload(self, db: Session, game: LiveForwardPaperGame) -> dict:
+        open_trades = int(db.scalar(select(func.count(LiveForwardPaperTrade.id)).where(LiveForwardPaperTrade.game_id == game.id, LiveForwardPaperTrade.status == "OPEN")) or 0)
+        blocked = int(db.scalar(select(func.count(LiveForwardPaperTrade.id)).where(LiveForwardPaperTrade.game_id == game.id, LiveForwardPaperTrade.status == "DATA_BLOCKED")) or 0)
+        latest_event = db.scalar(select(LiveForwardPaperTradeEvent).order_by(desc(LiveForwardPaperTradeEvent.event_timestamp)).limit(1))
+        return {
+            "status": "active" if settings.live_trading_game_enabled else "disabled",
+            "readiness": "READY" if settings.live_trading_game_enabled else "DISABLED",
+            "game": serialize_live_game(game),
+            "counts": {
+                "open": open_trades,
+                "data_blocked": blocked,
+                "closed": int(db.scalar(select(func.count(LiveForwardPaperTrade.id)).where(LiveForwardPaperTrade.game_id == game.id, LiveForwardPaperTrade.status == "CLOSED")) or 0),
+            },
+            "last_event": serialize_live_event(latest_event) if latest_event else None,
+            "policy": LAB_POLICY,
+        }
 
     def run_cycle(self, db: Session) -> dict:
         if not settings.live_trading_game_enabled:
             return {"status": "disabled", "policy": LAB_POLICY}
         game = self.active_or_create_live_game(db)
-        closed = self.evaluate_open_positions(db, game)
-        if game.open_positions >= settings.live_trading_game_max_open_positions:
-            db.commit()
-            return {"status": "ok", "opened": [], "closed": closed, "reason": "max_open_positions_reached", "game": serialize_live_game(game), "policy": LAB_POLICY}
+        candidates = self.scan_candidates(db)
+        opened = self.open_eligible_trades(db, game, candidates)
+        updated = self.update_open_trades(db, game)
+        closed = updated.get("closed", [])
+        lessons = self.publish_lessons(db, closed)
+        self.refresh_live_game_counts(db, game)
+        db.commit()
+        snapshot = self.publish_snapshot(db)
+        return {
+            "status": "ok",
+            "phases": {
+                "scan_candidates": {"count": len(candidates)},
+                "open_eligible_trades": opened,
+                "update_open_trades": {"updated": len(updated.get("updated", [])), "data_blocked": len(updated.get("data_blocked", []))},
+                "close_resolved_trades": {"closed": len(closed)},
+                "publish_lessons": {"created": len(lessons)},
+            },
+            "game": serialize_live_game(game),
+            "snapshot": snapshot,
+            "sample_warning": "Live forward evidence is immature until enough timestamp-frozen trades close.",
+            "policy": LAB_POLICY,
+        }
+
+    def scan_candidates(self, db: Session, limit: int = 30) -> list[dict]:
         from app.services.market_sniper import MarketSniperEngine
 
-        candidates = MarketSniperEngine().candidates(db, limit=30, persist=False).get("candidates", [])
-        opened = []
-        for candidate in candidates:
-            if game.open_positions >= settings.live_trading_game_max_open_positions:
-                break
-            if not live_candidate_is_actionable(candidate):
-                continue
-            if self.has_open_position(db, game, candidate.get("ticker")):
-                continue
-            opened.append(self.open_position(db, game, candidate))
-        db.commit()
-        return {"status": "ok", "opened": opened, "closed": closed, "game": serialize_live_game(game), "sample_warning": "Live forward evidence is immature until enough timestamp-frozen trades close.", "policy": LAB_POLICY}
+        payload = MarketSniperEngine().candidates(db, limit=limit, persist=False)
+        return list(payload.get("candidates", []) or [])
 
     def active_or_create_live_game(self, db: Session) -> LiveForwardPaperGame:
-        game = db.scalar(select(LiveForwardPaperGame).where(LiveForwardPaperGame.status == "active").order_by(desc(LiveForwardPaperGame.started_at)).limit(1))
+        game = self.active_game(db)
         if game:
             return game
         game = LiveForwardPaperGame(
@@ -403,123 +446,516 @@ class LiveForwardPaperTradingService:
         db.flush()
         return game
 
+    def active_game(self, db: Session) -> LiveForwardPaperGame | None:
+        return db.scalar(select(LiveForwardPaperGame).where(LiveForwardPaperGame.status == "active").order_by(desc(LiveForwardPaperGame.started_at)).limit(1))
+
     def open_position(self, db: Session, game: LiveForwardPaperGame, candidate: dict) -> dict:
+        opened = self.open_eligible_trades(db, game, [candidate])
+        return opened.get("opened", [{}])[0] if opened.get("opened") else {"status": "skipped", "reason": opened.get("skipped_reason") or "not_opened"}
+
+    def open_eligible_trades(self, db: Session, game: LiveForwardPaperGame, candidates: list[dict]) -> dict:
+        opened: list[dict] = []
+        skipped: list[dict] = []
+        data_blocked: list[dict] = []
+        duplicates: list[dict] = []
+        for candidate in candidates:
+            if game.open_positions >= settings.live_trading_game_max_open_positions:
+                skipped.append({"ticker": candidate.get("ticker"), "reason": "max_open_positions_reached"})
+                break
+            trade = self.build_trade_from_candidate(db, game, candidate)
+            if trade is None:
+                duplicates.append({"ticker": candidate.get("ticker"), "reason": "duplicate_or_open_position"})
+                continue
+            if trade.status == "OPEN":
+                opened.append(serialize_paper_forward_trade(trade, compact=True))
+            elif trade.status == "DATA_BLOCKED":
+                data_blocked.append(serialize_paper_forward_trade(trade, compact=True))
+            else:
+                skipped.append(serialize_paper_forward_trade(trade, compact=True))
+        return {"opened": opened, "skipped": skipped, "data_blocked": data_blocked, "duplicates": duplicates}
+
+    def build_trade_from_candidate(self, db: Session, game: LiveForwardPaperGame, candidate: dict) -> LiveForwardPaperTrade | None:
+        now = datetime.utcnow()
         ticker = candidate.get("ticker")
         price = safe_float((candidate.get("price_context") or {}).get("latest_price"))
         plan = candidate.get("trade_plan") or {}
+        setup_type = (candidate.get("setup") or {}).get("setup_type") or "active_setup"
+        entry_trigger = plan.get("entry_trigger") or plan.get("confirmation_condition") or "live_candidate_actionable"
+        feedback = self.feedback_metadata(db, ticker=ticker, setup_type=setup_type)
+        duplicate_key = live_forward_duplicate_key(
+            ticker=ticker,
+            decision_date=now.date(),
+            model_version=feedback["model_version_used"],
+            setup_type=setup_type,
+            entry_trigger=entry_trigger,
+        )
+        if not ticker or self.duplicate_or_open_trade(db, game, ticker, duplicate_key):
+            return None
+
+        actionable = live_candidate_is_actionable(candidate)
+        status = "OPEN" if actionable else "SKIPPED"
+        block_reason = ""
+        if price <= 0:
+            status = "DATA_BLOCKED"
+            block_reason = "missing_live_entry_price"
+        elif not actionable:
+            block_reason = "candidate_not_actionable"
+
         risk_amount = game.current_capital * settings.live_trading_game_max_risk_per_trade / 100
         stop = safe_float(plan.get("invalidation_level")) or (price * 0.97 if price else None)
         risk_per_share = abs(price - stop) if price and stop else price * 0.02 if price else 1
         size = risk_amount / max(0.01, risk_per_share)
+        target_1 = safe_float(plan.get("target_1")) or (price * 1.04 if price else None)
+        target_2 = safe_float(plan.get("target_2")) or (price * 1.08 if price else None)
         trade_game = ensure_live_trade_game(db)
-        trade = TradingGameTrade(
-            game_id=trade_game.id,
-            mode="live_forward_paper",
+        ledger_trade = None
+        if status == "OPEN":
+            ledger_trade = TradingGameTrade(
+                game_id=trade_game.id,
+                mode="live_forward_paper",
+                ticker=ticker,
+                asset_name=(candidate.get("asset") or {}).get("name") or ticker,
+                asset_type=(candidate.get("asset") or {}).get("asset_type"),
+                sector=(candidate.get("asset") or {}).get("sector"),
+                setup_type=(candidate.get("setup") or {}).get("setup_type") or "active_setup",
+                confidence_at_entry=candidate.get("confidence"),
+                actionability_state_at_entry=candidate.get("actionability"),
+                market_regime_at_entry=(candidate.get("market_regime") or {}).get("regime_primary"),
+                benchmark_ticker=game.benchmark_ticker,
+                timeframe="daily",
+                decision_state=candidate.get("actionability") or "active_setup",
+                entry_date=datetime.utcnow().date(),
+                entry_price=price,
+                entry_reason=f"Live forward paper setup frozen from BLUM candidate scan at {datetime.utcnow().isoformat()}.",
+                entry_trigger=entry_trigger,
+                confirmation_condition=plan.get("confirmation_condition") or "Candidate met BLUM actionability threshold at decision timestamp.",
+                position_size=round(size, 6),
+                notional_value=round(size * price, 4) if price else 0.0,
+                risk_amount=round(risk_amount, 4),
+                risk_percent=settings.live_trading_game_max_risk_per_trade,
+                stop_loss=stop,
+                invalidation_level=stop,
+                initial_target_1=target_1,
+                initial_target_2=target_2,
+                trailing_stop="Live forward paper trailing logic evaluates on future market refreshes.",
+                capital_before=round(game.current_capital, 4),
+                capital_after=round(game.current_capital, 4),
+                reproducibility_score=candidate.get("reproducibility_score") or 70.0,
+                data_quality_score=(candidate.get("price_context") or {}).get("data_quality_score"),
+                outcome_label="open",
+                payload={
+                    "candidate_snapshot": compact_candidate(candidate),
+                    "feedback_loop": feedback,
+                    "no_future_data_policy": "No exit outcome is evaluated until later market data exists.",
+                },
+            )
+            db.add(ledger_trade)
+            db.flush()
+
+        paper_trade = LiveForwardPaperTrade(
+            trade_uid=f"pf-{now.strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:8]}",
+            game_id=game.id,
+            ledger_trade_id=ledger_trade.id if ledger_trade else None,
             ticker=ticker,
             asset_name=(candidate.get("asset") or {}).get("name") or ticker,
             asset_type=(candidate.get("asset") or {}).get("asset_type"),
             sector=(candidate.get("asset") or {}).get("sector"),
-            setup_type=(candidate.get("setup") or {}).get("setup_type") or "active_setup",
-            confidence_at_entry=candidate.get("confidence"),
-            actionability_state_at_entry=candidate.get("actionability"),
-            market_regime_at_entry=(candidate.get("market_regime") or {}).get("regime_primary"),
+            industry=(candidate.get("asset") or {}).get("industry"),
+            setup_type=setup_type,
+            status=status,
+            decision_timestamp=now,
+            decision_date=now.date(),
+            model_version_used=feedback["model_version_used"],
+            weights_used=feedback["weights_used"],
+            confidence_adjustment=safe_float(feedback.get("confidence_adjustment")),
+            learning_memory_used=feedback["learning_memory_used"],
+            strategy_memory_used=feedback["strategy_memory_used"],
+            research_priority_used=feedback["research_priority_used"],
+            frozen_decision_payload=freeze_decision_payload(candidate, feedback, now),
+            actionability_state=candidate.get("actionability"),
+            confidence=candidate.get("confidence"),
+            sniper_score=candidate.get("sniper_score"),
             benchmark_ticker=game.benchmark_ticker,
-            timeframe="daily",
-            decision_state=candidate.get("actionability") or "active_setup",
-            entry_date=datetime.utcnow().date(),
-            entry_price=price,
-            entry_reason=f"Live forward paper setup frozen from BLUM candidate scan at {datetime.utcnow().isoformat()}.",
-            entry_trigger=plan.get("entry_trigger") or plan.get("confirmation_condition") or "live_candidate_actionable",
+            entry_trigger=entry_trigger,
             confirmation_condition=plan.get("confirmation_condition") or "Candidate met BLUM actionability threshold at decision timestamp.",
+            entry_price=price,
+            entry_date=now.date() if status == "OPEN" else None,
+            opened_at=now if status == "OPEN" else None,
+            stop_loss=stop,
+            invalidation_level=stop,
+            target_1=target_1,
+            target_2=target_2,
+            current_price=price,
             position_size=round(size, 6),
             notional_value=round(size * price, 4) if price else 0.0,
             risk_amount=round(risk_amount, 4),
             risk_percent=settings.live_trading_game_max_risk_per_trade,
-            stop_loss=stop,
-            invalidation_level=stop,
-            initial_target_1=safe_float(plan.get("target_1")) or (price * 1.04 if price else None),
-            initial_target_2=safe_float(plan.get("target_2")) or (price * 1.08 if price else None),
-            trailing_stop="Live forward paper trailing logic evaluates on future market refreshes.",
-            capital_before=round(game.current_capital, 4),
-            capital_after=round(game.current_capital, 4),
-            reproducibility_score=candidate.get("reproducibility_score") or 70.0,
-            data_quality_score=(candidate.get("price_context") or {}).get("data_quality_score"),
-            outcome_label="open",
-            payload={"candidate_snapshot": compact_candidate(candidate), "no_future_data_policy": "No exit outcome is evaluated until later market data exists."},
+            expected_risk=round(risk_per_share * size, 4) if price else None,
+            expected_reward=round((target_1 - price) * size, 4) if price and target_1 else None,
+            expected_r_multiple=round(((target_1 - price) / max(0.01, risk_per_share)), 4) if price and target_1 else None,
+            duplicate_key=duplicate_key,
+            expires_at=now + timedelta(days=30),
         )
-        db.add(trade)
+        db.add(paper_trade)
         db.flush()
+        self.add_event(db, paper_trade, "DECISION_CREATED", price, "Decision frozen from current BLUM evidence.", {"candidate": compact_candidate(candidate), "feedback": feedback})
+        if status == "DATA_BLOCKED":
+            self.add_event(db, paper_trade, "DATA_BLOCKED", None, block_reason, {"price_context": candidate.get("price_context")})
+            return paper_trade
+        if status == "SKIPPED":
+            self.add_event(db, paper_trade, "DATA_BLOCKED" if block_reason == "missing_live_entry_price" else "ERROR", price, block_reason, {"actionability": candidate.get("actionability")})
+            return paper_trade
+
         position = LiveForwardPaperPosition(
             game_id=game.id,
-            trade_id=trade.id,
+            trade_id=ledger_trade.id if ledger_trade else None,
             ticker=ticker,
-            setup_type=trade.setup_type,
+            setup_type=setup_type,
+            status="open",
+            decision_timestamp=now,
             entry_price=price,
             current_price=price,
             position_size=round(size, 6),
             risk_amount=round(risk_amount, 4),
             stop_loss=stop,
-            target_1=trade.initial_target_1,
-            target_2=trade.initial_target_2,
-            thesis_snapshot={"reason": trade.entry_reason, "actionability": trade.actionability_state_at_entry},
-            data_snapshot={"price_context": candidate.get("price_context"), "timestamp": datetime.utcnow().isoformat()},
+            target_1=target_1,
+            target_2=target_2,
+            thesis_snapshot={"reason": ledger_trade.entry_reason if ledger_trade else "", "actionability": candidate.get("actionability")},
+            data_snapshot={"price_context": candidate.get("price_context"), "timestamp": now.isoformat(), "paper_trade_id": paper_trade.id},
         )
         db.add(position)
         game.open_positions += 1
-        game.exposure += trade.notional_value or 0.0
-        game.cash = max(0.0, game.cash - safe_float(trade.notional_value))
-        game.updated_at = datetime.utcnow()
-        return {"trade_id": trade.id, "ticker": ticker, "entry_price": price, "position_size": size, "policy": "Paper only; decision frozen."}
+        game.exposure += paper_trade.notional_value or 0.0
+        game.cash = max(0.0, game.cash - safe_float(paper_trade.notional_value))
+        game.updated_at = now
+        self.add_event(db, paper_trade, "ENTRY_TRIGGERED", price, entry_trigger, {"confirmation_condition": paper_trade.confirmation_condition})
+        self.add_event(db, paper_trade, "POSITION_OPENED", price, "Paper position opened. No broker execution.", {"position_size": paper_trade.position_size, "risk_amount": paper_trade.risk_amount})
+        return paper_trade
 
     def evaluate_open_positions(self, db: Session, game: LiveForwardPaperGame) -> list[dict]:
-        closed = []
-        positions = db.scalars(select(LiveForwardPaperPosition).where(LiveForwardPaperPosition.game_id == game.id, LiveForwardPaperPosition.status == "open")).all()
-        for position in positions:
-            latest = latest_price_after(db, position.ticker, position.decision_timestamp)
-            if not latest:
+        return self.update_open_trades(db, game).get("closed", [])
+
+    def update_open_trades(self, db: Session, game: LiveForwardPaperGame) -> dict:
+        rows = db.scalars(
+            select(LiveForwardPaperTrade)
+            .where(LiveForwardPaperTrade.game_id == game.id, LiveForwardPaperTrade.status == "OPEN")
+            .order_by(LiveForwardPaperTrade.created_at)
+        ).all()
+        updated: list[dict] = []
+        closed: list[dict] = []
+        data_blocked: list[dict] = []
+        for paper_trade in rows:
+            latest = latest_market_price_after(db, paper_trade.ticker, paper_trade.decision_timestamp)
+            if latest is None:
+                self.add_event(db, paper_trade, "DATA_BLOCKED", None, "No market price later than the decision timestamp is available yet.", {})
+                data_blocked.append({"trade_id": paper_trade.id, "ticker": paper_trade.ticker, "reason": "no_future_market_data"})
                 continue
             latest_date, latest_price = latest
+            self.refresh_open_trade_mark_to_market(db, game, paper_trade, latest_date, latest_price)
+            close_reason = close_reason_for(paper_trade, latest_price)
+            if close_reason:
+                closed.append(self.close_trade(db, game, paper_trade, latest_date, latest_price, close_reason))
+            else:
+                updated.append(serialize_paper_forward_trade(paper_trade, compact=True))
+        return {"updated": updated, "closed": closed, "data_blocked": data_blocked}
+
+    def refresh_open_trade_mark_to_market(self, db: Session, game: LiveForwardPaperGame, paper_trade: LiveForwardPaperTrade, latest_date: date, latest_price: float) -> None:
+        entry = safe_float(paper_trade.entry_price)
+        size = safe_float(paper_trade.position_size)
+        pnl_per_share = latest_price - entry
+        unrealized = pnl_per_share * size
+        paper_trade.current_price = latest_price
+        paper_trade.unrealized_pnl = round(unrealized, 4)
+        paper_trade.max_favorable_excursion = round(max(safe_float(paper_trade.max_favorable_excursion), pnl_per_share), 4)
+        paper_trade.max_adverse_excursion = round(min(safe_float(paper_trade.max_adverse_excursion), pnl_per_share), 4)
+        paper_trade.updated_at = datetime.utcnow()
+        position = live_position_for_paper_trade(db, game, paper_trade)
+        if position:
             position.current_price = latest_price
-            trade = db.get(TradingGameTrade, position.trade_id) if position.trade_id else None
-            if not trade:
-                continue
-            outcome = None
-            if position.stop_loss and latest_price <= position.stop_loss:
-                outcome = "stopped_out"
-            elif position.target_2 and latest_price >= position.target_2:
-                outcome = "target_hit"
-            elif position.target_1 and latest_price >= position.target_1:
-                outcome = "partial_profit"
-            if not outcome:
-                continue
-            pnl_per_share = latest_price - safe_float(position.entry_price)
-            net = pnl_per_share * safe_float(position.position_size)
-            trade.exit_date = latest_date
-            trade.exit_price = latest_price
-            trade.net_pnl_eur = round(net, 4)
-            trade.gross_pnl_eur = round(net, 4)
-            trade.pnl_per_share = round(pnl_per_share, 4)
-            trade.pnl_percent = round(net / max(0.01, safe_float(trade.capital_before)) * 100, 4)
-            trade.realized_pl = trade.net_pnl_eur
-            trade.realized_r_multiple = round(net / max(0.01, safe_float(trade.risk_amount)), 4)
-            trade.capital_after = round(safe_float(trade.capital_before) + net, 4)
-            trade.outcome_label = outcome
-            trade.target_hit = outcome in {"target_hit", "partial_profit"}
-            trade.stop_hit = outcome == "stopped_out"
-            trade.exit_reason = f"Live forward paper position closed on {latest_date.isoformat()} because {outcome.replace('_', ' ')} triggered."
-            position.status = "closed"
             position.updated_at = datetime.utcnow()
-            game.current_capital = round(game.current_capital + net, 4)
-            game.realized_pl = round(game.realized_pl + net, 4)
-            game.open_positions = max(0, game.open_positions - 1)
-            game.updated_at = datetime.utcnow()
-            closed.append({"trade_id": trade.id, "ticker": trade.ticker, "outcome": outcome, "net_pnl_eur": trade.net_pnl_eur})
-        return closed
+
+    def close_trade(self, db: Session, game: LiveForwardPaperGame, paper_trade: LiveForwardPaperTrade, latest_date: date, latest_price: float, close_reason: str) -> dict:
+        now = datetime.utcnow()
+        entry = safe_float(paper_trade.entry_price)
+        size = safe_float(paper_trade.position_size)
+        pnl_per_share = latest_price - entry
+        net = pnl_per_share * size
+        risk = max(0.01, safe_float(paper_trade.risk_amount))
+        benchmark_return = period_return(db, game.benchmark_ticker, paper_trade.decision_date, latest_date)
+        asset_return = ((latest_price / entry) - 1) * 100 if entry else None
+        status = "EXPIRED" if close_reason == "TIME_EXIT" else "INVALIDATED" if close_reason == "INVALIDATION_HIT" else "CLOSED"
+        paper_trade.status = status
+        paper_trade.close_reason = close_reason
+        paper_trade.exit_price = latest_price
+        paper_trade.exit_date = latest_date
+        paper_trade.closed_at = now
+        paper_trade.gross_pnl_eur = round(net, 4)
+        paper_trade.net_pnl_eur = round(net, 4)
+        paper_trade.pnl_per_share = round(pnl_per_share, 4)
+        paper_trade.pnl_percent = round(asset_return, 4) if asset_return is not None else None
+        paper_trade.r_multiple = round(net / risk, 4)
+        paper_trade.benchmark_return_same_period = benchmark_return
+        paper_trade.excess_return_vs_benchmark = round(asset_return - benchmark_return, 4) if asset_return is not None and benchmark_return is not None else None
+        paper_trade.outcome_label = outcome_label_for(close_reason, net)
+        paper_trade.stop_hit = close_reason == "STOP_HIT"
+        paper_trade.target_1_hit = close_reason == "TARGET_1_HIT"
+        paper_trade.target_2_hit = close_reason == "TARGET_2_HIT"
+        paper_trade.invalidation_hit = close_reason == "INVALIDATION_HIT"
+        paper_trade.lesson_learned = paper_forward_lesson(paper_trade)
+        paper_trade.updated_at = now
+        event_type = "TARGET_HIT" if close_reason in {"TARGET_1_HIT", "TARGET_2_HIT"} else close_reason
+        self.add_event(db, paper_trade, event_type, latest_price, close_reason, {"net_pnl_eur": paper_trade.net_pnl_eur, "r_multiple": paper_trade.r_multiple})
+        self.add_event(db, paper_trade, "POSITION_CLOSED", latest_price, f"Closed by {close_reason}.", {"outcome_label": paper_trade.outcome_label})
+        self.add_event(db, paper_trade, "OUTCOME_EVALUATED", latest_price, paper_trade.lesson_learned or "", {"benchmark_return_same_period": benchmark_return, "excess_return_vs_benchmark": paper_trade.excess_return_vs_benchmark})
+        ledger_trade = db.get(TradingGameTrade, paper_trade.ledger_trade_id) if paper_trade.ledger_trade_id else None
+        if ledger_trade:
+            update_legacy_live_trade(ledger_trade, paper_trade, game)
+        position = live_position_for_paper_trade(db, game, paper_trade)
+        if position:
+            position.status = "closed"
+            position.current_price = latest_price
+            position.updated_at = now
+        game.current_capital = round(safe_float(game.current_capital) + net, 4)
+        game.realized_pl = round(safe_float(game.realized_pl) + net, 4)
+        game.exposure = max(0.0, safe_float(game.exposure) - safe_float(paper_trade.notional_value))
+        game.cash = round(safe_float(game.cash) + safe_float(paper_trade.notional_value) + net, 4)
+        game.open_positions = max(0, int(game.open_positions or 0) - 1)
+        game.updated_at = now
+        live_ledger_game = ensure_live_trade_game(db)
+        db.add(
+            TradingGameEquityCurve(
+                game_id=live_ledger_game.id,
+                equity_date=latest_date,
+                equity=game.current_capital,
+                cash=game.cash,
+                exposure=game.exposure,
+                benchmark_return=benchmark_return,
+                event_type="paper_forward_trade_closed",
+                related_trade_id=ledger_trade.id if ledger_trade else None,
+                annotation_payload={"paper_trade_id": paper_trade.id, "close_reason": close_reason, "outcome_label": paper_trade.outcome_label},
+            )
+        )
+        return serialize_paper_forward_trade(paper_trade, compact=True)
+
+    def publish_lessons(self, db: Session, closed: list[dict]) -> list[dict]:
+        lessons: list[dict] = []
+        for item in closed:
+            paper_trade = db.get(LiveForwardPaperTrade, item.get("trade_id"))
+            if not paper_trade or not paper_trade.ledger_trade_id:
+                continue
+            if db.scalar(select(TradeLearningEvidence.id).where(TradeLearningEvidence.trade_id == paper_trade.ledger_trade_id, TradeLearningEvidence.lesson_type == "paper_forward_outcome").limit(1)):
+                continue
+            lesson_type = "setup_confirmed" if safe_float(paper_trade.r_multiple) > 0 else "setup_failed"
+            evidence = TradeLearningEvidence(
+                trade_id=paper_trade.ledger_trade_id,
+                game_id=ensure_live_trade_game(db).id,
+                ticker=paper_trade.ticker,
+                setup_type=paper_trade.setup_type,
+                regime=(paper_trade.frozen_decision_payload or {}).get("market_regime") or "unknown",
+                lesson_type="paper_forward_outcome",
+                observation=paper_trade.lesson_learned or "Paper-forward trade closed and was logged for learning.",
+                sample_size=1,
+                supporting_trades_json={"paper_trade_id": paper_trade.id, "r_multiple": paper_trade.r_multiple, "outcome_label": paper_trade.outcome_label},
+                affected_module="live_forward_paper_trading",
+                action_taken="stored_for_feedback_loop",
+                confidence=clamp(55 + safe_float(paper_trade.r_multiple) * 8),
+            )
+            db.add(evidence)
+            self.update_memory_from_trade(db, paper_trade, lesson_type)
+            db.add(
+                LearningEvent(
+                    event_type="paper_forward_trade_closed",
+                    severity="Info",
+                    title=f"{paper_trade.ticker} paper-forward {paper_trade.outcome_label or 'closed'}",
+                    description=paper_trade.lesson_learned or "",
+                    payload={"paper_trade_id": paper_trade.id, "ledger_trade_id": paper_trade.ledger_trade_id, "r_multiple": paper_trade.r_multiple},
+                )
+            )
+            self.add_event(db, paper_trade, "LESSON_CREATED", paper_trade.exit_price, evidence.observation, {"lesson_type": lesson_type})
+            lessons.append({"trade_id": paper_trade.id, "lesson_type": lesson_type, "observation": evidence.observation})
+        return lessons
+
+    def update_memory_from_trade(self, db: Session, paper_trade: LiveForwardPaperTrade, lesson_type: str) -> None:
+        signal_name = f"paper_forward:{paper_trade.setup_type}"
+        signal = db.scalar(select(SignalPerformance).where(SignalPerformance.signal_name == signal_name, SignalPerformance.timeframe == "daily", SignalPerformance.market_regime == "live_forward").limit(1))
+        if signal is None:
+            signal = SignalPerformance(
+                signal_name=signal_name,
+                timeframe="daily",
+                market_regime="live_forward",
+                sample_count=0,
+                correct_count=0,
+                false_positive_count=0,
+                false_negative_count=0,
+                reliability_score=50.0,
+                evidence={},
+            )
+            db.add(signal)
+        signal.sample_count += 1
+        if safe_float(paper_trade.r_multiple) > 0:
+            signal.correct_count += 1
+        else:
+            signal.false_positive_count += 1
+        signal.reliability_score = round(clamp(40 + (signal.correct_count / max(1, signal.sample_count)) * 45 + min(10, signal.sample_count)), 2)
+        signal.average_return = paper_trade.pnl_percent
+        signal.evidence = {"latest_paper_trade_id": paper_trade.id, "latest_r_multiple": paper_trade.r_multiple, "lesson_type": lesson_type}
+
+        key = f"paper_forward:{paper_trade.setup_type}:{paper_trade.ticker}"
+        memory = db.scalar(select(StrategyMemory).where(StrategyMemory.memory_key == key).limit(1))
+        if memory is None:
+            memory = StrategyMemory(
+                memory_key=key,
+                category="paper_forward",
+                lesson=paper_trade.lesson_learned or "",
+                sample_count=0,
+                positive_count=0,
+                negative_count=0,
+                reliability_score=50.0,
+                evidence={},
+            )
+            db.add(memory)
+        memory.sample_count += 1
+        if safe_float(paper_trade.r_multiple) > 0:
+            memory.positive_count += 1
+        else:
+            memory.negative_count += 1
+        memory.lesson = paper_trade.lesson_learned or memory.lesson
+        memory.reliability_score = round(clamp(35 + (memory.positive_count / max(1, memory.sample_count)) * 55), 2)
+        memory.evidence = {"latest_paper_trade_id": paper_trade.id, "latest_outcome": paper_trade.outcome_label, "latest_r_multiple": paper_trade.r_multiple}
+        memory.last_seen_at = datetime.utcnow()
 
     def has_open_position(self, db: Session, game: LiveForwardPaperGame, ticker: str | None) -> bool:
         if not ticker:
             return True
-        return bool(db.scalar(select(LiveForwardPaperPosition.id).where(LiveForwardPaperPosition.game_id == game.id, LiveForwardPaperPosition.ticker == ticker, LiveForwardPaperPosition.status == "open").limit(1)))
+        return bool(db.scalar(select(LiveForwardPaperTrade.id).where(LiveForwardPaperTrade.game_id == game.id, LiveForwardPaperTrade.ticker == ticker, LiveForwardPaperTrade.status == "OPEN").limit(1)))
+
+    def duplicate_or_open_trade(self, db: Session, game: LiveForwardPaperGame, ticker: str, duplicate_key: str) -> bool:
+        if self.has_open_position(db, game, ticker):
+            return True
+        return bool(db.scalar(select(LiveForwardPaperTrade.id).where(LiveForwardPaperTrade.duplicate_key == duplicate_key).limit(1)))
+
+    def feedback_metadata(self, db: Session, *, ticker: str | None, setup_type: str) -> dict:
+        model_version, weights, source = active_weight_context(db)
+        signal_rows = db.scalars(select(SignalPerformance).order_by(desc(SignalPerformance.updated_at)).limit(6)).all()
+        strategy_rows = db.scalars(select(StrategyMemory).order_by(desc(StrategyMemory.last_seen_at)).limit(6)).all()
+        return {
+            "model_version_used": model_version,
+            "weights_used": weights,
+            "weight_source": source,
+            "confidence_adjustment": memory_confidence_adjustment(strategy_rows, signal_rows),
+            "learning_memory_used": {"signal_performance": [serialize_signal_memory(row) for row in signal_rows]},
+            "strategy_memory_used": {"rows": [serialize_strategy_memory(row) for row in strategy_rows]},
+            "research_priority_used": {"ticker": ticker, "setup_type": setup_type, "source": "latest_live_forward_scan"},
+            "learning_mode_metadata": learning_mode_metadata("paper_forward", {"mode": "paper_forward", "sampling_reason": "live_forward_paper"}),
+        }
+
+    def add_event(self, db: Session, paper_trade: LiveForwardPaperTrade, event_type: str, price_used: float | None, reason: str, payload: dict | None = None) -> LiveForwardPaperTradeEvent:
+        event = LiveForwardPaperTradeEvent(
+            paper_trade_id=paper_trade.id,
+            event_type=event_type,
+            price_used=price_used,
+            reason=reason,
+            payload=payload or {},
+        )
+        db.add(event)
+        return event
+
+    def refresh_live_game_counts(self, db: Session, game: LiveForwardPaperGame) -> None:
+        game.open_positions = int(db.scalar(select(func.count(LiveForwardPaperTrade.id)).where(LiveForwardPaperTrade.game_id == game.id, LiveForwardPaperTrade.status == "OPEN")) or 0)
+        game.updated_at = datetime.utcnow()
+
+    def publish_snapshot(self, db: Session) -> dict:
+        return DashboardSnapshotService().write(
+            db,
+            self.snapshot_type,
+            self.snapshot_payload(db),
+            source_modules={"producer": "LiveForwardPaperTradingService", "runtime_policy": "snapshot_after_worker_or_manual_post"},
+            ttl_seconds=900,
+        )
+
+    def snapshot(self, db: Session) -> dict:
+        return DashboardSnapshotService().latest(db, self.snapshot_type)
+
+    def snapshot_payload(self, db: Session) -> dict:
+        game = self.active_game(db)
+        if not game:
+            return {
+                "readiness": "NO_SNAPSHOTS",
+                "status": "missing",
+                "explanation": "No live-forward paper game exists yet. The backend worker or POST /api/paper-forward/run must create the first cycle.",
+                "policy": LAB_POLICY,
+            }
+        open_rows = db.scalars(select(LiveForwardPaperTrade).where(LiveForwardPaperTrade.game_id == game.id, LiveForwardPaperTrade.status == "OPEN").order_by(desc(LiveForwardPaperTrade.created_at)).limit(12)).all()
+        closed_rows = db.scalars(select(LiveForwardPaperTrade).where(LiveForwardPaperTrade.game_id == game.id, LiveForwardPaperTrade.status.in_(["CLOSED", "EXPIRED", "INVALIDATED"])).order_by(desc(LiveForwardPaperTrade.closed_at)).limit(12)).all()
+        candidate_rows = db.scalars(select(LiveForwardPaperTrade).where(LiveForwardPaperTrade.game_id == game.id, LiveForwardPaperTrade.status.in_(["CANDIDATE", "SKIPPED", "DATA_BLOCKED", "ERROR"])).order_by(desc(LiveForwardPaperTrade.created_at)).limit(12)).all()
+        all_closed = db.scalars(select(LiveForwardPaperTrade).where(LiveForwardPaperTrade.game_id == game.id, LiveForwardPaperTrade.status.in_(["CLOSED", "EXPIRED", "INVALIDATED"]))).all()
+        realized = sum(safe_float(row.net_pnl_eur) for row in all_closed)
+        unrealized = sum(safe_float(row.unrealized_pnl) for row in open_rows)
+        wins = sum(1 for row in all_closed if safe_float(row.net_pnl_eur) > 0)
+        avg_r = mean([safe_float(row.r_multiple) for row in all_closed if row.r_multiple is not None]) if any(row.r_multiple is not None for row in all_closed) else None
+        benchmark_excess = mean([safe_float(row.excess_return_vs_benchmark) for row in all_closed if row.excess_return_vs_benchmark is not None]) if any(row.excess_return_vs_benchmark is not None for row in all_closed) else None
+        latest_lesson = db.scalar(select(TradeLearningEvidence).where(TradeLearningEvidence.affected_module == "live_forward_paper_trading").order_by(desc(TradeLearningEvidence.created_at)).limit(1))
+        return {
+            "readiness": "READY" if settings.live_trading_game_enabled else "DISABLED",
+            "status": "ready",
+            "last_worker_run": iso(game.updated_at),
+            "game": serialize_live_game(game),
+            "counts": {
+                "candidates": len(candidate_rows),
+                "open": len(open_rows),
+                "recently_closed": len(closed_rows),
+                "closed_total": len(all_closed),
+                "data_blocked": sum(1 for row in candidate_rows if row.status == "DATA_BLOCKED"),
+            },
+            "candidates": [serialize_paper_forward_trade(row, compact=True) for row in candidate_rows],
+            "open_positions": [serialize_paper_forward_trade(row, compact=True) for row in open_rows],
+            "recently_closed": [serialize_paper_forward_trade(row, compact=True) for row in closed_rows],
+            "equity_curve": self.equity_curve_points(db, game),
+            "metrics": {
+                "realized_pnl": round(realized, 4),
+                "unrealized_pnl": round(unrealized, 4),
+                "win_rate": round(wins / max(1, len(all_closed)), 4) if all_closed else None,
+                "avg_r": round(avg_r, 4) if avg_r is not None else None,
+                "benchmark_excess": round(benchmark_excess, 4) if benchmark_excess is not None else None,
+            },
+            "blockers": snapshot_blockers(candidate_rows, open_rows),
+            "last_lesson": serialize_trade_lesson(latest_lesson) if latest_lesson else None,
+            "policy": LAB_POLICY,
+        }
+
+    def equity_curve_points(self, db: Session, game: LiveForwardPaperGame) -> list[dict]:
+        rows = db.scalars(
+            select(LiveForwardPaperTrade)
+            .where(LiveForwardPaperTrade.game_id == game.id, LiveForwardPaperTrade.status.in_(["CLOSED", "EXPIRED", "INVALIDATED"]))
+            .order_by(LiveForwardPaperTrade.closed_at)
+        ).all()
+        equity = safe_float(game.starting_capital)
+        points = [{"timestamp": iso(game.started_at), "equity": round(equity, 4), "event": "start"}]
+        for row in rows:
+            equity += safe_float(row.net_pnl_eur)
+            points.append({"timestamp": iso(row.closed_at or row.updated_at), "equity": round(equity, 4), "ticker": row.ticker, "event": row.close_reason or row.outcome_label})
+        return points[-120:]
+
+    def paper_trades(self, db: Session, limit: int = 50, status: str | None = None) -> dict:
+        query = select(LiveForwardPaperTrade).order_by(desc(LiveForwardPaperTrade.created_at))
+        if status:
+            query = query.where(LiveForwardPaperTrade.status == status.upper())
+        rows = db.scalars(query.limit(max(1, min(limit, 200)))).all()
+        return {"status": "ok", "rows": [serialize_paper_forward_trade(row, compact=True) for row in rows], "limit": limit, "policy": LAB_POLICY}
+
+    def trade_detail(self, db: Session, trade_id: int) -> dict:
+        row = db.get(LiveForwardPaperTrade, trade_id)
+        if row is None:
+            return {"status": "not_found", "trade_id": trade_id}
+        events = db.scalars(select(LiveForwardPaperTradeEvent).where(LiveForwardPaperTradeEvent.paper_trade_id == row.id).order_by(LiveForwardPaperTradeEvent.event_timestamp)).all()
+        return {"status": "ok", "trade": serialize_paper_forward_trade(row, compact=False), "events": [serialize_live_event(event) for event in events], "policy": LAB_POLICY}
+
+    def events(self, db: Session, trade_id: int) -> dict:
+        row = db.get(LiveForwardPaperTrade, trade_id)
+        if row is None:
+            return {"status": "not_found", "trade_id": trade_id, "events": []}
+        events = db.scalars(select(LiveForwardPaperTradeEvent).where(LiveForwardPaperTradeEvent.paper_trade_id == row.id).order_by(LiveForwardPaperTradeEvent.event_timestamp)).all()
+        return {"status": "ok", "trade_id": trade_id, "events": [serialize_live_event(event) for event in events], "policy": LAB_POLICY}
 
     def positions(self, db: Session) -> dict:
         game = self.active_or_create_live_game(db)
@@ -933,6 +1369,293 @@ def compact_candidate(candidate: dict) -> dict:
         "trade_plan": candidate.get("trade_plan"),
         "price_context": candidate.get("price_context"),
     }
+
+
+def live_forward_duplicate_key(*, ticker: str | None, decision_date: date, model_version: str, setup_type: str, entry_trigger: str) -> str:
+    raw = "|".join(
+        [
+            (ticker or "").upper(),
+            decision_date.isoformat(),
+            model_version or "base-static",
+            setup_type or "unknown_setup",
+            entry_trigger or "unknown_trigger",
+        ]
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def freeze_decision_payload(candidate: dict, feedback: dict, decision_timestamp: datetime) -> dict:
+    return {
+        "decision_timestamp": decision_timestamp.isoformat(),
+        "ticker": candidate.get("ticker"),
+        "asset": candidate.get("asset") or {},
+        "setup": candidate.get("setup") or {},
+        "actionability": candidate.get("actionability"),
+        "sniper_score": candidate.get("sniper_score"),
+        "confidence": candidate.get("confidence"),
+        "trade_plan": candidate.get("trade_plan") or {},
+        "price_context": candidate.get("price_context") or {},
+        "market_regime": (candidate.get("market_regime") or {}).get("regime_primary"),
+        "feedback_loop": feedback,
+        "no_future_data_policy": "Frozen payload contains only data available at decision timestamp. Future prices are appended as events only.",
+    }
+
+
+def latest_market_price_after(db: Session, ticker: str, timestamp: datetime) -> tuple[date, float] | None:
+    asset = db.scalar(select(Asset).where(Asset.ticker == ticker).limit(1))
+    if not asset:
+        return None
+    row = db.scalar(
+        select(PriceHistory)
+        .where(PriceHistory.asset_id == asset.id, PriceHistory.date > timestamp.date())
+        .order_by(desc(PriceHistory.date))
+        .limit(1)
+    )
+    return (row.date, safe_float(row.close)) if row else None
+
+
+def price_on_or_before(db: Session, ticker: str | None, target_date: date | None) -> float | None:
+    if not ticker or not target_date:
+        return None
+    asset = db.scalar(select(Asset).where(Asset.ticker == ticker).limit(1))
+    if not asset:
+        return None
+    row = db.scalar(
+        select(PriceHistory)
+        .where(PriceHistory.asset_id == asset.id, PriceHistory.date <= target_date)
+        .order_by(desc(PriceHistory.date))
+        .limit(1)
+    )
+    return safe_float(row.close) if row else None
+
+
+def period_return(db: Session, ticker: str | None, start_date: date | None, end_date: date | None) -> float | None:
+    start = price_on_or_before(db, ticker, start_date)
+    end = price_on_or_before(db, ticker, end_date)
+    if not start or not end:
+        return None
+    return round(((end / start) - 1) * 100, 4)
+
+
+def close_reason_for(row: LiveForwardPaperTrade, latest_price: float) -> str | None:
+    if row.stop_loss and latest_price <= row.stop_loss:
+        return "STOP_HIT"
+    if row.invalidation_level and latest_price <= row.invalidation_level:
+        return "INVALIDATION_HIT"
+    if row.target_2 and latest_price >= row.target_2:
+        return "TARGET_2_HIT"
+    if row.target_1 and latest_price >= row.target_1:
+        return "TARGET_1_HIT"
+    if row.expires_at and datetime.utcnow() >= row.expires_at:
+        return "TIME_EXIT"
+    return None
+
+
+def outcome_label_for(close_reason: str, net_pnl: float) -> str:
+    if close_reason == "STOP_HIT":
+        return "stopped_out"
+    if close_reason in {"TARGET_1_HIT", "TARGET_2_HIT"}:
+        return "target_hit"
+    if close_reason == "TIME_EXIT":
+        return "time_exit"
+    if close_reason == "INVALIDATION_HIT":
+        return "thesis_invalidated"
+    return "win" if net_pnl > 0 else "loss" if net_pnl < 0 else "breakeven"
+
+
+def paper_forward_lesson(row: LiveForwardPaperTrade) -> str:
+    r_value = safe_float(row.r_multiple)
+    if row.close_reason in {"TARGET_1_HIT", "TARGET_2_HIT"}:
+        return f"{row.setup_type} on {row.ticker} reached target in live-forward paper mode with {r_value:.2f}R; retain evidence but require larger live sample."
+    if row.close_reason == "STOP_HIT":
+        return f"{row.setup_type} on {row.ticker} hit the predefined stop; review entry timing, volatility and confirmation quality."
+    if row.close_reason == "INVALIDATION_HIT":
+        return f"{row.setup_type} on {row.ticker} invalidated the thesis; lower confidence for similar setups until more evidence accumulates."
+    if row.close_reason == "TIME_EXIT":
+        return f"{row.setup_type} on {row.ticker} expired without resolving; review holding period and signal decay assumptions."
+    return f"{row.setup_type} on {row.ticker} closed with {r_value:.2f}R; store as paper-forward evidence."
+
+
+def update_legacy_live_trade(ledger_trade: TradingGameTrade, paper_trade: LiveForwardPaperTrade, game: LiveForwardPaperGame) -> None:
+    ledger_trade.exit_date = paper_trade.exit_date
+    ledger_trade.exit_price = paper_trade.exit_price
+    ledger_trade.net_pnl_eur = paper_trade.net_pnl_eur
+    ledger_trade.gross_pnl_eur = paper_trade.gross_pnl_eur
+    ledger_trade.pnl_per_share = paper_trade.pnl_per_share
+    ledger_trade.pnl_percent = paper_trade.pnl_percent
+    ledger_trade.realized_pl = safe_float(paper_trade.net_pnl_eur)
+    ledger_trade.realized_r_multiple = paper_trade.r_multiple
+    ledger_trade.capital_after = round(safe_float(game.current_capital) + safe_float(paper_trade.net_pnl_eur), 4)
+    ledger_trade.outcome_label = paper_trade.outcome_label
+    ledger_trade.target_hit = bool(paper_trade.target_1_hit or paper_trade.target_2_hit)
+    ledger_trade.target_1_hit = paper_trade.target_1_hit
+    ledger_trade.target_2_hit = paper_trade.target_2_hit
+    ledger_trade.stop_hit = paper_trade.stop_hit
+    ledger_trade.invalidation_hit = paper_trade.invalidation_hit
+    ledger_trade.exit_reason = f"Live-forward paper trade closed by {paper_trade.close_reason}."
+    ledger_trade.exit_trigger = paper_trade.close_reason
+    ledger_trade.max_favorable_excursion = paper_trade.max_favorable_excursion
+    ledger_trade.max_adverse_excursion = paper_trade.max_adverse_excursion
+    ledger_trade.benchmark_return_same_period = paper_trade.benchmark_return_same_period
+    ledger_trade.excess_return_vs_benchmark = paper_trade.excess_return_vs_benchmark
+    ledger_trade.lesson_generated = paper_trade.lesson_learned
+    ledger_trade.payload = {
+        **(ledger_trade.payload or {}),
+        "paper_forward_trade_id": paper_trade.id,
+        "model_version_used": paper_trade.model_version_used,
+        "weights_used": paper_trade.weights_used,
+        "confidence_adjustment": paper_trade.confidence_adjustment,
+        "learning_memory_used": paper_trade.learning_memory_used,
+        "strategy_memory_used": paper_trade.strategy_memory_used,
+        "research_priority_used": paper_trade.research_priority_used,
+    }
+
+
+def live_position_for_paper_trade(db: Session, game: LiveForwardPaperGame, paper_trade: LiveForwardPaperTrade) -> LiveForwardPaperPosition | None:
+    if not paper_trade.ledger_trade_id:
+        return None
+    return db.scalar(
+        select(LiveForwardPaperPosition)
+        .where(
+            LiveForwardPaperPosition.game_id == game.id,
+            LiveForwardPaperPosition.trade_id == paper_trade.ledger_trade_id,
+        )
+        .limit(1)
+    )
+
+
+def serialize_paper_forward_trade(row: LiveForwardPaperTrade, *, compact: bool = False) -> dict:
+    payload = {
+        "trade_id": row.id,
+        "trade_uid": row.trade_uid,
+        "game_id": row.game_id,
+        "ledger_trade_id": row.ledger_trade_id,
+        "ticker": row.ticker,
+        "setup_type": row.setup_type,
+        "status": row.status,
+        "close_reason": row.close_reason,
+        "decision_timestamp": iso(row.decision_timestamp),
+        "decision_date": iso(row.decision_date),
+        "model_version_used": row.model_version_used,
+        "entry_price": row.entry_price,
+        "current_price": row.current_price,
+        "exit_price": row.exit_price,
+        "stop_loss": row.stop_loss,
+        "invalidation_level": row.invalidation_level,
+        "target_1": row.target_1,
+        "target_2": row.target_2,
+        "position_size": row.position_size,
+        "risk_amount": row.risk_amount,
+        "risk_percent": row.risk_percent,
+        "expected_reward": row.expected_reward,
+        "expected_r_multiple": row.expected_r_multiple,
+        "unrealized_pnl": row.unrealized_pnl,
+        "net_pnl_eur": row.net_pnl_eur,
+        "pnl_percent": row.pnl_percent,
+        "pnl_per_share": row.pnl_per_share,
+        "r_multiple": row.r_multiple,
+        "benchmark_return_same_period": row.benchmark_return_same_period,
+        "excess_return_vs_benchmark": row.excess_return_vs_benchmark,
+        "outcome_label": row.outcome_label,
+        "lesson_learned": row.lesson_learned,
+        "confidence": row.confidence,
+        "sniper_score": row.sniper_score,
+        "actionability_state": row.actionability_state,
+        "feedback_loop_audit_id": row.feedback_loop_audit_id,
+        "created_at": iso(row.created_at),
+        "updated_at": iso(row.updated_at),
+    }
+    if compact:
+        return payload
+    payload.update(
+        {
+            "asset_name": row.asset_name,
+            "asset_type": row.asset_type,
+            "sector": row.sector,
+            "industry": row.industry,
+            "weights_used": row.weights_used,
+            "confidence_adjustment": row.confidence_adjustment,
+            "learning_memory_used": row.learning_memory_used,
+            "strategy_memory_used": row.strategy_memory_used,
+            "research_priority_used": row.research_priority_used,
+            "frozen_decision_payload": row.frozen_decision_payload,
+            "entry_trigger": row.entry_trigger,
+            "confirmation_condition": row.confirmation_condition,
+            "opened_at": iso(row.opened_at),
+            "closed_at": iso(row.closed_at),
+            "max_favorable_excursion": row.max_favorable_excursion,
+            "max_adverse_excursion": row.max_adverse_excursion,
+            "target_1_hit": row.target_1_hit,
+            "target_2_hit": row.target_2_hit,
+            "stop_hit": row.stop_hit,
+            "invalidation_hit": row.invalidation_hit,
+            "expires_at": iso(row.expires_at),
+        }
+    )
+    return payload
+
+
+def serialize_live_event(row: LiveForwardPaperTradeEvent) -> dict:
+    return {
+        "id": row.id,
+        "trade_id": row.paper_trade_id,
+        "timestamp": iso(row.event_timestamp),
+        "event_type": row.event_type,
+        "price_used": row.price_used,
+        "reason": row.reason,
+        "payload": row.payload,
+    }
+
+
+def serialize_signal_memory(row: SignalPerformance) -> dict:
+    return {
+        "signal_name": row.signal_name,
+        "timeframe": row.timeframe,
+        "market_regime": row.market_regime,
+        "sample_count": row.sample_count,
+        "reliability_score": row.reliability_score,
+        "weight_adjustment": row.weight_adjustment,
+    }
+
+
+def serialize_strategy_memory(row: StrategyMemory) -> dict:
+    return {
+        "memory_key": row.memory_key,
+        "category": row.category,
+        "sample_count": row.sample_count,
+        "reliability_score": row.reliability_score,
+        "lesson": row.lesson,
+    }
+
+
+def memory_confidence_adjustment(strategy_rows: list[StrategyMemory], signal_rows: list[SignalPerformance]) -> float:
+    values = [safe_float(row.reliability_score, 50.0) for row in strategy_rows] + [safe_float(row.reliability_score, 50.0) for row in signal_rows]
+    if not values:
+        return 0.0
+    return round(clamp((mean(values) - 50.0) / 10.0, -8.0, 8.0), 4)
+
+
+def serialize_trade_lesson(row: TradeLearningEvidence) -> dict:
+    return {
+        "id": row.id,
+        "ticker": row.ticker,
+        "setup_type": row.setup_type,
+        "lesson_type": row.lesson_type,
+        "observation": row.observation,
+        "confidence": row.confidence,
+        "created_at": iso(row.created_at),
+    }
+
+
+def snapshot_blockers(candidate_rows: list[LiveForwardPaperTrade], open_rows: list[LiveForwardPaperTrade]) -> list[str]:
+    blockers: list[str] = []
+    if not open_rows:
+        blockers.append("no_open_paper_forward_positions")
+    if any(row.status == "DATA_BLOCKED" for row in candidate_rows):
+        blockers.append("some_candidates_blocked_by_missing_market_data")
+    if len(candidate_rows) == 0 and len(open_rows) == 0:
+        blockers.append("no_recent_candidates_in_snapshot")
+    return blockers
 
 
 def comparison_warning(historical: dict, live: dict) -> str:

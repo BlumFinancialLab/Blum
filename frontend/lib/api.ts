@@ -3,42 +3,12 @@ import { AccuracyOverview, AccuracyProfile, Asset, BrainAccuracy, BrainAssetMemo
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
 const inFlightRequests = new Map<string, Promise<any>>();
 const memoryCache = new Map<string, { expiresAt: number; value: any }>();
-const LEARNING_INITIAL_RENDER_GUARD_MS = 4000;
-const heavyLearningPostFragments = [
-  "/recalculate",
-  "/run-cycle",
-  "/pipeline/run",
-  "/market/update",
-  "/news/update",
-  "/signals/run",
-  "/data/repair",
-  "/fundamentals/update",
-  "/macro/update",
-  "/stock-radar/update",
-  "/ipo-radar/update",
-  "/api/learning-intelligence/self-improvement/generate",
-  "/api/capital-allocation/recalculate",
-  "/api/alpha-recovery/recalculate",
-  "/api/alpha-recovery/methodology/validate",
-  "/api/alpha-recovery/attribution/calculate",
-  "/api/alpha-recovery/missed-winners/detect",
-  "/api/alpha-recovery/actions/generate",
-  "/api/meta-cognition/recalculate",
-  "/api/meta-cognition/factor-importance/recalculate",
-  "/api/meta-cognition/evaluate",
-  "/api/meta-cognition/capital-preservation/evaluate",
-  "/api/meta-cognition/learning-focus/generate",
-  "/api/meta-cognition/noise/detect",
-  "/snapshots/produce"
-];
 const requestStats = {
   total: 0,
   duplicate: 0,
   cacheHits: 0,
   initialLearningPage: [] as Array<{ path: string; method: string; duration_ms: number; status: string; duplicate?: boolean; cache_hit?: boolean }>
 };
-let learningPagePath = "";
-let learningPageStartedAt: number | null = null;
 
 async function getJson<T>(path: string): Promise<T> {
   const response = await fetchBlum(path, { method: "GET", cacheTtlMs: 2500, timeoutMs: 12000 });
@@ -66,16 +36,6 @@ async function fetchBlum(path: string, options: RequestInit & { timeoutMs?: numb
   const key = `${method}:${path}:${typeof options.body === "string" ? options.body : ""}`;
   const started = nowMs();
   requestStats.total += 1;
-
-  if (method === "POST" && shouldBlockLearningHeavyPost(path)) {
-    const duration = nowMs() - started;
-    recordInitialLearningRequest(path, method, duration, "blocked_heavy_frontend_recalculation", false, false);
-    reportFrontendTiming(path, method, duration, "blocked_heavy_frontend_recalculation", true);
-    return new Response(JSON.stringify({
-      detail: "blocked_heavy_frontend_recalculation",
-      policy: "Learning page render is read-only. Heavy training/recalculation jobs must be explicit backend or user actions after initial load."
-    }), { status: 409, headers: { "Content-Type": "application/json", "X-BLUM-BLOCKED-HEAVY-FRONTEND-RECALCULATION": "true" } });
-  }
 
   if (method === "GET") {
     const cached = memoryCache.get(key);
@@ -139,43 +99,19 @@ async function fetchBlum(path: string, options: RequestInit & { timeoutMs?: numb
 function reportFrontendTiming(path: string, method: string, duration_ms: number, status: string, force = false) {
   if (path.includes("/performance/frontend-widget") || path.includes("/api/performance/frontend-widget")) return;
   const onLearningPage = typeof location !== "undefined" && location.pathname.startsWith("/learning");
-  const route = typeof location !== "undefined" ? `${location.pathname}${location.search}` : "";
-  const initialLearningWindow = onLearningPage && isWithinLearningInitialWindow();
   if (!force && !onLearningPage && duration_ms < 400 && !path.includes("/learning")) return;
   fetch(`${API_BASE}/api/performance/frontend-widget`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name: `frontend.api.${method}.${path}`, duration_ms, status, source: "fetchBlum", route, initial_learning_window: initialLearningWindow }),
+    body: JSON.stringify({ name: `frontend.api.${method}.${path}`, duration_ms, status, source: "fetchBlum" }),
     keepalive: true
   }).catch(() => undefined);
 }
 
 function recordInitialLearningRequest(path: string, method: string, duration_ms: number, status: string, duplicate: boolean, cache_hit: boolean) {
-  if (!isWithinLearningInitialWindow()) return;
+  if (typeof location === "undefined" || !location.pathname.startsWith("/learning")) return;
   requestStats.initialLearningPage.push({ path, method, duration_ms: Number(duration_ms.toFixed(2)), status, duplicate, cache_hit });
   if (requestStats.initialLearningPage.length > 160) requestStats.initialLearningPage.shift();
-}
-
-function shouldBlockLearningHeavyPost(path: string) {
-  if (typeof location === "undefined" || !location.pathname.startsWith("/learning")) return false;
-  if (!isWithinLearningInitialWindow()) return false;
-  return heavyLearningPostFragments.some((fragment) => path.includes(fragment));
-}
-
-function isWithinLearningInitialWindow() {
-  if (typeof location === "undefined" || !location.pathname.startsWith("/learning")) {
-    learningPagePath = "";
-    learningPageStartedAt = null;
-    return false;
-  }
-  const currentPath = `${location.pathname}${location.search}`;
-  const currentTime = nowMs();
-  if (learningPagePath !== currentPath || learningPageStartedAt === null) {
-    learningPagePath = currentPath;
-    learningPageStartedAt = currentTime;
-    requestStats.initialLearningPage = [];
-  }
-  return currentTime - learningPageStartedAt <= LEARNING_INITIAL_RENDER_GUARD_MS;
 }
 
 function nowMs() {
@@ -198,18 +134,6 @@ export const api = {
   recordPerformanceWidget: (payload: { name: string; duration_ms: number; status?: string; source?: string; detail?: string }) =>
     postJson<any>("/performance/frontend-widget", payload),
   systemStatus: () => getJson<SystemStatus>("/system/status"),
-  brainRuntimeState: () => getJson<any>("/brain/runtime-state"),
-  brainCommandSummary: () => getJson<any>("/brain/command-summary"),
-  brainCapabilities: () => getJson<any>("/brain/capabilities"),
-  brainEvolution: () => getJson<any>("/brain/evolution"),
-  traderBrain: () => getJson<any>("/api/trader-brain/brain"),
-  traderTrainingGround: () => getJson<any>("/api/trader-brain/training-ground"),
-  traderPaperTrading: (limit = 20) => getJson<any>(`/api/trader-brain/paper-trading?limit=${limit}`),
-  traderAlpha: () => getJson<any>("/api/trader-brain/alpha"),
-  snapshotsHealth: () => getJson<any>("/snapshots/health"),
-  produceSnapshots: (snapshotType?: string, maxItems = 8) =>
-    postJson<any>(`/snapshots/produce?max_items=${maxItems}${snapshotType ? `&snapshot_type=${encodeURIComponent(snapshotType)}` : ""}`, {}),
-  learningHealth: () => getJson<any>("/learning/health"),
   brainStatus: () => getJson<BrainStatus>("/brain/status"),
   brainAccuracy: () => getJson<BrainAccuracy>("/brain/accuracy"),
   brainLearningEvents: (limit = 50) => getJson<any[]>(`/brain/learning-events?limit=${limit}`),
@@ -246,18 +170,6 @@ export const api = {
   sniperMetrics: () => getJson<any>("/api/sniper/metrics"),
   sniperLessons: (limit = 40) => getJson<any[]>(`/api/sniper/lessons?limit=${limit}`),
   tradingGameStatus: () => getJson<any>("/api/trading-game/status"),
-  tradingGameReadiness: () => getJson<any>("/api/trading-game/readiness"),
-  copyTradingStatus: () => getJson<any>("/api/copy-trading/status"),
-  copyTradingCandidates: (limit = 25) => getJson<any>(`/api/copy-trading/candidates?limit=${limit}`),
-  copyTradingDashboard: (limit = 25) => getJson<any>(`/api/copy-trading/dashboard?limit=${limit}`),
-  alphaReadiness: () => getJson<any>("/api/alpha/readiness"),
-  alphaEdgeMap: (limit = 12) => getJson<any>(`/api/alpha/edge-map?limit=${limit}`),
-  alphaGates: () => getJson<any>("/api/alpha/gates"),
-  paperCopySummary: (limit = 12) => getJson<any>(`/api/paper-copy/summary?limit=${limit}`),
-  paperCopyReadiness: () => getJson<any>("/api/paper-copy/readiness"),
-  paperCopyStrategies: (limit = 40) => getJson<any>(`/api/paper-copy/strategies?limit=${limit}`),
-  paperCopyPositions: (limit = 80) => getJson<any>(`/api/paper-copy/positions?limit=${limit}`),
-  paperCopyPortfolio: (portfolioId: string) => getJson<any>(`/api/paper-copy/portfolio/${encodeURIComponent(portfolioId)}`),
   tradingGameRun: (batchSize = 60) => postJson<any>(`/api/trading-game/run?batch_size=${batchSize}`, {}),
   tradingGameReset: () => postJson<any>("/api/trading-game/reset", {}),
   tradingGameEquity: (limit = 500, gameId?: number) => getJson<any[]>(`/api/trading-game/equity?limit=${limit}${gameId ? `&game_id=${gameId}` : ""}`),
@@ -331,26 +243,6 @@ export const api = {
   portfolioIntelligenceDashboard: () => getJson<any>("/api/portfolio-intelligence/dashboard"),
   portfolioQuality: () => getJson<any>("/api/portfolio-intelligence/quality"),
   recalculatePortfolioIntelligence: () => postJson<any>("/api/portfolio-intelligence/recalculate", {}),
-  capitalAllocationDashboard: () => getJson<any>("/api/capital-allocation/dashboard"),
-  alphaRecoveryDashboard: () => getJson<any>("/api/alpha-recovery/dashboard"),
-  recalculateAlphaRecovery: (benchmarkName?: string) => postJson<any>(`/api/alpha-recovery/recalculate${benchmarkName ? `?benchmark_name=${encodeURIComponent(benchmarkName)}` : ""}`, {}),
-  alphaRecoveryMethodology: (limit = 40) => getJson<any>(`/api/alpha-recovery/methodology?limit=${limit}`),
-  alphaRecoveryAttribution: (limit = 120) => getJson<any>(`/api/alpha-recovery/attribution?limit=${limit}`),
-  alphaRecoveryMissedWinners: (limit = 80) => getJson<any>(`/api/alpha-recovery/missed-winners?limit=${limit}`),
-  alphaRecoveryActions: (limit = 80) => getJson<any>(`/api/alpha-recovery/actions?limit=${limit}`),
-  alphaRecoveryReplayPriorities: (limit = 30) => getJson<any>(`/api/alpha-recovery/replay-priorities?limit=${limit}`),
-  metaCognitionSummary: () => getJson<any>("/api/meta-cognition/summary"),
-  metaCognitionRecalculate: () => postJson<any>("/api/meta-cognition/recalculate", {}),
-  metaFactorImportance: (limit = 120) => getJson<any>(`/api/meta-cognition/factor-importance?limit=${limit}`),
-  recalculateMetaFactorImportance: () => postJson<any>("/api/meta-cognition/factor-importance/recalculate", {}),
-  metaCognitionEvents: (limit = 120) => getJson<any>(`/api/meta-cognition/events?limit=${limit}`),
-  evaluateMetaCognition: () => postJson<any>("/api/meta-cognition/evaluate", {}),
-  metaCapitalPreservation: (limit = 120) => getJson<any>(`/api/meta-cognition/capital-preservation?limit=${limit}`),
-  evaluateMetaCapitalPreservation: () => postJson<any>("/api/meta-cognition/capital-preservation/evaluate", {}),
-  metaLearningFocus: (limit = 80) => getJson<any>(`/api/meta-cognition/learning-focus?limit=${limit}`),
-  generateMetaLearningFocus: () => postJson<any>("/api/meta-cognition/learning-focus/generate", {}),
-  metaReasoningNoise: (limit = 80) => getJson<any>(`/api/meta-cognition/noise?limit=${limit}`),
-  detectMetaReasoningNoise: () => postJson<any>("/api/meta-cognition/noise/detect", {}),
   chartAnalyzeTicker: (ticker: string, timeframe = "6M", period = "1y", includeVisual = false) => getPostChart<ChartReport>(`/chart/analyze-ticker?ticker=${encodeURIComponent(ticker)}&timeframe=${encodeURIComponent(timeframe)}&period=${encodeURIComponent(period)}&include_visual=${includeVisual ? "true" : "false"}`),
   chartTechnicalReport: (ticker: string, timeframe = "6M") => getJson<ChartReport>(`/chart/technical-report/${encodeURIComponent(ticker)}?timeframe=${encodeURIComponent(timeframe)}`),
   chartLevels: (ticker: string, timeframe = "6M") => getJson<any>(`/chart/levels/${encodeURIComponent(ticker)}?timeframe=${encodeURIComponent(timeframe)}`),

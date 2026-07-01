@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     app_name: str = "Blum AI Financial Intelligence"
-    app_version: str = "2.1.0"
+    app_version: str = "0.20.0"
     environment: str = Field(default="demo", alias="ENVIRONMENT")
     database_url: str = Field(
         default="postgresql+psycopg2://postgres:postgres@127.0.0.1:5432/blum",
@@ -31,9 +31,6 @@ class Settings(BaseSettings):
     max_update_assets: int = Field(default=160, alias="BLUM_MAX_UPDATE_ASSETS")
     enable_live_startup: bool = Field(default=True, alias="BLUM_ENABLE_LIVE_STARTUP")
     enable_autonomous_engine: bool = Field(default=True, alias="BLUM_ENABLE_AUTONOMOUS_ENGINE")
-    startup_run_full_autonomous: bool = Field(default=False, alias="BLUM_STARTUP_RUN_FULL_AUTONOMOUS")
-    blum_autonomous_max_seconds_per_job: int = Field(default=120, alias="BLUM_AUTONOMOUS_MAX_SECONDS_PER_JOB")
-    blum_autonomous_max_items_per_job: int = Field(default=50, alias="BLUM_AUTONOMOUS_MAX_ITEMS_PER_JOB")
     autonomous_cycle_minutes: int = Field(default=20, alias="BLUM_AUTONOMOUS_CYCLE_MINUTES")
     autonomous_repair_limit: int = Field(default=80, alias="BLUM_AUTONOMOUS_REPAIR_LIMIT")
     seed_historical_prices_on_startup: bool = Field(default=True, alias="BLUM_SEED_HISTORICAL_PRICES_ON_STARTUP")
@@ -52,13 +49,6 @@ class Settings(BaseSettings):
     learning_min_history_years: int = Field(default=3, alias="LEARNING_MIN_HISTORY_YEARS")
     learning_asset_universe: str = Field(default="stocks,etfs", alias="LEARNING_ASSET_UNIVERSE")
     learning_evaluation_mode: str = Field(default="walk_forward", alias="LEARNING_EVALUATION_MODE")
-    learning_random_sample_ratio: float = Field(default=0.40, alias="LEARNING_RANDOM_SAMPLE_RATIO")
-    learning_alpha_loss_sample_ratio: float = Field(default=0.30, alias="LEARNING_ALPHA_LOSS_SAMPLE_RATIO")
-    learning_factor_focus_sample_ratio: float = Field(default=0.20, alias="LEARNING_FACTOR_FOCUS_SAMPLE_RATIO")
-    learning_capital_preservation_sample_ratio: float = Field(default=0.10, alias="LEARNING_CAPITAL_PRESERVATION_SAMPLE_RATIO")
-    professional_learning_enabled: bool = Field(default=True, alias="BLUM_PROFESSIONAL_LEARNING_ENABLED")
-    professional_learning_minutes: int = Field(default=30, alias="BLUM_PROFESSIONAL_LEARNING_MINUTES")
-    professional_learning_batch_size: int = Field(default=20, alias="BLUM_PROFESSIONAL_LEARNING_BATCH_SIZE")
     blum_model_cycle_minutes: int = Field(default=5, alias="BLUM_MODEL_CYCLE_MINUTES")
     blum_model_cycle_limit: int = Field(default=160, alias="BLUM_MODEL_CYCLE_LIMIT")
     fundamentals_refresh_minutes: int = Field(default=720, alias="BLUM_FUNDAMENTALS_REFRESH_MINUTES")
@@ -72,7 +62,6 @@ class Settings(BaseSettings):
     refresh_price_period: str = Field(default="6mo", alias="BLUM_REFRESH_PRICE_PERIOD")
     sec_user_agent: str = Field(default="Blum-AI-Financial-Intelligence research demo", alias="BLUM_SEC_USER_AGENT")
     blum_model_repository: str = Field(default="Italianhype/Blum", alias="BLUM_MODEL_REPOSITORY")
-    blum_analyst_repository: str = Field(default="Italianhype/Blum-Analyst", alias="BLUM_ANALYST_REPOSITORY")
     training_export_dir: str = Field(default="/tmp/blum_training_exports", alias="BLUM_TRAINING_EXPORT_DIR")
     enable_hf_dataset_catalog: bool = Field(default=True, alias="BLUM_ENABLE_HF_DATASET_CATALOG")
     hf_dataset_refresh_hours: int = Field(default=24, alias="BLUM_HF_DATASET_REFRESH_HOURS")

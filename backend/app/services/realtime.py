@@ -25,6 +25,7 @@ from app.services.market_data import MarketDataService
 from app.services.performance import performance_recorder
 from app.services.pipeline import PipelineService
 from app.services.trading_game import TradingGameSimulator
+from app.services.trading_intelligence_lab import LiveForwardPaperTradingService
 from app.services.worker_runtime import runtime_worker_coordinator
 from app.signals.engine import SignalEngine
 
@@ -68,6 +69,8 @@ def start_realtime_services() -> None:
         _add_interval_job(run_autonomous_engine_job, minutes=settings.autonomous_cycle_minutes, job_id="autonomous_research_engine", delay_seconds=180, jitter_seconds=45)
     _add_interval_job(run_news_refresh, minutes=settings.news_refresh_minutes, job_id="news_refresh", delay_seconds=240, jitter_seconds=30)
     _add_interval_job(run_market_refresh, minutes=settings.market_refresh_minutes, job_id="market_refresh", delay_seconds=360, jitter_seconds=45)
+    if settings.live_trading_game_enabled:
+        _add_interval_job(run_live_forward_paper_trading_job, minutes=settings.market_refresh_minutes, job_id="live_forward_paper_trading", delay_seconds=390, jitter_seconds=45)
     _add_interval_job(run_data_gap_repair, minutes=settings.data_gap_repair_minutes, job_id="data_gap_repair", delay_seconds=480, jitter_seconds=45)
     _add_interval_job(run_accuracy_audit_job, minutes=settings.accuracy_audit_minutes, job_id="accuracy_audit", delay_seconds=600, jitter_seconds=45)
     _add_interval_job(run_macro_refresh, minutes=settings.macro_refresh_minutes, job_id="macro_refresh", delay_seconds=720, jitter_seconds=45)
@@ -255,6 +258,10 @@ def run_blum_learning_loop_job() -> None:
 
 def run_trading_game_job() -> None:
     _run_job("blum_trading_game", lambda db: TradingGameSimulator().run(db, batch_size=settings.trading_game_batch_size))
+
+
+def run_live_forward_paper_trading_job() -> None:
+    _run_job("live_forward_paper_trading", lambda db: LiveForwardPaperTradingService().run_cycle(db))
 
 
 def run_professional_learning_cycle_job() -> None:

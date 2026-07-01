@@ -96,7 +96,7 @@ def model_status(db: Session) -> dict:
     }
 
 
-def run_model_learning_cycle(db: Session, limit: int = 120, backup: bool = True) -> dict:
+def run_model_learning_cycle(db: Session, limit: int = 120) -> dict:
     signals = db.scalars(select(SignalSnapshot).order_by(desc(SignalSnapshot.created_at)).limit(limit)).all()
     skipped = 0
     before_count = count(db, BlumKnowledgeRecord.id)
@@ -127,11 +127,7 @@ def run_model_learning_cycle(db: Session, limit: int = 120, backup: bool = True)
     )
     db.add(event)
     db.commit()
-    backup_result = (
-        backup_embedded_postgres_if_configured(reason="blum_model_autonomous_cycle")
-        if backup
-        else {"status": "skipped", "reason": "frequent professional learning cycles do not run full embedded database backups"}
-    )
+    backup_result = backup_embedded_postgres_if_configured(reason="blum_model_autonomous_cycle")
     return {
         "status": "ok",
         "signals_seen": len(signals),

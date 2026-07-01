@@ -35,11 +35,9 @@ def test_performance_recorder_builds_diagnostics():
 def test_performance_recorder_exposes_learning_page_load_diagnostics():
     recorder = PerformanceRecorder()
     now = datetime.utcnow()
-    learning_meta = {"source": "fetchBlum", "route": "/learning", "initial_learning_window": True}
-    recorder.record_frontend_widget("frontend.api.GET./api/learning-intelligence/summary", 120.0, {"status": "ok", **learning_meta})
-    recorder.record_frontend_widget("frontend.api.GET./api/trading-game/status", 0.4, {"status": "cache_hit", **learning_meta})
-    recorder.record_frontend_widget("frontend.api.GET./api/trading-game/status", 0.2, {"status": "deduped", **learning_meta})
-    recorder.record_frontend_widget("frontend.api.GET./dashboard/overview", 800.0, {"status": "ok", "source": "fetchBlum", "route": "/", "initial_learning_window": False})
+    recorder.record_frontend_widget("frontend.api.GET./api/learning-intelligence/summary", 120.0, {"status": "ok", "source": "fetchBlum"})
+    recorder.record_frontend_widget("frontend.api.GET./api/trading-game/status", 0.4, {"status": "cache_hit", "source": "fetchBlum"})
+    recorder.record_frontend_widget("frontend.api.GET./api/trading-game/status", 0.2, {"status": "deduped", "source": "fetchBlum"})
     recorder.record_dashboard_widget(
         "performance.heavy_recalculation_triggered_during_page_load",
         3400.0,
@@ -51,7 +49,6 @@ def test_performance_recorder_exposes_learning_page_load_diagnostics():
     summary = payload["initial_learning_page_load"]
 
     assert summary["frontend_request_count"] == 3
-    assert summary["unscoped_frontend_request_count"] == 4
     assert summary["cache_hit_count"] == 1
     assert summary["duplicate_request_count"] == 1
     assert summary["heavy_post_calls_during_page_load"][0]["path"] == "/api/business-quality/recalculate"

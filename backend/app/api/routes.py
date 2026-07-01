@@ -1303,6 +1303,40 @@ def live_trading_game_compare_historical(db: Session = Depends(get_db)) -> dict:
     return LiveForwardPaperTradingService().compare_historical(db)
 
 
+@router.get("/api/paper-forward/status")
+def paper_forward_status(db: Session = Depends(get_db)) -> dict:
+    return LiveForwardPaperTradingService().status_readonly(db)
+
+
+@router.get("/api/paper-forward/snapshot")
+def paper_forward_snapshot(db: Session = Depends(get_db)) -> dict:
+    return LiveForwardPaperTradingService().snapshot(db)
+
+
+@router.get("/api/paper-forward/trades")
+def paper_forward_trades(
+    limit: int = Query(default=50, ge=1, le=200),
+    status: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> dict:
+    return LiveForwardPaperTradingService().paper_trades(db, limit=limit, status=status)
+
+
+@router.get("/api/paper-forward/trades/{trade_id}")
+def paper_forward_trade_detail(trade_id: int, db: Session = Depends(get_db)) -> dict:
+    return LiveForwardPaperTradingService().trade_detail(db, trade_id)
+
+
+@router.get("/api/paper-forward/events/{trade_id}")
+def paper_forward_trade_events(trade_id: int, db: Session = Depends(get_db)) -> dict:
+    return LiveForwardPaperTradingService().events(db, trade_id)
+
+
+@router.post("/api/paper-forward/run")
+def paper_forward_run(db: Session = Depends(get_db)) -> dict:
+    return LiveForwardPaperTradingService().run_cycle(db)
+
+
 @router.get("/api/learning-intelligence/dashboard")
 def learning_intelligence_dashboard(db: Session = Depends(get_db)) -> dict:
     return LearningIntelligenceDashboardService().dashboard(db)
