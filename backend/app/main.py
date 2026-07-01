@@ -9,7 +9,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api.routes import router
+from app.api.routers import (
+    alpha_router,
+    analyst_router,
+    brain_router,
+    legacy_router,
+    paper_trading_router,
+    runtime_router,
+    training_router,
+)
 from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.services.bootstrap import bootstrap_database
@@ -38,7 +46,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(router)
+app.include_router(brain_router)
+app.include_router(training_router)
+app.include_router(paper_trading_router)
+app.include_router(alpha_router)
+app.include_router(runtime_router)
+app.include_router(analyst_router)
+app.include_router(legacy_router)
 
 
 @app.middleware("http")
@@ -66,6 +80,13 @@ async def performance_timing_middleware(request: Request, call_next):
                 "performance.heavy_recalculation_triggered_during_page_load",
                 duration_ms,
                 {"method": request.method, "path": request.url.path, "referer": request.headers.get("referer", "")[:180]},
+            )
+        if request.method.upper() == "GET" and "persist=true" in request.url.query.lower():
+            response.headers["X-BLUM-GET-SIDE-EFFECT-RISK"] = "true"
+            performance_recorder.record_dashboard_widget(
+                "performance.GET_ENDPOINT_SIDE_EFFECT_DETECTED",
+                duration_ms,
+                {"method": request.method, "path": request.url.path, "query": request.url.query[:180]},
             )
         return response
     finally:
@@ -106,6 +127,13 @@ def is_heavy_recalculation_call(method: str, path: str) -> bool:
         "/business-quality/recalculate",
         "/decision-intelligence/superiority/recalculate",
         "/learning-intelligence/self-improvement/generate",
+        "/api/meta-cognition/recalculate",
+        "/api/meta-cognition/factor-importance/recalculate",
+        "/api/meta-cognition/evaluate",
+        "/api/meta-cognition/capital-preservation/evaluate",
+        "/api/meta-cognition/learning-focus/generate",
+        "/api/meta-cognition/noise/detect",
+        "/snapshots/produce",
     )
     return any(fragment in path for fragment in heavy_fragments)
 

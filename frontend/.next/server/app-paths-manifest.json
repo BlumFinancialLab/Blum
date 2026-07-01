@@ -1,0 +1,21 @@
+{
+  "/_not-found/page": "app/_not-found/page.js",
+  "/backtest/page": "app/backtest/page.js",
+  "/chart-analyst/page": "app/chart-analyst/page.js",
+  "/chat/page": "app/chat/page.js",
+  "/chatbot/page": "app/chatbot/page.js",
+  "/learning/page": "app/learning/page.js",
+  "/methodology/page": "app/methodology/page.js",
+  "/ipo-radar/page": "app/ipo-radar/page.js",
+  "/market-brain/page": "app/market-brain/page.js",
+  "/narratives/page": "app/narratives/page.js",
+  "/page": "app/page.js",
+  "/etf-radar/page": "app/etf-radar/page.js",
+  "/performance/page": "app/performance/page.js",
+  "/signal-lab/page": "app/signal-lab/page.js",
+  "/sniper/page": "app/sniper/page.js",
+  "/stock-radar/page": "app/stock-radar/page.js",
+  "/themes/page": "app/themes/page.js",
+  "/dashboard/page": "app/dashboard/page.js",
+  "/assets/[ticker]/page": "app/assets/[ticker]/page.js"
+}

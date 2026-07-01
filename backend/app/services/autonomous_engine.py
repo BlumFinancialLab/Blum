@@ -34,6 +34,7 @@ from app.services.macro import update_macro_snapshots
 from app.services.market_data import MarketDataService
 from app.services.market_sniper import MarketSniperEngine
 from app.services.persistence import backup_embedded_postgres_if_configured
+from app.services.research_planner import AutonomousResearchPlanner
 from app.services.trading_game import TradingGameSimulator
 from app.signals.engine import SignalEngine
 
@@ -85,6 +86,7 @@ class AutonomousResearchEngine:
         stage("etf_intelligence", lambda: update_etf_trends(db))
         stage("ipo_radar", lambda: update_ipo_radar(db, limit_per_form=55))
         stage("accuracy_audit", lambda: run_accuracy_audit(db, limit=settings.max_update_assets))
+        stage("research_planner", lambda: AutonomousResearchPlanner().generate(db, persist=True))
         if settings.enable_learning_loop:
             stage("blum_financial_model", lambda: run_model_learning_cycle(db, limit=settings.blum_model_cycle_limit))
             stage("blum_learning_loop", lambda: LearningLoopService().run_batch(db, batch_size=settings.learning_batch_size, trigger="autonomous_engine"))

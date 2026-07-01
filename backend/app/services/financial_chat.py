@@ -33,6 +33,8 @@ from app.services.fundamentals import fundamentals_for_asset
 from app.services.live import market_sentiment
 from app.services.learning_loop import LearningDashboardService
 from app.services.learning_intelligence import LearningIntelligenceDashboardService
+from app.services.alpha_recovery import AlphaRecoveryDashboardService
+from app.services.meta_cognition import MetaCognitionEngine
 from app.services.capital_allocation import AdaptiveCapitalAllocationEngine
 from app.services.decision_intelligence import DecisionIntelligenceDashboardService
 from app.services.market_data import market_snapshot_for_asset
@@ -487,6 +489,8 @@ def trading_game_context_for_chat(db: Session) -> dict:
             "learning_intelligence": LearningIntelligenceDashboardService().dashboard(db),
             "decision_intelligence": DecisionIntelligenceDashboardService().dashboard(db),
             "capital_allocation": AdaptiveCapitalAllocationEngine().dashboard(db),
+            "alpha_recovery": AlphaRecoveryDashboardService().dashboard(db),
+            "meta_cognition": MetaCognitionEngine().summary(db),
             "pnl_breakdown": PnLBreakdownService().game_breakdown(db),
             "reality_check": TradingGameRealityCheckService().evaluate(db),
             "failures": engine.failures(db, limit=12),
@@ -1477,6 +1481,8 @@ def build_trading_game_response(language: str, context: dict) -> dict:
     learning_intelligence = context.get("learning_intelligence") or {}
     decision_intelligence = context.get("decision_intelligence") or {}
     capital_allocation = context.get("capital_allocation") or {}
+    alpha_recovery = context.get("alpha_recovery") or {}
+    meta_cognition = context.get("meta_cognition") or {}
     if not game:
         message = "BLUM non ha ancora un Trading Game persistito. Serve almeno un ciclo Sniper/Learning Loop per creare simulazioni P/L reali." if language == "it" else "BLUM does not have a persisted Trading Game yet. It needs at least one Sniper/Learning Loop cycle to create real P/L simulations."
         return build_error_response(language, message, [])
@@ -1505,6 +1511,8 @@ def build_trading_game_response(language: str, context: dict) -> dict:
             {"key": "learning_intelligence", "title": "Learning Intelligence", "bullets": learning_intelligence_lines(learning_intelligence, language)},
             {"key": "decision_intelligence", "title": "Decision Intelligence", "bullets": decision_intelligence_lines(decision_intelligence, language)},
             {"key": "capital_allocation", "title": "Capital Allocation Intelligence", "bullets": capital_allocation_lines(capital_allocation, language)},
+            {"key": "alpha_recovery", "title": "Alpha Recovery", "bullets": alpha_recovery_lines(alpha_recovery, language)},
+            {"key": "meta_cognition", "title": "Meta-Cognition", "bullets": meta_cognition_lines(meta_cognition, language)},
             {"key": "trade_ledger", "title": "Trade ledger", "bullets": trade_ledger_lines(ledger_rows, language)},
             {"key": "intelligence_metrics", "title": "Trading intelligence", "bullets": intelligence_metric_lines(intelligence_metrics, rolling_metrics, metrics_by_setup, language)},
             {"key": "live_forward", "title": "Storico vs live paper", "bullets": historical_live_lines(live_forward, historical_vs_live, language)},
@@ -1545,6 +1553,8 @@ def build_trading_game_response(language: str, context: dict) -> dict:
             {"key": "learning_intelligence", "title": "Learning Intelligence", "bullets": learning_intelligence_lines(learning_intelligence, language)},
             {"key": "decision_intelligence", "title": "Decision Intelligence", "bullets": decision_intelligence_lines(decision_intelligence, language)},
             {"key": "capital_allocation", "title": "Capital Allocation Intelligence", "bullets": capital_allocation_lines(capital_allocation, language)},
+            {"key": "alpha_recovery", "title": "Alpha Recovery", "bullets": alpha_recovery_lines(alpha_recovery, language)},
+            {"key": "meta_cognition", "title": "Meta-Cognition", "bullets": meta_cognition_lines(meta_cognition, language)},
             {"key": "trade_ledger", "title": "Trade Ledger", "bullets": trade_ledger_lines(ledger_rows, language)},
             {"key": "intelligence_metrics", "title": "Trading Intelligence", "bullets": intelligence_metric_lines(intelligence_metrics, rolling_metrics, metrics_by_setup, language)},
             {"key": "live_forward", "title": "Historical vs Live Paper", "bullets": historical_live_lines(live_forward, historical_vs_live, language)},
@@ -1574,7 +1584,7 @@ def build_trading_game_response(language: str, context: dict) -> dict:
         "executive_view": summary,
         "risk_reward_view": f"Expectancy {format_number(game.get('expectancy_r'))}R, drawdown {format_signed(game.get('max_drawdown'))}%.",
         "data_quality": {"sample_warning": sample_warning, "trades": game.get("trade_count"), "reproducibility": reproducibility, "cycles": cycle_stats, "live_sample_warning": (historical_vs_live.get("sample_warning") if isinstance(historical_vs_live, dict) else None)},
-        "learning_loop_memory": {"trading_game": game, "lessons": lessons[:6], "latest_trades": trades[:6], "ledger": ledger_rows[:8], "reality_check": reality_check, "cycles": cycle_stats, "intelligence_metrics": intelligence_metrics, "historical_vs_live": historical_vs_live, "learning_intelligence": learning_intelligence, "decision_intelligence": decision_intelligence, "capital_allocation": capital_allocation},
+        "learning_loop_memory": {"trading_game": game, "lessons": lessons[:6], "latest_trades": trades[:6], "ledger": ledger_rows[:8], "reality_check": reality_check, "cycles": cycle_stats, "intelligence_metrics": intelligence_metrics, "historical_vs_live": historical_vs_live, "learning_intelligence": learning_intelligence, "decision_intelligence": decision_intelligence, "capital_allocation": capital_allocation, "alpha_recovery": alpha_recovery, "meta_cognition": meta_cognition},
         "answer_to_user": summary,
     }
 
@@ -1689,6 +1699,100 @@ def capital_allocation_lines(payload: dict, language: str) -> list[str]:
     if plan.get("warnings"):
         lines.extend(str(item) for item in plan.get("warnings", [])[:2])
     return dedupe_warnings(lines)
+
+
+def alpha_recovery_lines(payload: dict, language: str) -> list[str]:
+    if not payload or payload.get("status") == "unavailable":
+        return ["Alpha Recovery non disponibile: non invento perche BLUM perde o vince alpha." if language == "it" else "Alpha Recovery is unavailable; I will not invent why BLUM won or lost alpha."]
+    truth = (payload.get("truth_layer") or {}).get("lines") or []
+    attribution = payload.get("latest_attribution") or {}
+    attribution_summary = attribution.get("summary") or {}
+    top_category = attribution_summary.get("top_category")
+    missed = ((payload.get("missed_winners") or {}).get("rows") or [])[:3]
+    actions = ((payload.get("recovery_actions") or {}).get("rows") or [])[:3]
+    methodology_rows = ((payload.get("latest_methodology") or {}).get("rows") or [])[:3]
+    invalid = [row for row in methodology_rows if not row.get("methodology_valid")]
+    if language == "it":
+        lines = list(truth[:3]) or ["Evidenza insufficiente: servono benchmark validati e trade ledger prima di attribuire perdita alpha."]
+        if invalid:
+            lines.append("Alcuni benchmark non sono validi per apprendimento: BLUM blocca conclusioni di recovery su quei confronti.")
+        if top_category:
+            lines.append(f"Causa misurata principale: {str(top_category).replace('_', ' ')}.")
+        if missed:
+            lines.append("Missed winners da replay: " + ", ".join(f"{row.get('ticker')} ({format_signed(row.get('benchmark_relative_return'))}%)" for row in missed))
+        if actions:
+            lines.append(f"Azione recovery proposta: {actions[0].get('recommended_action')} | stato {actions[0].get('status')}.")
+        return dedupe_warnings(lines)
+    lines = list(truth[:3]) or ["Insufficient evidence: validated benchmarks and trade ledger data are required before attributing alpha loss."]
+    if invalid:
+        lines.append("Some benchmarks are not valid for learning; BLUM blocks recovery conclusions on those comparisons.")
+    if top_category:
+        lines.append(f"Main measured cause: {str(top_category).replace('_', ' ')}.")
+    if missed:
+        lines.append("Missed winners for replay: " + ", ".join(f"{row.get('ticker')} ({format_signed(row.get('benchmark_relative_return'))}%)" for row in missed))
+    if actions:
+        lines.append(f"Recovery action proposed: {actions[0].get('recommended_action')} | status {actions[0].get('status')}.")
+    return dedupe_warnings(lines)
+
+
+def meta_cognition_lines(payload: dict, language: str) -> list[str]:
+    if not payload or payload.get("status") == "unavailable":
+        return ["Meta-Cognition non disponibile: non invento quali fattori creano o distruggono alpha." if language == "it" else "Meta-Cognition is unavailable; I will not invent which factors create or destroy alpha."]
+    snapshot_payload = ((payload.get("snapshot") or {}).get("payload") or {}) if isinstance(payload.get("snapshot"), dict) else {}
+    factor_summary = ((payload.get("factor_importance") or {}).get("summary") or {})
+    focus_rows = ((payload.get("learning_focus") or {}).get("rows") or [])
+    noise_rows = ((payload.get("noise") or {}).get("rows") or [])
+    preservation_summary = ((payload.get("capital_preservation") or {}).get("summary") or {})
+    events_summary = ((payload.get("events") or {}).get("summary") or {})
+    conclusion = payload.get("conclusion") or snapshot_payload.get("meta_cognition_conclusion") or {}
+
+    top_alpha = snapshot_payload.get("top_alpha_factor") or first_payload(factor_summary.get("top_alpha_creators"))
+    top_destroyer = snapshot_payload.get("top_alpha_destroyer") or first_payload(factor_summary.get("top_alpha_destroyers"))
+    noisiest = snapshot_payload.get("noisiest_factor") or first_payload(factor_summary.get("noisiest_factors")) or first_payload(noise_rows)
+    focus = snapshot_payload.get("next_learning_focus") or first_payload(focus_rows)
+    preservation = snapshot_payload.get("strongest_capital_preservation_rule") or first_payload(preservation_summary.get("top_preservers"))
+
+    if language == "it":
+        lines = []
+        if top_alpha:
+            lines.append(f"Fattore che sta creando piu alpha misurabile: {top_alpha.get('factor_name', 'n/a')} | contributo {format_number(top_alpha.get('alpha_contribution'))} | campione {top_alpha.get('sample_size', 'n/a')}.")
+        if top_destroyer:
+            lines.append(f"Fattore che sta distruggendo piu alpha: {top_destroyer.get('factor_name', 'n/a')} | perdita {format_number(top_destroyer.get('alpha_loss_contribution'))} | azione {top_destroyer.get('recommended_weight_action', 'n/a')}.")
+        if noisiest:
+            lines.append(f"Fattore/modulo piu rumoroso: {noisiest.get('factor_name') or noisiest.get('module_name', 'n/a')} | noise {format_number(noisiest.get('noise_score'))}/100 | severita {noisiest.get('severity', 'n/a')}.")
+        if preservation:
+            lines.append(f"Regola no-trade piu utile: {preservation.get('ticker', preservation.get('factor_name', 'n/a'))} | capitale preservato {format_money(preservation.get('capital_preserved'))} | quality {format_number(preservation.get('quality_score'))}/100.")
+        if focus:
+            lines.append(f"Prossimo focus Learning Loop: {focus.get('priority_type', 'focus')} su {focus.get('target', 'n/a')} | valore atteso {format_number(focus.get('expected_learning_value'))}/100.")
+        if conclusion.get("summary"):
+            lines.append(str(conclusion.get("summary")))
+        if events_summary.get("events"):
+            lines.append(f"Azioni di learning valutate: {events_summary.get('events')} | miglioramenti {events_summary.get('improvements', 0)} | peggioramenti {events_summary.get('degradations', 0)}.")
+        return dedupe_warnings(lines or ["Evidenza meta-cognitiva insufficiente: serve ledger, benchmark validi e piu campioni prima di attribuire alpha ai fattori."])
+
+    lines = []
+    if top_alpha:
+        lines.append(f"Top measured alpha-creating factor: {top_alpha.get('factor_name', 'n/a')} | contribution {format_number(top_alpha.get('alpha_contribution'))} | sample {top_alpha.get('sample_size', 'n/a')}.")
+    if top_destroyer:
+        lines.append(f"Top measured alpha-destroying factor: {top_destroyer.get('factor_name', 'n/a')} | loss {format_number(top_destroyer.get('alpha_loss_contribution'))} | action {top_destroyer.get('recommended_weight_action', 'n/a')}.")
+    if noisiest:
+        lines.append(f"Noisiest factor/module: {noisiest.get('factor_name') or noisiest.get('module_name', 'n/a')} | noise {format_number(noisiest.get('noise_score'))}/100 | severity {noisiest.get('severity', 'n/a')}.")
+    if preservation:
+        lines.append(f"Strongest no-trade preservation rule: {preservation.get('ticker', preservation.get('factor_name', 'n/a'))} | preserved {format_money(preservation.get('capital_preserved'))} | quality {format_number(preservation.get('quality_score'))}/100.")
+    if focus:
+        lines.append(f"Next Learning Loop focus: {focus.get('priority_type', 'focus')} on {focus.get('target', 'n/a')} | expected value {format_number(focus.get('expected_learning_value'))}/100.")
+    if conclusion.get("summary"):
+        lines.append(str(conclusion.get("summary")))
+    if events_summary.get("events"):
+        lines.append(f"Learning actions evaluated: {events_summary.get('events')} | improvements {events_summary.get('improvements', 0)} | degradations {events_summary.get('degradations', 0)}.")
+    return dedupe_warnings(lines or ["Insufficient meta-cognition evidence: BLUM needs a ledger, valid benchmarks and more samples before attributing alpha to factors."])
+
+
+def first_payload(value: object) -> dict:
+    if isinstance(value, list) and value:
+        first = value[0]
+        return first if isinstance(first, dict) else {}
+    return value if isinstance(value, dict) else {}
 
 
 def trade_ledger_lines(rows: list[dict], language: str) -> list[str]:
@@ -2484,7 +2588,7 @@ def infer_intent(message: str, mode: str | None = None) -> str:
         return "fundamental_analysis"
     if any(term in normalized for term in ["tesi", "thesis", "convinzione", "conviction", "ancora valida", "still valid", "sopravviss", "survival", "decay", "decad", "bull bear neutral", "tesi bull", "tesi bear", "tesi neutral", "motore", "engine vote", "sta migliorando", "dove ha sbagliato", "reasoning core", "batte spy", "batte qqq", "vs spy", "vs qqq"]):
         return "reasoning_memory_question"
-    if any(term in normalized for term in ["capitale virtuale", "trading game", "sta battendo", "batte il mercato", "benchmark", "drawdown", "profit factor", "expectancy", "p/l", "pl ", "peggior errore", "andato a zero", "rischio per trade", "riproducibil", "reproducib", "win rate", "quali trade", "trade hanno", "dove e entrato", "dove e uscito", "entrato blum", "uscito blum", "per azione", "fortuna", "profitto arriva", "ledger", "trade piu importante", "100 eur", "10,000", "10000", "target cycle", "ciclo capitale", "cicli capitale", "quante volte", "live paper", "forward paper", "storico vs live", "historical vs live", "sta migliorando", "intelligence growth", "missed entry", "stop hit", "target hit", "trading power", "power score", "dove e scarso", "piu scarso", "weakness", "self improvement", "auto miglior", "prossima azione", "baseline semplice", "stiamo battendo spy", "stiamo battendo qqq", "best opportunity", "migliore opportunita", "opportunita migliore", "ha scelto il migliore", "decision superiority", "superiorita decisionale", "alpha capture", "opportunita mancata", "missed opportunity", "business quality", "qualita business", "moat", "management quality", "portfolio quality", "qualita portafoglio", "contribuisce piu alpha", "contribution", "concentrazione portfolio", "capital allocation", "cash allocation", "cash reserve", "quanto capitale", "quanto allocare", "peso capitale", "sizing logic", "logica di sizing"]):
+    if any(term in normalized for term in ["capitale virtuale", "trading game", "sta battendo", "batte il mercato", "benchmark", "drawdown", "profit factor", "expectancy", "p/l", "pl ", "peggior errore", "andato a zero", "rischio per trade", "riproducibil", "reproducib", "win rate", "quali trade", "trade hanno", "dove e entrato", "dove e uscito", "entrato blum", "uscito blum", "per azione", "fortuna", "profitto arriva", "ledger", "trade piu importante", "100 eur", "10,000", "10000", "target cycle", "ciclo capitale", "cicli capitale", "quante volte", "live paper", "forward paper", "storico vs live", "historical vs live", "sta migliorando", "intelligence growth", "missed entry", "stop hit", "target hit", "trading power", "power score", "dove e scarso", "piu scarso", "weakness", "self improvement", "auto miglior", "prossima azione", "baseline semplice", "stiamo battendo spy", "stiamo battendo qqq", "best opportunity", "migliore opportunita", "opportunita migliore", "ha scelto il migliore", "decision superiority", "superiorita decisionale", "alpha capture", "opportunita mancata", "missed opportunity", "business quality", "qualita business", "moat", "management quality", "portfolio quality", "qualita portafoglio", "contribuisce piu alpha", "contribution", "concentrazione portfolio", "capital allocation", "cash allocation", "cash reserve", "quanto capitale", "quanto allocare", "peso capitale", "sizing logic", "logica di sizing", "alpha loss", "alpha recovery", "perche perdiamo", "perché perdiamo", "perdiamo contro", "why are we losing", "why losing", "qqq", "spy", "missed winners", "winners mancati", "opportunita mancate", "opportunità mancate", "recovery action", "azioni recovery", "perdita alpha", "alpha perso", "lose alpha", "meta cognition", "meta-cognition", "meta cognizione", "meta-cognizione", "fattore alpha", "factor alpha", "quale fattore", "which factor", "fattore rumoroso", "noisy factor", "modulo rumoroso", "cosa deve imparare", "what should blum learn", "imparare adesso", "learn next", "trust technical", "fidarsi dei tecnici", "capital preservation", "preservazione capitale", "no-trade rule", "regola no trade"]):
         return "trading_game"
     if any(term in normalized for term in ["sniper", "entrabile", "meglio aspettare", "ingresso", "entry", "risk/reward", "uscita", "exit", "target", "invalidazione", "invalidation", "profitto", "take profit"]):
         return "market_sniper"

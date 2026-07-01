@@ -17,11 +17,15 @@ from app.core.config import get_settings
 from app.models import (
     Asset,
     FundamentalSnapshot,
+    FeedbackLoopAudit,
     HistoricalPrediction,
+    CapitalPreservationAlpha,
+    LearningFocusPriority,
     LearningEvent,
     LearningMetric,
     LearningRun,
     MacroSnapshot,
+    MissedWinner,
     MistakeAnalysis,
     ModelVersion,
     NewsArticle,
@@ -30,6 +34,7 @@ from app.models import (
     PriceHistory,
     SignalPerformance,
     StrategyMemory,
+    TradingGameTrade,
 )
 from app.services.technical_analysis_engine import TechnicalAnalysisEngine
 
@@ -53,6 +58,10 @@ BASE_SIGNAL_WEIGHTS = {
     "fundamentals": 0.08,
     "regime": 0.05,
 }
+
+MIN_MODEL_VERSION_OUTCOMES = 30
+MIN_MODEL_VERSION_SIGNAL_ROWS = 3
+MIN_MODEL_VERSION_SIGNAL_SAMPLE = 3
 
 ERROR_TYPES = {
     "technical_false_breakout",
@@ -86,10 +95,17 @@ class LearningLoopService:
         self.memory = StrategyMemoryService()
         self.model_scores = ModelScoreService()
 
-    def run_batch(self, db: Session, batch_size: int | None = None, trigger: str = "manual") -> dict:
+    def run_batch(
+        self,
+        db: Session,
+        batch_size: int | None = None,
+        trigger: str = "manual",
+        sniper_simulation_limit: int | None = None,
+    ) -> dict:
         requested_batch = int(batch_size or settings.learning_batch_size)
-        batch = max(1, min(requested_batch, settings.learning_batch_size, 500))
-        daily_guard = self.daily_guard(db, batch)
+        configured_batch = max(1, min(requested_batch, settings.learning_batch_size, 500))
+        daily_guard = self.daily_guard(db, configured_batch)
+        batch = max(1, int(daily_guard.get("effective_batch", configured_batch) or configured_batch))
         run_id = f"learn-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:8]}"
         run = LearningRun(
             run_id=run_id,
@@ -104,26 +120,26 @@ class LearningLoopService:
         db.flush()
 
         if not daily_guard["allowed"]:
-            run.status = "skipped"
+            run.status = "budget_wait"
             run.completed_at = datetime.utcnow()
-            run.summary = {"reason": daily_guard["reason"], "requested_batch_size": requested_batch}
+            run.summary = {"reason": daily_guard["reason"], "requested_batch_size": requested_batch, "daily_guard": daily_guard}
             event = LearningEvent(
-                event_type="blum_learning_loop_skipped",
+                event_type="blum_learning_loop_budget_wait",
                 severity="Warning",
-                title="BLUM Learning Loop skipped by daily guard",
+                title="BLUM Learning Loop waiting for daily budget",
                 description=daily_guard["reason"],
                 payload={"run_id": run_id, "guard": daily_guard},
             )
             db.add(event)
             db.commit()
-            return {"status": "skipped", "run_id": run_id, "guard": daily_guard}
+            return {"status": "budget_wait", "run_id": run_id, "guard": daily_guard}
 
         reports: list[dict] = []
         errors: list[dict] = []
         seen_samples: set[tuple[str, str]] = set()
         for _ in range(batch):
             try:
-                sample = self.sampler.random_sample(db, seen_samples=seen_samples)
+                sample = self.sampler.blended_sample(db, seen_samples=seen_samples, trigger=trigger)
                 if not sample:
                     errors.append({"stage": "sample", "error": "No eligible historical sample found."})
                     continue
@@ -135,9 +151,16 @@ class LearningLoopService:
         sniper_learning = {"status": "skipped", "reason": "No reports created."}
         if reports:
             try:
-                from app.services.market_sniper import MarketSniperEngine
+                limit = sniper_simulation_limit if sniper_simulation_limit is not None else min(300, max(60, len(reports) * len(TIMEFRAMES) * 6))
+                if limit > 0:
+                    from app.services.market_sniper import MarketSniperEngine
 
-                sniper_learning = MarketSniperEngine().simulate(db, limit=min(300, max(60, len(reports) * len(TIMEFRAMES) * 6)))
+                    sniper_learning = MarketSniperEngine().simulate(db, limit=limit)
+                else:
+                    sniper_learning = {
+                        "status": "deferred",
+                        "reason": "Sniper R-multiple simulation is deferred for this bounded learning lane.",
+                    }
             except Exception as exc:
                 sniper_learning = {"status": "degraded", "error": f"{type(exc).__name__}: {exc}"}
 
@@ -156,6 +179,7 @@ class LearningLoopService:
             "latest_reports": reports[-5:],
             "dashboard_metrics": metrics,
             "model_version": model_version,
+            "learning_mode": "alpha_loss_replay" if trigger == "alpha_loss_replay" else "random_point_in_time",
             "market_sniper_learning": sniper_learning,
         }
         run.anti_overfitting_report = anti_overfitting
@@ -174,10 +198,13 @@ class LearningLoopService:
             "status": run.status,
             "run_id": run_id,
             "batch_size": batch,
+            "requested_batch_size": requested_batch,
+            "daily_guard": daily_guard,
             "reports_created": len(reports),
             "errors": errors[:8],
             "metrics": metrics,
             "model_version": model_version,
+            "learning_mode": "alpha_loss_replay" if trigger == "alpha_loss_replay" else "random_point_in_time",
             "market_sniper_learning": sniper_learning,
             "anti_overfitting": anti_overfitting,
             "disclaimer": "Research learning loop only. It improves calibration and robustness; it does not create guaranteed market predictions.",
@@ -187,7 +214,12 @@ class LearningLoopService:
         context = self.point_in_time.context_for(db, sample["asset"], sample["analysis_date"])
         prediction_context = dict(context)
         prediction_context.pop("future_prices", None)
-        prediction_payload = self.predictor.predict(prediction_context)
+        sample_metadata = dict(sample)
+        sample_metadata["run_trigger"] = run.trigger
+        sample_metadata["evaluation_mode"] = run.evaluation_mode
+        sample_metadata["learning_mode_metadata"] = learning_mode_metadata(run.trigger, sample_metadata)
+        prediction_payload = self.predictor.predict(prediction_context, db=db, sample_metadata=sample_metadata)
+        feedback_payload = prediction_payload.get("feedback_loop", {})
         prediction = HistoricalPrediction(
             learning_run_id=run.id,
             asset_id=sample["asset"].id,
@@ -203,7 +235,12 @@ class LearningLoopService:
             point_in_time_context=json_safe(context),
             expected_direction=prediction_payload["prediction"]["dominant_direction"],
             confidence=prediction_payload["prediction"]["aggregate_confidence"],
-            model_version="blum-learning-loop-v1",
+            model_version=feedback_payload.get("model_version_used") or "base-static",
+            model_version_used=feedback_payload.get("model_version_used") or "base-static",
+            weights_used=json_safe(feedback_payload.get("weights_used") or {}),
+            learning_memory_used=json_safe(feedback_payload.get("learning_memory_used") or {}),
+            strategy_memory_used=json_safe(feedback_payload.get("strategy_memory_used") or {}),
+            research_priority_used=json_safe(feedback_payload.get("research_priority_used") or {}),
             data_quality_score=context["data_quality_score"],
         )
         db.add(prediction)
@@ -264,6 +301,7 @@ class LearningLoopService:
             memory_updates.extend(self.memory.update_from_outcome(db, context, frame_prediction, outcome_payload, analysis))
 
         self.memory.update_signal_performance(db, context, prediction_payload, outcomes)
+        feedback_audit = FeedbackLoopAuditService().record(db, prediction, prediction_payload, outcomes, memory_updates)
         report = {
             "asset": prediction.ticker,
             "analysis_date": prediction.analysis_date.isoformat(),
@@ -280,26 +318,127 @@ class LearningLoopService:
             "mistakes": mistakes,
             "lessons_learned": [item["lesson"] for item in memory_updates],
             "memory_updates": memory_updates,
+            "feedback_loop_audit": feedback_audit,
         }
         return json_safe(report)
 
     def daily_guard(self, db: Session, requested_batch: int) -> dict:
         start = datetime.combine(datetime.utcnow().date(), time.min)
         today_predictions = int(db.scalar(select(func.coalesce(func.sum(LearningRun.predictions_created), 0)).where(LearningRun.started_at >= start)) or 0)
-        projected = today_predictions + requested_batch
-        allowed = projected <= settings.learning_max_daily_runs
+        max_daily = max(0, int(settings.learning_max_daily_runs))
+        remaining = max(0, max_daily - today_predictions)
+        effective_batch = min(max(1, requested_batch), remaining) if remaining else 0
+        projected = today_predictions + effective_batch
+        allowed = effective_batch > 0
+        partial = allowed and effective_batch < requested_batch
         return {
             "allowed": allowed,
             "today_predictions": today_predictions,
             "requested_batch": requested_batch,
-            "max_daily_runs": settings.learning_max_daily_runs,
-            "reason": "within daily limit" if allowed else "Learning max daily run guard prevents overfitting and excessive repeated sampling.",
+            "effective_batch": effective_batch,
+            "remaining_daily_budget": remaining,
+            "projected_predictions": projected,
+            "max_daily_runs": max_daily,
+            "partial_batch": partial,
+            "reason": (
+                "within daily limit"
+                if allowed and not partial
+                else "partial batch: using remaining daily learning budget to keep training without overfitting"
+                if partial
+                else "daily learning budget exhausted; waiting for next UTC window instead of oversampling the same day"
+            ),
         }
 
 
 class HistoricalSamplerService:
     def __init__(self) -> None:
         self.rng = random.Random(self.seed())
+
+    def blended_sample(self, db: Session, seen_samples: set[tuple[str, str]] | None = None, trigger: str = "manual") -> dict | None:
+        if trigger == "alpha_loss_replay":
+            return self.alpha_loss_sample(db, seen_samples=seen_samples) or self.random_sample(db, seen_samples=seen_samples)
+        roll = self.rng.random()
+        random_ratio = clamp_ratio(settings.learning_random_sample_ratio)
+        alpha_ratio = clamp_ratio(settings.learning_alpha_loss_sample_ratio)
+        factor_ratio = clamp_ratio(settings.learning_factor_focus_sample_ratio)
+        preservation_ratio = clamp_ratio(settings.learning_capital_preservation_sample_ratio)
+        total = max(0.01, random_ratio + alpha_ratio + factor_ratio + preservation_ratio)
+        random_cut = random_ratio / total
+        alpha_cut = random_cut + alpha_ratio / total
+        factor_cut = alpha_cut + factor_ratio / total
+        if roll < random_cut:
+            return self.random_sample(db, seen_samples=seen_samples)
+        if roll < alpha_cut:
+            return self.alpha_loss_sample(db, seen_samples=seen_samples) or self.random_sample(db, seen_samples=seen_samples)
+        if roll < factor_cut:
+            return self.focus_priority_sample(db, seen_samples=seen_samples) or self.random_sample(db, seen_samples=seen_samples)
+        return self.capital_preservation_sample(db, seen_samples=seen_samples) or self.random_sample(db, seen_samples=seen_samples)
+
+    def alpha_loss_sample(self, db: Session, seen_samples: set[tuple[str, str]] | None = None) -> dict | None:
+        missed = db.scalars(
+            select(MissedWinner)
+            .order_by(desc(MissedWinner.benchmark_relative_return), desc(MissedWinner.created_at))
+            .limit(120)
+        ).all()
+        for row in missed:
+            asset = db.scalar(select(Asset).where(Asset.ticker == row.ticker, Asset.is_active.is_(True)).limit(1))
+            if not asset:
+                continue
+            sample = self.sample_for_asset(db, asset, preferred_date=as_date(row.decision_date), seen_samples=seen_samples)
+            if sample:
+                sample["sampling_reason"] = "alpha_loss_replay"
+                sample["missed_winner_id"] = row.id
+                sample["benchmark_relative_return"] = row.benchmark_relative_return
+                return sample
+        return None
+
+    def focus_priority_sample(self, db: Session, seen_samples: set[tuple[str, str]] | None = None) -> dict | None:
+        priorities = db.scalars(
+            select(LearningFocusPriority)
+            .where(LearningFocusPriority.status.in_(["proposed", "active"]))
+            .order_by(desc(LearningFocusPriority.expected_learning_value), desc(LearningFocusPriority.created_at))
+            .limit(80)
+        ).all()
+        for priority in priorities:
+            target = str(priority.target or "").upper()
+            asset = db.scalar(select(Asset).where(Asset.ticker == target, Asset.is_active.is_(True)).limit(1))
+            if not asset:
+                asset = db.scalar(select(Asset).where(Asset.sector.ilike(priority.target), Asset.is_active.is_(True)).limit(1))
+            if not asset:
+                linked_trade = db.scalar(
+                    select(TradingGameTrade)
+                    .where(TradingGameTrade.setup_type == priority.target)
+                    .order_by(desc(TradingGameTrade.created_at))
+                    .limit(1)
+                )
+                asset = db.scalar(select(Asset).where(Asset.ticker == linked_trade.ticker, Asset.is_active.is_(True)).limit(1)) if linked_trade else None
+            if not asset:
+                continue
+            sample = self.sample_for_asset(db, asset, preferred_date=None, seen_samples=seen_samples)
+            if sample:
+                sample["sampling_reason"] = "learning_focus_priority"
+                sample["learning_focus_priority_id"] = priority.id
+                sample["priority_type"] = priority.priority_type
+                return sample
+        return None
+
+    def capital_preservation_sample(self, db: Session, seen_samples: set[tuple[str, str]] | None = None) -> dict | None:
+        rows = db.scalars(
+            select(CapitalPreservationAlpha)
+            .where(CapitalPreservationAlpha.missed_gain > CapitalPreservationAlpha.avoided_loss)
+            .order_by(desc(CapitalPreservationAlpha.missed_gain), desc(CapitalPreservationAlpha.created_at))
+            .limit(80)
+        ).all()
+        for row in rows:
+            asset = db.scalar(select(Asset).where(Asset.ticker == row.ticker, Asset.is_active.is_(True)).limit(1))
+            if not asset:
+                continue
+            sample = self.sample_for_asset(db, asset, preferred_date=as_date(row.decision_date), seen_samples=seen_samples)
+            if sample:
+                sample["sampling_reason"] = "capital_preservation_replay"
+                sample["capital_preservation_alpha_id"] = row.id
+                return sample
+        return None
 
     def random_sample(self, db: Session, seen_samples: set[tuple[str, str]] | None = None) -> dict | None:
         universe = {item.strip().lower() for item in settings.learning_asset_universe.split(",") if item.strip()}
@@ -313,32 +452,37 @@ class HistoricalSamplerService:
 
         candidates = db.scalars(select(Asset).where(Asset.is_active.is_(True), Asset.asset_type.in_(asset_types))).all()
         self.rng.shuffle(candidates)
-        min_rows = max(252, settings.learning_min_history_years * 252)
         for asset in candidates:
-            stats = db.execute(
-                select(func.count(PriceHistory.id), func.min(PriceHistory.date), func.max(PriceHistory.date)).where(PriceHistory.asset_id == asset.id)
-            ).one()
-            count, first_date, last_date = int(stats[0] or 0), as_date(stats[1]), as_date(stats[2])
-            if count < min_rows or not first_date or not last_date:
+            sample = self.sample_for_asset(db, asset, preferred_date=None, seen_samples=seen_samples)
+            if sample:
+                return sample
+        return None
+
+    def sample_for_asset(self, db: Session, asset: Asset, preferred_date: date | None, seen_samples: set[tuple[str, str]] | None = None) -> dict | None:
+        min_rows = max(252, settings.learning_min_history_years * 252)
+        stats = db.execute(
+            select(func.count(PriceHistory.id), func.min(PriceHistory.date), func.max(PriceHistory.date)).where(PriceHistory.asset_id == asset.id)
+        ).one()
+        count, first_date, last_date = int(stats[0] or 0), as_date(stats[1]), as_date(stats[2])
+        if count < min_rows or not first_date or not last_date:
+            return None
+        earliest = first_date + timedelta(days=max(365, settings.learning_min_history_years * 365))
+        latest = last_date - timedelta(days=TIMEFRAMES["long"]["horizon_days"] * 2 + 30)
+        if earliest >= latest:
+            return None
+        preferred_candidates: list[date] = []
+        if preferred_date and earliest <= preferred_date <= latest:
+            preferred_candidates.extend([preferred_date, preferred_date - timedelta(days=3), preferred_date + timedelta(days=3)])
+        span = (latest - earliest).days
+        preferred_candidates.extend(earliest + timedelta(days=self.rng.randint(0, max(1, span))) for _ in range(8))
+        for candidate_date in preferred_candidates:
+            analysis_date = nearest_trading_date(db, asset, max(earliest, min(candidate_date, latest)), latest)
+            if not analysis_date:
                 continue
-            earliest = first_date + timedelta(days=max(365, settings.learning_min_history_years * 365))
-            latest = last_date - timedelta(days=TIMEFRAMES["long"]["horizon_days"] * 2 + 30)
-            if earliest >= latest:
+            key = (asset.ticker, analysis_date.isoformat())
+            if seen_samples and key in seen_samples:
                 continue
-            span = (latest - earliest).days
-            for _ in range(8):
-                analysis_date = nearest_trading_date(
-                    db,
-                    asset,
-                    earliest + timedelta(days=self.rng.randint(0, max(1, span))),
-                    latest,
-                )
-                if not analysis_date:
-                    continue
-                key = (asset.ticker, analysis_date.isoformat())
-                if seen_samples and key in seen_samples:
-                    continue
-                return {"asset": asset, "analysis_date": analysis_date, "first_price_date": first_date, "last_price_date": last_date, "sample_rows": count}
+            return {"asset": asset, "analysis_date": analysis_date, "first_price_date": first_date, "last_price_date": last_date, "sample_rows": count}
         return None
 
     def seed(self) -> int:
@@ -480,12 +624,18 @@ class PointInTimeDataService:
 
 
 class PredictionEngine:
-    def predict(self, context: dict) -> dict:
+    def predict(self, context: dict, db: Session | None = None, sample_metadata: dict | None = None) -> dict:
         technical = context["technical"]
         signal_scores = self.signal_scores(context)
-        aggregate_score = weighted_score(signal_scores, BASE_SIGNAL_WEIGHTS)
+        sample_metadata = sample_metadata or {}
+        feedback = self.feedback_context(db, context, signal_scores, sample_metadata)
+        weights_used = feedback["weights_used"]
+        aggregate_score = weighted_score(signal_scores, weights_used)
         dominant_direction = direction_from_score(aggregate_score, technical)
-        confidence = confidence_from_evidence(aggregate_score, context["data_quality_score"], context["market_context"], technical)
+        base_confidence = confidence_from_evidence(aggregate_score, context["data_quality_score"], context["market_context"], technical)
+        confidence = round(clamp(base_confidence + feedback["confidence_adjustment"], 15, 88), 1)
+        feedback["base_confidence"] = base_confidence
+        feedback["final_confidence"] = confidence
         timeframes = {
             timeframe: self.timeframe_prediction(timeframe, config, context, signal_scores, aggregate_score, dominant_direction, confidence)
             for timeframe, config in TIMEFRAMES.items()
@@ -502,7 +652,66 @@ class PredictionEngine:
                 "reasoning": self.reasoning(context, signal_scores, dominant_direction),
             },
             "timeframes": timeframes,
+            "feedback_loop": feedback,
+            "model_version_used": feedback["model_version_used"],
+            "weights_used": weights_used,
+            "learning_memory_used": feedback["learning_memory_used"],
+            "strategy_memory_used": feedback["strategy_memory_used"],
+            "research_priority_used": feedback["research_priority_used"],
+            "learning_mode_metadata": feedback["learning_mode_metadata"],
             "anti_leakage": context["point_in_time_policy"],
+        }
+
+    def feedback_context(self, db: Session | None, context: dict, signal_scores: dict, sample_metadata: dict) -> dict:
+        model_version_used, weights_used, weight_source = active_weight_context(db)
+        signal_memory = signal_performance_context(db, context, signal_scores)
+        strategy_memory = strategy_memory_context(db, context)
+        research_priority = research_priority_context(db, sample_metadata)
+        mode_metadata = sample_metadata.get("learning_mode_metadata") or learning_mode_metadata(sample_metadata.get("run_trigger"), sample_metadata)
+        confidence_adjustment = round(
+            clamp(
+                signal_memory["confidence_delta"] + strategy_memory["confidence_delta"] + research_priority.get("confidence_delta", 0.0),
+                -14.0,
+                14.0,
+            ),
+            2,
+        )
+        return {
+            "model_version_used": model_version_used,
+            "weight_source": weight_source,
+            "weights_used": weights_used,
+            "learning_memory_used": {
+                "signal_performance": signal_memory["rows"],
+                "confidence_delta": signal_memory["confidence_delta"],
+                "policy": "SignalPerformance reliability changes confidence only when enough outcome evidence exists.",
+            },
+            "strategy_memory_used": {
+                "rows": strategy_memory["rows"],
+                "confidence_delta": strategy_memory["confidence_delta"],
+                "policy": "StrategyMemory lessons modify confidence when their stored conditions match the current point-in-time setup.",
+            },
+            "research_priority_used": research_priority,
+            "learning_mode_metadata": mode_metadata,
+            "confidence_adjustment": confidence_adjustment,
+            "policy": "PredictionEngine uses active learned weights when available; otherwise BASE_SIGNAL_WEIGHTS. Learning memory changes confidence, not source code.",
+        }
+
+    def baseline_prediction(self, context: dict) -> dict:
+        signal_scores = self.signal_scores(context)
+        weights = normalize_weights(BASE_SIGNAL_WEIGHTS)
+        aggregate_score = weighted_score(signal_scores, weights)
+        direction = direction_from_score(aggregate_score, context["technical"])
+        confidence = confidence_from_evidence(aggregate_score, context["data_quality_score"], context["market_context"], context["technical"])
+        return {
+            "model_version_used": "base-static",
+            "weights_used": weights,
+            "aggregate_score": round(aggregate_score, 2),
+            "aggregate_confidence": confidence,
+            "dominant_direction": direction,
+            "actionability": feedback_actionability(direction, confidence, aggregate_score),
+            "confidence_adjustment": 0.0,
+            "memory_adjustment_used": False,
+            "policy": "Counterfactual baseline uses BASE_SIGNAL_WEIGHTS and ignores learned memory/confidence adjustments.",
         }
 
     def signal_scores(self, context: dict) -> dict:
@@ -775,19 +984,43 @@ class StrategyMemoryService:
 class ModelScoreService:
     def recalculate(self, db: Session) -> dict:
         rows = db.scalars(select(SignalPerformance).order_by(desc(SignalPerformance.updated_at)).limit(600)).all()
-        if not rows:
-            return {"status": "insufficient_sample", "version": None}
         previous = active_model_version(db)
+        anti = self.anti_overfitting_report(db)
+        eligible_rows = [row for row in rows if int(row.sample_count or 0) >= MIN_MODEL_VERSION_SIGNAL_SAMPLE]
+        if (
+            int(anti.get("sample_count", 0) or 0) < MIN_MODEL_VERSION_OUTCOMES
+            or len(eligible_rows) < MIN_MODEL_VERSION_SIGNAL_ROWS
+        ):
+            return {
+                "status": "insufficient_evidence",
+                "version": previous.version if previous else None,
+                "active_version": previous.version if previous else None,
+                "thresholds": {
+                    "min_outcomes": MIN_MODEL_VERSION_OUTCOMES,
+                    "min_signal_rows": MIN_MODEL_VERSION_SIGNAL_ROWS,
+                    "min_signal_sample": MIN_MODEL_VERSION_SIGNAL_SAMPLE,
+                },
+                "evidence": {"outcomes": anti.get("sample_count", 0), "eligible_signal_rows": len(eligible_rows)},
+                "anti_overfitting": anti,
+                "policy": "No ModelVersion is created until enough outcome and signal reliability evidence exists.",
+            }
         previous_weights = previous.weights if previous else BASE_SIGNAL_WEIGHTS
         new_weights = dict(BASE_SIGNAL_WEIGHTS)
         for signal_name in new_weights:
-            matching = [row for row in rows if row.signal_name == signal_name and row.sample_count >= 3]
+            matching = [row for row in rows if row.signal_name == signal_name and row.sample_count >= MIN_MODEL_VERSION_SIGNAL_SAMPLE]
             if not matching:
                 continue
             avg_reliability = mean(row.reliability_score for row in matching)
             new_weights[signal_name] = max(0.03, new_weights[signal_name] + (avg_reliability - 50) / 1000)
         new_weights = normalize_weights(new_weights)
-        anti = self.anti_overfitting_report(db)
+        if previous and max(abs(safe_float(new_weights.get(key)) - safe_float((previous.weights or {}).get(key))) for key in BASE_SIGNAL_WEIGHTS) < 0.001:
+            return {
+                "status": "stable",
+                "version": previous.version,
+                "weights": previous.weights,
+                "anti_overfitting": anti,
+                "policy": "No new ModelVersion created because learned weights did not materially change.",
+            }
         version = f"learning-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
         row = ModelVersion(
             version=version,
@@ -844,6 +1077,181 @@ class ModelScoreService:
         }
 
 
+class FeedbackLoopAuditService:
+    def record(
+        self,
+        db: Session,
+        prediction: HistoricalPrediction,
+        prediction_payload: dict,
+        outcomes: list[dict],
+        memory_updates: list[dict],
+    ) -> dict:
+        feedback = prediction_payload.get("feedback_loop", {})
+        usable = [row for row in outcomes if row.get("outcome_label") in {"correct", "wrong", "neutral"}]
+        correct = sum(1 for row in usable if row.get("outcome_label") == "correct")
+        wrong = sum(1 for row in usable if row.get("outcome_label") == "wrong")
+        returns = [safe_float(row.get("realized_return")) for row in usable if row.get("realized_return") is not None]
+        evidence_grade = "medium" if len(usable) >= 3 else "low" if usable else "insufficient"
+        learned = {
+            "memory_updates": memory_updates[:12],
+            "signal_performance_used": (feedback.get("learning_memory_used") or {}).get("signal_performance", []),
+            "strategy_memory_used": (feedback.get("strategy_memory_used") or {}).get("rows", []),
+        }
+        counterfactual = self.counterfactual_audit(prediction, prediction_payload, outcomes)
+        comparison = counterfactual.get("outcome_comparison", {})
+        changed_decision = bool(
+            (counterfactual.get("differences") or {}).get("direction_changed")
+            or (counterfactual.get("differences") or {}).get("actionability_changed")
+            or safe_float((counterfactual.get("differences") or {}).get("score_delta")) != 0.0
+            or safe_float((counterfactual.get("differences") or {}).get("confidence_delta")) != 0.0
+        )
+        improved = bool(comparison.get("improvement_detected"))
+        changes = {
+            "model_version_used": feedback.get("model_version_used"),
+            "weights_used": feedback.get("weights_used"),
+            "confidence_adjustment": feedback.get("confidence_adjustment"),
+            "base_confidence": feedback.get("base_confidence"),
+            "final_confidence": feedback.get("final_confidence"),
+            "research_priority_used": feedback.get("research_priority_used"),
+            "learning_mode_metadata": feedback.get("learning_mode_metadata"),
+            "counterfactual_audit": counterfactual,
+        }
+        decision = {
+            "prediction_id": prediction.id,
+            "ticker": prediction.ticker,
+            "analysis_date": iso(prediction.analysis_date),
+            "direction": prediction.expected_direction,
+            "confidence": prediction.confidence,
+            "aggregate_score": (prediction_payload.get("prediction") or {}).get("aggregate_score"),
+            "actionability": counterfactual.get("learned_prediction", {}).get("actionability"),
+        }
+        outcome_payload = {
+            "correct": correct,
+            "wrong": wrong,
+            "neutral": sum(1 for row in usable if row.get("outcome_label") == "neutral"),
+            "average_realized_return": round(mean(returns), 4) if returns else None,
+            "outcomes": {row.get("timeframe"): row.get("outcome_label") for row in outcomes},
+            "baseline_direction_correct": comparison.get("baseline_direction_correct"),
+            "learned_direction_correct": comparison.get("learned_direction_correct"),
+            "baseline_actionability": comparison.get("baseline_actionability"),
+            "learned_actionability": comparison.get("learned_actionability"),
+            "baseline_would_trade": comparison.get("baseline_would_trade"),
+            "learned_would_trade": comparison.get("learned_would_trade"),
+            "avoided_loss": comparison.get("avoided_loss"),
+            "missed_gain": comparison.get("missed_gain"),
+            "improvement_reason": comparison.get("improvement_reason"),
+        }
+        summary = (
+            f"{prediction.ticker} used {feedback.get('model_version_used', 'base-static')} with "
+            f"confidence adjustment {safe_float(feedback.get('confidence_adjustment')):.2f}; "
+            f"changed_decision={changed_decision}, improved={improved}. "
+            f"reason={comparison.get('improvement_reason', 'counterfactual_not_available')}."
+        )
+        row = FeedbackLoopAudit(
+            prediction_id=prediction.id,
+            ticker=prediction.ticker,
+            model_version_used=feedback.get("model_version_used") or "base-static",
+            learned_knowledge_json=json_safe(learned),
+            changes_applied_json=json_safe(changes),
+            future_decision_json=json_safe(decision),
+            outcome_json=json_safe(outcome_payload),
+            improvement_detected=improved,
+            evidence_grade=evidence_grade,
+            summary=summary,
+        )
+        db.add(row)
+        return {
+            "status": "recorded",
+            "prediction_id": prediction.id,
+            "model_version_used": row.model_version_used,
+            "what_was_learned": learned,
+            "what_changed": changes,
+            "future_decision_used_change": decision,
+            "counterfactual_audit": counterfactual,
+            "outcome": outcome_payload,
+            "improvement_detected": improved,
+            "evidence_grade": evidence_grade,
+            "summary": summary,
+        }
+
+    def counterfactual_audit(self, prediction: HistoricalPrediction, prediction_payload: dict, outcomes: list[dict]) -> dict:
+        context = dict(prediction.point_in_time_context or {})
+        context.pop("future_prices", None)
+        baseline = PredictionEngine().baseline_prediction(context) if context else {}
+        learned_prediction = prediction_payload.get("prediction") or {}
+        baseline_actionability = baseline.get("actionability")
+        learned_actionability = feedback_actionability(
+            learned_prediction.get("dominant_direction"),
+            learned_prediction.get("aggregate_confidence"),
+            learned_prediction.get("aggregate_score"),
+        )
+        learned = {
+            "model_version_used": (prediction_payload.get("feedback_loop") or {}).get("model_version_used") or "base-static",
+            "weights_used": prediction_payload.get("weights_used") or {},
+            "aggregate_score": learned_prediction.get("aggregate_score"),
+            "aggregate_confidence": learned_prediction.get("aggregate_confidence"),
+            "dominant_direction": learned_prediction.get("dominant_direction"),
+            "actionability": learned_actionability,
+            "confidence_adjustment": (prediction_payload.get("feedback_loop") or {}).get("confidence_adjustment", 0.0),
+            "memory_adjustment_used": bool((prediction_payload.get("feedback_loop") or {}).get("confidence_adjustment")),
+        }
+        baseline_correct = direction_correctness_summary(baseline.get("dominant_direction"), outcomes)
+        learned_correct = direction_correctness_summary(learned.get("dominant_direction"), outcomes)
+        baseline_would_trade = feedback_would_trade(baseline_actionability)
+        learned_would_trade = feedback_would_trade(learned_actionability)
+        returns = [safe_float(row.get("realized_return")) for row in outcomes if row.get("realized_return") is not None]
+        average_return = mean(returns) if returns else 0.0
+        avoided_loss = round(abs(average_return), 4) if baseline_would_trade and not learned_would_trade and average_return < 0 else 0.0
+        missed_gain = round(average_return, 4) if baseline_would_trade and not learned_would_trade and average_return > 0 else 0.0
+        improvement_detected, improvement_reason = counterfactual_improvement_reason(
+            baseline_correct,
+            learned_correct,
+            baseline_would_trade,
+            learned_would_trade,
+            average_return,
+            avoided_loss,
+            missed_gain,
+        )
+        comparison = {
+            "score_delta": round(safe_float(learned.get("aggregate_score")) - safe_float(baseline.get("aggregate_score")), 4),
+            "confidence_delta": round(safe_float(learned.get("aggregate_confidence")) - safe_float(baseline.get("aggregate_confidence")), 4),
+            "direction_changed": baseline.get("dominant_direction") != learned.get("dominant_direction"),
+            "actionability_changed": baseline_actionability != learned_actionability,
+        }
+        return {
+            "baseline_prediction": baseline,
+            "learned_prediction": learned,
+            "differences": comparison,
+            "outcome_comparison": {
+                "outcome_labels": {row.get("timeframe"): row.get("outcome_label") for row in outcomes},
+                "realized_returns": {row.get("timeframe"): row.get("realized_return") for row in outcomes},
+                "learned_direction": learned.get("dominant_direction"),
+                "baseline_direction": baseline.get("dominant_direction"),
+                "baseline_direction_correct": baseline_correct["direction_correct"],
+                "learned_direction_correct": learned_correct["direction_correct"],
+                "baseline_correct_count": baseline_correct["correct_count"],
+                "learned_correct_count": learned_correct["correct_count"],
+                "baseline_actionability": baseline_actionability,
+                "learned_actionability": learned_actionability,
+                "baseline_would_trade": baseline_would_trade,
+                "learned_would_trade": learned_would_trade,
+                "avoided_loss": avoided_loss,
+                "missed_gain": missed_gain,
+                "improvement_detected": improvement_detected,
+                "improvement_reason": improvement_reason,
+                "policy": "Outcome is observed after prediction persistence; baseline is recomputed only from point-in-time context.",
+            },
+        }
+
+    def report(self, db: Session, limit: int = 20) -> dict:
+        rows = db.scalars(select(FeedbackLoopAudit).order_by(desc(FeedbackLoopAudit.created_at)).limit(limit)).all()
+        return {
+            "status": "ready" if rows else "insufficient_evidence",
+            "rows": [serialize_feedback_audit(row) for row in rows],
+            "policy": "FeedbackLoopAudit is persisted by background learning runs and never computed by GET page render.",
+        }
+
+
 class LearningDashboardService:
     def dashboard(self, db: Session) -> dict:
         latest_run = db.scalar(select(LearningRun).order_by(desc(LearningRun.started_at)).limit(1))
@@ -866,6 +1274,7 @@ class LearningDashboardService:
             "strategy_memory": self.strategy_memory(db),
             "mistakes": self.mistake_summary(db),
             "model_versions": [serialize_model_version(row) for row in db.scalars(select(ModelVersion).order_by(desc(ModelVersion.created_at)).limit(8)).all()],
+            "feedback_loop_audit": FeedbackLoopAuditService().report(db, limit=8),
             "trading_game": trading_game,
             "policy": "BLUM Learning Loop optimizes calibration and robustness, not artificial 100% winrate.",
         }
@@ -1302,6 +1711,227 @@ def active_model_version(db: Session) -> ModelVersion | None:
     return db.scalar(select(ModelVersion).where(ModelVersion.is_active.is_(True)).order_by(desc(ModelVersion.created_at)).limit(1))
 
 
+def active_weight_context(db: Session | None) -> tuple[str, dict, str]:
+    if db is not None:
+        row = active_model_version(db)
+        if row and isinstance(row.weights, dict) and row.weights:
+            return row.version, model_weights_with_fallback(row.weights), "active_model_version"
+    return "base-static", normalize_weights(BASE_SIGNAL_WEIGHTS), "base_signal_weights"
+
+
+def learning_mode_metadata(trigger: str | None, sample_metadata: dict | None = None) -> dict:
+    sample_metadata = sample_metadata or {}
+    sampling_reason = sample_metadata.get("sampling_reason") or "random_point_in_time"
+    mode = "training_replay" if sampling_reason in {"alpha_loss_replay", "learning_focus_priority", "capital_preservation_replay"} or trigger == "alpha_loss_replay" else "walk_forward_validation"
+    if trigger == "paper_forward" or sample_metadata.get("mode") == "paper_forward":
+        mode = "paper_forward"
+    return {
+        "mode": mode,
+        "training_replay": mode == "training_replay",
+        "walk_forward_validation": mode == "walk_forward_validation",
+        "paper_forward": mode == "paper_forward",
+        "trigger": trigger or sample_metadata.get("run_trigger") or "unknown",
+        "sampling_reason": sampling_reason,
+        "evaluation_mode": sample_metadata.get("evaluation_mode") or settings.learning_evaluation_mode,
+        "policy": "Mode metadata is descriptive. It changes audit traceability, not source code or frontend execution.",
+    }
+
+
+def feedback_actionability(direction: str | None, confidence: float | None, score: float | None = None) -> str:
+    confidence_value = safe_float(confidence)
+    score_value = safe_float(score)
+    if direction == "neutral" or confidence_value < 35:
+        return "watch"
+    if confidence_value >= 68 and direction in {"bullish", "bearish"} and abs(score_value - 50) >= 10:
+        return "active_setup"
+    if confidence_value >= 54 and direction in {"bullish", "bearish"}:
+        return "wait_for_trigger"
+    return "watch"
+
+
+def feedback_would_trade(actionability: str | None) -> bool:
+    return actionability in {"active_setup", "wait_for_trigger", "actionable_if_confirmed"}
+
+
+def direction_correctness_summary(direction: str | None, outcomes: list[dict]) -> dict:
+    rows = [row for row in outcomes if row.get("realized_return") is not None]
+    if not rows:
+        return {"direction_correct": None, "correct_count": 0, "wrong_count": 0, "sample_count": 0}
+    correct = sum(1 for row in rows if direction_matches_return(direction, safe_float(row.get("realized_return"))))
+    wrong = len(rows) - correct
+    return {
+        "direction_correct": correct > wrong,
+        "correct_count": correct,
+        "wrong_count": wrong,
+        "sample_count": len(rows),
+    }
+
+
+def direction_matches_return(direction: str | None, realized_return: float) -> bool:
+    if direction == "bullish":
+        return realized_return > 0
+    if direction == "bearish":
+        return realized_return < 0
+    if direction == "neutral":
+        return abs(realized_return) <= 1.0
+    return False
+
+
+def counterfactual_improvement_reason(
+    baseline_correct: dict,
+    learned_correct: dict,
+    baseline_would_trade: bool,
+    learned_would_trade: bool,
+    average_return: float,
+    avoided_loss: float,
+    missed_gain: float,
+) -> tuple[bool, str]:
+    baseline_count = int(baseline_correct.get("correct_count") or 0)
+    learned_count = int(learned_correct.get("correct_count") or 0)
+    if learned_count > baseline_count:
+        return True, "learned_direction_more_correct_than_baseline"
+    if learned_count < baseline_count:
+        return False, "learned_direction_less_correct_than_baseline"
+    if avoided_loss > 0:
+        return True, "learned_actionability_avoided_baseline_loss"
+    if missed_gain > 0:
+        return False, "learned_actionability_missed_baseline_gain"
+    if learned_would_trade and not baseline_would_trade and average_return > 0:
+        return True, "learned_actionability_captured_gain_baseline_would_skip"
+    if learned_would_trade and not baseline_would_trade and average_return < 0:
+        return False, "learned_actionability_entered_losing_trade_baseline_would_skip"
+    return False, "no_counterfactual_improvement_detected"
+
+
+def model_weights_with_fallback(weights: dict) -> dict:
+    merged = dict(BASE_SIGNAL_WEIGHTS)
+    for key in BASE_SIGNAL_WEIGHTS:
+        if key in weights:
+            merged[key] = safe_float(weights.get(key)) if weights.get(key) is not None else BASE_SIGNAL_WEIGHTS[key]
+    return normalize_weights(merged)
+
+
+def signal_performance_context(db: Session | None, context: dict, signal_scores: dict) -> dict:
+    if db is None or not signal_scores:
+        return {"rows": [], "confidence_delta": 0.0}
+    regime = context.get("market_context", {}).get("market_regime", "Unknown")
+    rows = db.scalars(
+        select(SignalPerformance)
+        .where(SignalPerformance.signal_name.in_(list(signal_scores.keys())), SignalPerformance.market_regime == regime)
+        .order_by(desc(SignalPerformance.sample_count), desc(SignalPerformance.updated_at))
+        .limit(80)
+    ).all()
+    grouped: dict[str, list[SignalPerformance]] = defaultdict(list)
+    for row in rows:
+        grouped[row.signal_name].append(row)
+    payloads = []
+    deltas = []
+    for signal_name, signal_rows in grouped.items():
+        sample_count = sum(int(row.sample_count or 0) for row in signal_rows)
+        reliability = mean(float(row.reliability_score or 50.0) for row in signal_rows)
+        false_positives = sum(int(row.false_positive_count or 0) for row in signal_rows)
+        false_positive_rate = false_positives / max(1, sample_count)
+        enough_evidence = sample_count >= MIN_MODEL_VERSION_SIGNAL_SAMPLE
+        delta = clamp((reliability - 50.0) / 8.0 - false_positive_rate * 4.0, -5.0, 5.0) if enough_evidence else 0.0
+        payloads.append(
+            {
+                "signal_name": signal_name,
+                "market_regime": regime,
+                "sample_count": sample_count,
+                "reliability_score": round(reliability, 2),
+                "false_positive_rate": round(false_positive_rate, 4),
+                "signal_score": signal_scores.get(signal_name),
+                "confidence_delta": round(delta, 3),
+                "used": enough_evidence,
+            }
+        )
+        if enough_evidence:
+            deltas.append(delta)
+    total_delta = clamp(sum(deltas) / max(1, len(deltas)) * 1.4, -8.0, 8.0) if deltas else 0.0
+    return {"rows": payloads[:16], "confidence_delta": round(total_delta, 3)}
+
+
+def strategy_memory_context(db: Session | None, context: dict) -> dict:
+    if db is None:
+        return {"rows": [], "confidence_delta": 0.0}
+    rows = db.scalars(select(StrategyMemory).order_by(desc(StrategyMemory.reliability_score), desc(StrategyMemory.updated_at)).limit(120)).all()
+    applicable = []
+    deltas = []
+    for row in rows:
+        if not strategy_memory_matches(row, context):
+            continue
+        sample_count = int(row.sample_count or 0)
+        enough_evidence = sample_count >= 3
+        positive = int(row.positive_count or 0)
+        negative = int(row.negative_count or 0)
+        reliability = safe_float(row.reliability_score) if row.reliability_score is not None else 50.0
+        delta = clamp((reliability - 50.0) / 10.0, -4.0, 4.0) if enough_evidence else 0.0
+        if negative > positive and enough_evidence:
+            delta = min(delta, -1.5)
+        applicable.append(
+            {
+                "memory_key": row.memory_key,
+                "category": row.category,
+                "lesson": row.lesson,
+                "sample_count": sample_count,
+                "positive_count": positive,
+                "negative_count": negative,
+                "reliability_score": reliability,
+                "confidence_delta": round(delta, 3),
+                "used": enough_evidence,
+            }
+        )
+        if enough_evidence:
+            deltas.append(delta)
+    total_delta = clamp(sum(deltas), -6.0, 6.0) if deltas else 0.0
+    return {"rows": applicable[:12], "confidence_delta": round(total_delta, 3)}
+
+
+def strategy_memory_matches(row: StrategyMemory, context: dict) -> bool:
+    conditions = row.conditions or {}
+    technical = context.get("technical") or {}
+    indicators = technical.get("technical_indicators") or {}
+    volume = technical.get("volume") or {}
+    fundamentals = context.get("fundamentals") or {}
+    if "rsi_gt" in conditions and safe_float(indicators.get("rsi")) > safe_float(conditions.get("rsi_gt")):
+        return True
+    if "relative_volume_gt" in conditions and safe_float(volume.get("relative_volume")) > safe_float(conditions.get("relative_volume_gt")):
+        return True
+    if conditions.get("fundamentals") == "not_point_in_time_verified" and fundamentals.get("status") != "ready":
+        return True
+    if row.category in {"general_calibration", "volume_confirmation"}:
+        return True
+    return False
+
+
+def research_priority_context(db: Session | None, sample_metadata: dict) -> dict:
+    priority_id = sample_metadata.get("learning_focus_priority_id")
+    if db is not None and priority_id:
+        row = db.get(LearningFocusPriority, priority_id)
+        if row:
+            return {
+                "status": "used",
+                "id": row.id,
+                "priority_type": row.priority_type,
+                "target": row.target,
+                "reason": row.reason,
+                "expected_learning_value": row.expected_learning_value,
+                "urgency": row.urgency,
+                "sample_gap": row.sample_gap,
+                "sampling_reason": sample_metadata.get("sampling_reason"),
+                "confidence_delta": 0.0,
+            }
+    if sample_metadata.get("sampling_reason"):
+        return {
+            "status": "used",
+            "sampling_reason": sample_metadata.get("sampling_reason"),
+            "priority_type": sample_metadata.get("priority_type"),
+            "missed_winner_id": sample_metadata.get("missed_winner_id"),
+            "confidence_delta": 0.0,
+        }
+    return {"status": "not_applicable", "confidence_delta": 0.0}
+
+
 def normalize_weights(weights: dict[str, float]) -> dict[str, float]:
     total = sum(max(0.0, float(value)) for value in weights.values()) or 1.0
     return {key: round(max(0.0, float(value)) / total, 4) for key, value in weights.items()}
@@ -1372,6 +2002,11 @@ def serialize_prediction(row: HistoricalPrediction) -> dict:
         "market_regime": row.market_regime,
         "volatility_regime": row.volatility_regime,
         "data_quality_score": row.data_quality_score,
+        "model_version_used": row.model_version_used,
+        "weights_used": row.weights_used,
+        "learning_memory_used": row.learning_memory_used,
+        "strategy_memory_used": row.strategy_memory_used,
+        "research_priority_used": row.research_priority_used,
         "prediction": row.prediction_payload.get("prediction", {}) if row.prediction_payload else {},
         "timeframes": row.prediction_payload.get("timeframes", {}) if row.prediction_payload else {},
         "created_at": iso(row.created_at),
@@ -1419,6 +2054,24 @@ def serialize_model_version(row: ModelVersion) -> dict:
         "validation_metrics": row.validation_metrics,
         "anti_overfitting_report": row.anti_overfitting_report,
         "change_log": row.change_log,
+        "created_at": iso(row.created_at),
+    }
+
+
+def serialize_feedback_audit(row: FeedbackLoopAudit) -> dict:
+    return {
+        "id": row.id,
+        "prediction_id": row.prediction_id,
+        "ticker": row.ticker,
+        "model_version_used": row.model_version_used,
+        "what_was_learned": row.learned_knowledge_json,
+        "what_changed": row.changes_applied_json,
+        "counterfactual_audit": (row.changes_applied_json or {}).get("counterfactual_audit"),
+        "future_decision_used_change": row.future_decision_json,
+        "outcome": row.outcome_json,
+        "improvement_detected": row.improvement_detected,
+        "evidence_grade": row.evidence_grade,
+        "summary": row.summary,
         "created_at": iso(row.created_at),
     }
 
@@ -1507,6 +2160,10 @@ def safe_float(value) -> float:
 
 def clamp(value: float, low: float = 0.0, high: float = 100.0) -> float:
     return max(low, min(high, float(value)))
+
+
+def clamp_ratio(value: float) -> float:
+    return max(0.0, min(1.0, safe_float(value)))
 
 
 def round_float(value) -> float | None:

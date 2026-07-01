@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 from datetime import date
 import gzip
+from gzip import BadGzipFile
 from pathlib import Path
 
 from sqlalchemy import func, select
@@ -67,31 +68,49 @@ def seed_historical_prices(db: Session) -> dict:
             "inserted_rows": 0,
             "message": "Historical price cache is not packaged in this build.",
         }
+    pointer = git_lfs_pointer_summary(HISTORICAL_PRICE_CACHE)
+    if pointer:
+        return invalid_historical_cache_response(
+            "git_lfs_pointer",
+            (
+                "Historical price cache is a Git LFS pointer, not the resolved gzip payload. "
+                "Run `git lfs pull` in development or ensure the Space resolves LFS assets. "
+                "Startup continues without synthetic market data."
+            ),
+            pointer,
+        )
     asset_ids = dict(db.execute(select(Asset.ticker, Asset.id)).all())
     inserted = 0
     skipped = 0
     tickers: set[str] = set()
     rows: list[dict] = []
-    with gzip.open(HISTORICAL_PRICE_CACHE, "rt", newline="", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
-        for item in reader:
-            ticker = (item.get("ticker") or "").upper()
-            asset_id = asset_ids.get(ticker)
-            if not asset_id:
-                skipped += 1
-                continue
-            row = price_row_from_cache(asset_id, item)
-            if not row:
-                skipped += 1
-                continue
-            tickers.add(ticker)
-            rows.append(row)
-            if len(rows) >= 5000:
-                inserted += insert_price_rows(db, rows)
-                rows.clear()
-    if rows:
-        inserted += insert_price_rows(db, rows)
-    db.commit()
+    try:
+        with gzip.open(HISTORICAL_PRICE_CACHE, "rt", newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            for item in reader:
+                ticker = (item.get("ticker") or "").upper()
+                asset_id = asset_ids.get(ticker)
+                if not asset_id:
+                    skipped += 1
+                    continue
+                row = price_row_from_cache(asset_id, item)
+                if not row:
+                    skipped += 1
+                    continue
+                tickers.add(ticker)
+                rows.append(row)
+                if len(rows) >= 5000:
+                    inserted += insert_price_rows(db, rows)
+                    rows.clear()
+        if rows:
+            inserted += insert_price_rows(db, rows)
+        db.commit()
+    except (BadGzipFile, EOFError, OSError, UnicodeDecodeError, csv.Error) as exc:
+        db.rollback()
+        return invalid_historical_cache_response(
+            "invalid",
+            f"Historical price cache could not be loaded ({type(exc).__name__}). Startup continues without synthetic market data.",
+        )
     return {
         "enabled": True,
         "cache_status": "loaded",
@@ -119,6 +138,35 @@ def seed_startup_accuracy(db: Session) -> dict:
     if price_count == 0:
         return {"enabled": True, "status": "no_price_history", "message": "Accuracy audit waits for verified OHLCV rows."}
     return {"enabled": True, **run_accuracy_audit(db, limit=get_settings().max_update_assets)}
+
+
+def git_lfs_pointer_summary(path: Path) -> dict | None:
+    try:
+        head = path.read_bytes()[:220]
+    except OSError:
+        return None
+    if not head.startswith(b"version https://git-lfs.github.com/spec/v1"):
+        return None
+    text = head.decode("utf-8", errors="replace")
+    summary = {"pointer_detected": True}
+    for line in text.splitlines():
+        if line.startswith("oid "):
+            summary["oid"] = line.split(" ", 1)[1]
+        elif line.startswith("size "):
+            summary["expected_size"] = line.split(" ", 1)[1]
+    return summary
+
+
+def invalid_historical_cache_response(cache_status: str, message: str, diagnostics: dict | None = None) -> dict:
+    return {
+        "enabled": True,
+        "cache_status": cache_status,
+        "cache_file": HISTORICAL_PRICE_CACHE.name,
+        "inserted_rows": 0,
+        "diagnostics": diagnostics or {},
+        "message": message,
+        "data_policy": "No synthetic prices are created when packaged OHLCV cache is unavailable.",
+    }
 
 
 def price_row_from_cache(asset_id: int, item: dict) -> dict | None:
