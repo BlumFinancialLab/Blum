@@ -178,17 +178,38 @@ class TraderBrainService:
     def paper_trading(self, db: Session, limit: int = 20) -> dict:
         copy = PaperCopyTradingService().summary(db, limit=limit)
         ledger = db.scalars(select(TradingGameTrade).order_by(desc(TradingGameTrade.created_at)).limit(limit)).all()
+        paper_decisions = [paper_decision(row) for row in copy.get("rows", [])]
+        closed_decisions = [completed_trade_decision(row) for row in ledger if row.exit_date is not None][:limit]
+        open_trade_decisions = [completed_trade_decision(row) for row in ledger if row.exit_date is None][:limit]
+        open_decisions = open_trade_decisions + [pending_paper_decision(row) for row in paper_decisions]
+        readiness_state = paper_trading_readiness_state(copy, paper_decisions, open_trade_decisions, closed_decisions)
         return {
             "status": copy.get("status", "ok"),
             "version": TRADER_BRAIN_VERSION,
             "generated_at": datetime.utcnow().isoformat(),
+            "snapshot_type": "PaperTradingSnapshot",
             "mode": "paper_only",
             "no_broker_execution": True,
             "copy_readiness": copy.get("readiness"),
-            "decisions": [paper_decision(row) for row in copy.get("rows", [])],
-            "completed_decisions": [completed_trade_decision(row) for row in ledger if row.exit_date is not None][:limit],
-            "open_decisions": [completed_trade_decision(row) for row in ledger if row.exit_date is None][:limit],
+            "readiness_state": readiness_state,
+            "readiness_explanation": paper_trading_readiness_explanation(readiness_state, copy),
+            "readiness_states_supported": [
+                "READY",
+                "NO_DECISIONS",
+                "NO_ELIGIBLE_SETUPS",
+                "NO_SNAPSHOTS",
+                "WORKER_FAILED",
+                "DATA_BLOCKED",
+                "INSUFFICIENT_EVIDENCE",
+            ],
+            "decisions": paper_decisions,
+            "pending_decisions": [pending_paper_decision(row) for row in paper_decisions],
+            "completed_decisions": closed_decisions,
+            "closed_decisions": closed_decisions,
+            "open_decisions": open_decisions[:limit],
+            "journal_summary": paper_journal_summary(open_decisions, closed_decisions, paper_decisions),
             "truth_layer": copy.get("truth_layer") or ["Paper trading evidence is informational only."],
+            "warnings": copy.get("warnings", []),
             "policy": "No brokers, no live execution, no financial advice. Copyability increases only with stored paper evidence.",
         }
 
@@ -483,42 +504,244 @@ def trade_payload(row: TradingGameTrade | None) -> dict | None:
 
 
 def paper_decision(row: dict) -> dict:
+    ticker = row.get("ticker")
+    payload = row if isinstance(row, dict) else {}
     return {
-        "ticker": row.get("ticker"),
-        "side": infer_side(row),
-        "entry": row.get("entry_zone") or row.get("entry_trigger"),
-        "stop": row.get("invalidation_level"),
-        "targets": [item for item in [row.get("target_1"), row.get("target_2")] if item is not None],
-        "holding_estimate": row.get("expected_holding_period") or row.get("timeframe"),
-        "expected_risk": row.get("risk_amount_eur") or row.get("risk_reward_estimate"),
-        "expected_reward": row.get("risk_reward_estimate"),
-        "expected_alpha": row.get("historical_reliability"),
-        "decision_quality": row.get("copy_readiness_score"),
-        "confidence": row.get("confidence"),
-        "copyability": row.get("copy_readiness"),
-        "why": row.get("paper_instruction"),
-        "bull_thesis": row.get("bull_thesis") or row.get("why_now"),
-        "bear_thesis": row.get("bear_thesis") or row.get("what_could_go_wrong"),
-        "risk": row.get("risk") or row.get("missing_data"),
-        "missing_data": row.get("missing_data") or [],
+        "decision_id": f"candidate-{ticker or 'unknown'}-{str(payload.get('setup_type') or payload.get('actionability') or 'paper').lower()}",
+        "source_type": "paper_candidate",
+        "status": "pending_trigger",
+        "ticker": ticker,
+        "side": infer_side(payload),
+        "entry": payload.get("entry_zone") or payload.get("entry_trigger"),
+        "exit": None,
+        "stop": payload.get("invalidation_level"),
+        "targets": [item for item in [payload.get("target_1"), payload.get("target_2")] if item is not None],
+        "holding_period": payload.get("expected_holding_period") or payload.get("timeframe"),
+        "holding_estimate": payload.get("expected_holding_period") or payload.get("timeframe"),
+        "position_size": payload.get("position_size"),
+        "risk": payload.get("risk_amount_eur") or payload.get("risk_reward_estimate"),
+        "expected_risk": payload.get("risk_amount_eur") or payload.get("risk_reward_estimate"),
+        "reward": payload.get("risk_reward_estimate"),
+        "expected_reward": payload.get("risk_reward_estimate"),
+        "expected_alpha": payload.get("historical_reliability"),
+        "pnl": None,
+        "pnl_percent": None,
+        "pnl_per_share": None,
+        "r_multiple": None,
+        "benchmark_excess": None,
+        "outcome": "waiting_for_trigger",
+        "lesson_learned": "No outcome yet. This candidate can only teach BLUM after trigger, paper execution and evaluation.",
+        "decision_quality": payload.get("copy_readiness_score"),
+        "confidence": payload.get("confidence"),
+        "copyability": payload.get("copy_readiness"),
+        "why": payload.get("paper_instruction"),
+        "bull_thesis": payload.get("bull_thesis") or payload.get("why_now"),
+        "bear_thesis": payload.get("bear_thesis") or payload.get("what_could_go_wrong"),
+        "risk_notes": payload.get("risk") or payload.get("missing_data"),
+        "missing_data": payload.get("missing_data") or [],
+        "trade_replay": {
+            "state": "pending_trigger",
+            "entry_decision": payload.get("paper_instruction") or payload.get("entry_trigger"),
+            "exit_decision": "No exit exists because this is not a completed paper trade.",
+            "risk_plan": {
+                "stop": payload.get("invalidation_level"),
+                "targets": [item for item in [payload.get("target_1"), payload.get("target_2")] if item is not None],
+                "risk": payload.get("risk_amount_eur") or payload.get("risk_reward_estimate"),
+                "reward": payload.get("risk_reward_estimate"),
+            },
+            "lesson": "Pending trigger; no learning outcome stored yet.",
+        },
     }
+
+
+def pending_paper_decision(row: dict) -> dict:
+    payload = dict(row)
+    payload["decision_id"] = payload.get("decision_id") or f"pending-{payload.get('ticker', 'unknown')}"
+    payload["source_type"] = "paper_candidate"
+    payload["status"] = payload.get("status") or "pending_trigger"
+    return payload
 
 
 def completed_trade_decision(row: TradingGameTrade) -> dict:
+    payload = row.payload if isinstance(row.payload, dict) else {}
+    targets = [item for item in [row.initial_target_1, row.initial_target_2] if item is not None]
+    decision_quality = first_not_none(
+        safe_float(row.trade_quality_score, None),
+        average_present([safe_float(row.reproducibility_score, None), safe_float(row.confidence_at_entry, None)]),
+    )
+    r_multiple = safe_float(row.realized_r_multiple, None)
+    status = "closed" if row.exit_date is not None else "open"
+    outcome = row.outcome_label or ("open" if row.exit_date is None else "closed")
     return {
+        "decision_id": f"trade-{row.id}",
         "trade_id": row.id,
+        "source_type": "trading_game_trade",
+        "status": status,
+        "mode": row.mode,
         "ticker": row.ticker,
+        "asset_name": row.asset_name,
+        "asset_type": row.asset_type,
+        "sector": row.sector,
         "setup_type": row.setup_type,
+        "thesis_id": row.thesis_id,
+        "side": payload.get("side") or infer_side({"actionability": row.actionability_state_at_entry or row.decision_state}),
+        "entry_date": row.entry_date.isoformat() if row.entry_date else None,
+        "exit_date": row.exit_date.isoformat() if row.exit_date else None,
         "entry": row.entry_price,
         "stop": row.stop_loss or row.invalidation_level,
-        "targets": [item for item in [row.initial_target_1, row.initial_target_2] if item is not None],
+        "targets": targets,
         "exit": row.exit_price,
-        "outcome": row.outcome_label,
+        "holding_period": holding_period(row),
+        "holding_days": row.holding_days,
+        "position_size": row.position_size,
+        "notional_value": row.notional_value,
+        "risk": {
+            "risk_amount": row.risk_amount,
+            "risk_percent": row.risk_percent,
+            "max_expected_loss": row.max_expected_loss,
+        },
+        "reward": {
+            "target_1": row.initial_target_1,
+            "target_2": row.initial_target_2,
+            "max_favorable_excursion": row.max_favorable_excursion,
+        },
+        "outcome": outcome,
         "pnl": row.net_pnl_eur,
-        "r_multiple": row.realized_r_multiple,
+        "gross_pnl": row.gross_pnl_eur,
+        "pnl_percent": row.pnl_percent,
+        "pnl_per_share": row.pnl_per_share,
+        "r_multiple": r_multiple,
+        "benchmark_ticker": row.benchmark_ticker,
+        "benchmark_return": first_not_none(row.benchmark_return_same_period, row.benchmark_return),
+        "benchmark_excess": row.excess_return_vs_benchmark,
+        "target_1_hit": row.target_1_hit,
+        "target_2_hit": row.target_2_hit,
+        "target_hit": row.target_hit,
+        "stop_hit": row.stop_hit,
+        "invalidation_hit": row.invalidation_hit,
+        "missed_entry": row.missed_entry,
+        "decision_quality": decision_quality,
+        "copyability": copyability_from_trade(row, decision_quality),
+        "confidence": row.confidence_at_entry,
+        "reproducibility_score": row.reproducibility_score,
+        "trade_quality_score": row.trade_quality_score,
+        "data_quality_score": row.data_quality_score,
         "lesson_learned": row.lesson_generated,
         "confidence_recalibration": row.payload.get("confidence_recalibration") if isinstance(row.payload, dict) else None,
+        "why": row.entry_reason or row.entry_trigger or payload.get("why"),
+        "bull_thesis": payload.get("bull_thesis") or row.entry_reason,
+        "bear_thesis": payload.get("bear_thesis") or row.exit_reason or payload.get("risk"),
+        "risk_notes": payload.get("risk") or row.confirmation_condition,
+        "trade_replay": {
+            "state": status,
+            "entry_decision": row.entry_reason or row.entry_trigger or "Entry reason not stored.",
+            "entry_trigger": row.entry_trigger,
+            "confirmation_condition": row.confirmation_condition,
+            "exit_decision": row.exit_reason or ("Open paper trade; no exit stored yet." if row.exit_date is None else "Exit reason not stored."),
+            "exit_trigger": row.exit_trigger,
+            "risk_plan": {
+                "entry": row.entry_price,
+                "stop": row.stop_loss or row.invalidation_level,
+                "targets": targets,
+                "position_size": row.position_size,
+                "risk_amount": row.risk_amount,
+                "risk_percent": row.risk_percent,
+                "trailing_stop": row.trailing_stop,
+            },
+            "outcome": {
+                "label": outcome,
+                "pnl": row.net_pnl_eur,
+                "pnl_percent": row.pnl_percent,
+                "r_multiple": r_multiple,
+                "benchmark_excess": row.excess_return_vs_benchmark,
+            },
+            "lesson": row.lesson_generated or "No lesson has been generated for this paper trade yet.",
+        },
     }
+
+
+def paper_trading_readiness_state(copy: dict, decisions: list[dict], open_trades: list[dict], closed_decisions: list[dict]) -> str:
+    readiness = copy.get("readiness") or {}
+    status_text = " ".join(
+        str(value)
+        for value in [
+            copy.get("status"),
+            readiness.get("status"),
+            *(copy.get("warnings") or []),
+            *(readiness.get("warnings") or []),
+        ]
+        if value
+    ).lower()
+    if "failed" in status_text or "error" in status_text:
+        return "WORKER_FAILED"
+    if "blocked" in status_text or "data_blocked" in status_text:
+        return "DATA_BLOCKED"
+    if decisions or open_trades or closed_decisions:
+        return "READY"
+    if copy.get("portfolio_snapshot") is None and readiness.get("strategy_count", 0) == 0 and readiness.get("portfolio_count", 0) == 0:
+        return "NO_SNAPSHOTS"
+    candidate_count = int(readiness.get("candidate_count") or 0)
+    copyable_count = int(readiness.get("copyable_candidate_count") or 0)
+    if candidate_count > 0 and copyable_count == 0:
+        return "NO_ELIGIBLE_SETUPS"
+    if candidate_count == 0:
+        return "INSUFFICIENT_EVIDENCE"
+    return "NO_DECISIONS"
+
+
+def paper_trading_readiness_explanation(state: str, copy: dict) -> str:
+    explanations = {
+        "READY": "Paper trading snapshot contains open candidates or completed paper trade evidence.",
+        "NO_DECISIONS": "The paper trading worker has state, but no open or closed paper decisions are stored yet.",
+        "NO_ELIGIBLE_SETUPS": "BLUM scanned candidates, but no setup currently satisfies copyability, trigger and risk requirements.",
+        "NO_SNAPSHOTS": "No durable paper trading snapshot exists yet. The backend worker must create a snapshot before the journal can show trades.",
+        "WORKER_FAILED": "The paper trading worker or upstream evidence service reported a failure. The journal is intentionally not fabricating trades.",
+        "DATA_BLOCKED": "Required market or paper trading data is blocked or unavailable. BLUM cannot build a reliable paper decision journal.",
+        "INSUFFICIENT_EVIDENCE": "There is not enough stored evidence to create a paper decision without inventing data.",
+    }
+    warnings = copy.get("warnings") or []
+    suffix = f" Warnings: {', '.join(map(str, warnings[:3]))}." if warnings else ""
+    return f"{explanations.get(state, explanations['NO_DECISIONS'])}{suffix}"
+
+
+def paper_journal_summary(open_decisions: list[dict], closed_decisions: list[dict], pending_decisions: list[dict]) -> dict:
+    closed_r = [safe_float(row.get("r_multiple"), None) for row in closed_decisions]
+    closed_pnl = [safe_float(row.get("pnl"), None) for row in closed_decisions]
+    wins = len([row for row in closed_decisions if str(row.get("outcome") or "").lower() in {"win", "target_hit", "partial_profit"} or safe_float(row.get("pnl"), 0.0) > 0])
+    losses = len([row for row in closed_decisions if str(row.get("outcome") or "").lower() in {"loss", "stopped_out", "stop_hit"} or safe_float(row.get("pnl"), 0.0) < 0])
+    return {
+        "open_count": len(open_decisions),
+        "closed_count": len(closed_decisions),
+        "pending_candidate_count": len(pending_decisions),
+        "wins": wins,
+        "losses": losses,
+        "average_r": average_present(closed_r),
+        "total_pnl": round(sum(value for value in closed_pnl if value is not None), 4) if closed_pnl else None,
+    }
+
+
+def holding_period(row: TradingGameTrade) -> str | None:
+    if row.holding_days is not None:
+        return f"{row.holding_days} days"
+    if row.entry_date and row.exit_date:
+        return f"{(row.exit_date - row.entry_date).days} days"
+    if row.entry_date and row.exit_date is None:
+        return "open"
+    return None
+
+
+def copyability_from_trade(row: TradingGameTrade, decision_quality: float | None) -> str:
+    if row.exit_date is None:
+        return "manage_open_position"
+    if row.missed_entry:
+        return "missed_entry_review"
+    if decision_quality is None:
+        return "evidence_incomplete"
+    if decision_quality >= 75 and (row.realized_r_multiple or 0) > 0:
+        return "copyability_improved_by_evidence"
+    if decision_quality >= 55:
+        return "process_validated_needs_more_samples"
+    return "do_not_copy_without_more_evidence"
 
 
 def infer_side(row: dict) -> str:

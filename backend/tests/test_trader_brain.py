@@ -140,8 +140,34 @@ def test_paper_trading_is_paper_only_and_uses_completed_trade_evidence():
 
     assert payload["mode"] == "paper_only"
     assert payload["no_broker_execution"] is True
+    assert payload["snapshot_type"] == "PaperTradingSnapshot"
+    assert payload["readiness_state"] == "READY"
     assert payload["completed_decisions"][0]["ticker"] == "AMD"
+    assert payload["closed_decisions"][0]["entry"] == 100.0
+    assert payload["closed_decisions"][0]["exit"] == 108.0
+    assert payload["closed_decisions"][0]["position_size"] == 1.0
+    assert payload["closed_decisions"][0]["r_multiple"] == 2.0
+    assert payload["closed_decisions"][0]["trade_replay"]["risk_plan"]["stop"] == 96.0
     assert payload["completed_decisions"][0]["lesson_learned"] == "Pullback confirmation worked."
+
+
+def test_paper_trading_empty_state_is_explicit_and_snapshot_first():
+    with setup_db() as db:
+        payload = TraderBrainService().paper_trading(db)
+
+    assert payload["snapshot_type"] == "PaperTradingSnapshot"
+    assert payload["readiness_state"] in {
+        "NO_DECISIONS",
+        "NO_ELIGIBLE_SETUPS",
+        "NO_SNAPSHOTS",
+        "WORKER_FAILED",
+        "DATA_BLOCKED",
+        "INSUFFICIENT_EVIDENCE",
+    }
+    assert payload["readiness_explanation"]
+    assert payload["open_decisions"] == []
+    assert payload["closed_decisions"] == []
+    assert payload["journal_summary"]["open_count"] == 0
 
 
 def test_alpha_page_reports_insufficient_evidence_instead_of_claiming_alpha():
@@ -172,3 +198,19 @@ def test_legacy_pages_are_lightweight_aliases():
     assert (frontend / "learning" / "page.tsx").read_text().strip() == 'export { default } from "../training-ground/page";'
     assert (frontend / "copy-trading" / "page.tsx").read_text().strip() == 'export { default } from "../paper-trading/page";'
     assert (frontend / "dashboard" / "page.tsx").read_text().strip() == 'export { default } from "../page";'
+
+
+def test_paper_trading_page_uses_single_snapshot_and_readiness_states():
+    page = Path(__file__).resolve().parents[2] / "frontend" / "app" / "paper-trading" / "page.tsx"
+    text = page.read_text()
+
+    assert "api.traderPaperTrading(40)" in text
+    assert "PaperTradingSnapshot" in text
+    assert "NO_DECISIONS" in text
+    assert "NO_ELIGIBLE_SETUPS" in text
+    assert "NO_SNAPSHOTS" in text
+    assert "WORKER_FAILED" in text
+    assert "DATA_BLOCKED" in text
+    assert "INSUFFICIENT_EVIDENCE" in text
+    assert "No completed trades" not in text
+    assert "Trade Replay is intentionally lazy-rendered" in text
