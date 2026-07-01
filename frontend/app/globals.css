@@ -297,6 +297,57 @@ p { color: var(--muted); line-height: 1.55; }
 .brain-list strong { display: block; margin-bottom: 4px; }
 .brain-list p { margin: 4px 0; font-size: 12px; }
 .brain-list span { display: block; color: var(--muted); font-size: 11px; }
+.research-planner-lists {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+.research-mini-list {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 10px;
+  background: #05080d;
+}
+.research-mini-list > span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--amber);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  font-weight: 950;
+}
+.research-mini-list div {
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 6px;
+  padding: 9px;
+  background: #070b11;
+}
+.research-mini-list strong {
+  display: block;
+  color: #f4f8ff;
+  font-size: 12px;
+}
+.research-mini-list p {
+  margin: 5px 0 0;
+  color: #aab6c7;
+  font-size: 11px;
+  line-height: 1.35;
+}
+.research-mini-list em {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  font-weight: 900;
+}
 .opportunity-line { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .opportunity-line a, .opportunity-line strong { color: var(--text); font-size: 15px; font-weight: 950; }
 .opportunity-line span { color: var(--amber); font-weight: 950; }
@@ -2914,7 +2965,7 @@ p { color: var(--muted); line-height: 1.55; }
   .system-card { position: static; margin-top: 14px; }
   .page-header { align-items: flex-start; flex-direction: column; }
   .header-actions { justify-content: flex-start; }
-  .hero, .grid-2, .grid-3, .grid-4, .live-grid, .realtime-strip, .deployment-banner, .diagnostic-grid, .diagnostic-metric-grid, .truth-summary-grid, .diagnostic-key-values, .instrument-card, .market-strip, .market-strip.compact, .brain-hero, .scenario-grid, .evidence-grid, .method-grid, .event-graph, .financial-brain-grid, .quality-lists, .macro-list, .executive-hero, .executive-command, .executive-grid, .narrative-grid, .sentiment-columns, .opportunity-card, .score-stack, .allocation-list div, .brain-status-grid, .brain-two-col, .chart-snapshot-panel .brain-status-grid, .key-level-grid, .evidence-columns, .terminal-header, .terminal-status-grid, .terminal-command-grid, .market-command-layout, .market-pulse-grid, .pulse-chart-grid, .asset-command-card, .signal-note-grid, .professional-grid-2, .professional-grid-3, .professional-grid-4, .desk-layout, .market-brain-system-grid, .chat-command-layout, .chat-prompt-grid, .chat-answer-grid, .chat-candidate-row, .chatgpt-shell, .chat-evidence-columns, .scenario-mini-grid, .compact-candidate, .asset-context-pill, .context-coverage, .paper-journal-layout { grid-template-columns: 1fr; }
+  .hero, .grid-2, .grid-3, .grid-4, .live-grid, .realtime-strip, .deployment-banner, .diagnostic-grid, .diagnostic-metric-grid, .truth-summary-grid, .diagnostic-key-values, .instrument-card, .market-strip, .market-strip.compact, .brain-hero, .scenario-grid, .evidence-grid, .method-grid, .event-graph, .financial-brain-grid, .quality-lists, .macro-list, .executive-hero, .executive-command, .executive-grid, .narrative-grid, .sentiment-columns, .opportunity-card, .score-stack, .allocation-list div, .brain-status-grid, .brain-two-col, .chart-snapshot-panel .brain-status-grid, .key-level-grid, .evidence-columns, .terminal-header, .terminal-status-grid, .terminal-command-grid, .market-command-layout, .market-pulse-grid, .pulse-chart-grid, .asset-command-card, .signal-note-grid, .professional-grid-2, .professional-grid-3, .professional-grid-4, .desk-layout, .market-brain-system-grid, .chat-command-layout, .chat-prompt-grid, .chat-answer-grid, .chat-candidate-row, .chatgpt-shell, .chat-evidence-columns, .scenario-mini-grid, .compact-candidate, .asset-context-pill, .context-coverage, .paper-journal-layout, .research-planner-lists { grid-template-columns: 1fr; }
   .chat-context-rail { position: static; }
   .chat-thread { max-height: none; }
   .tape-row { grid-template-columns: 1fr; }

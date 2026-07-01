@@ -34,6 +34,7 @@ from app.services.alpha_operating_system import (
     TradingGameReadinessService,
 )
 from app.services.learning_summary import LearningSummaryService
+from app.services.research_planner import AutonomousResearchPlanner
 
 
 TRADER_BRAIN_VERSION = ENGINE_VERSION
@@ -143,6 +144,7 @@ class TraderBrainService:
 
     def training_ground(self, db: Session) -> dict:
         latest_run = latest_row(db, LearningRun)
+        research_planner = AutonomousResearchPlanner().summary(db)
         lessons = dedupe_lessons(
             db.scalars(select(TradeLearningEvidence).order_by(desc(TradeLearningEvidence.created_at)).limit(80)).all()
         )
@@ -161,6 +163,7 @@ class TraderBrainService:
             "generated_at": datetime.utcnow().isoformat(),
             "current_experiment": experiment_from_focus(focus[0] if focus else None, latest_run),
             "current_hypothesis": hypothesis_from_focus(focus[0] if focus else None),
+            "research_planner": research_planner,
             "current_validation": validation_summary(db, latest_run),
             "trades_being_analyzed": trade_analysis_payload(db),
             "patterns_discovered": [lesson_payload(row) for row in lessons if row.lesson_type not in ["setup_failed", "entry_timing_bad"]][:8],

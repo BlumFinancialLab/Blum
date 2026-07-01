@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import { Activity, Brain, FlaskConical, History, SearchCheck, XCircle } from "lucide-react";
+import { Activity, Brain, Compass, FlaskConical, History, Lightbulb, SearchCheck, XCircle } from "lucide-react";
 import { api } from "@/lib/api";
 import { BloombergPanel, MetricCard, TerminalHeader } from "@/components/FinancialTerminal";
 import { LoadingState } from "@/components/LoadingState";
@@ -32,6 +32,7 @@ export default function TrainingGroundPage() {
   const analyzed = data.trades_being_analyzed ?? {};
   const displayStatus = validation.display_status ?? validation.status ?? "unknown";
   const readableStatus = humanStatus(displayStatus);
+  const planner = data.research_planner ?? {};
 
   return (
     <>
@@ -53,6 +54,8 @@ export default function TrainingGroundPage() {
         <MetricCard label="Mistakes" value={evidenceTotal.mistakes_analyzed ?? validation.mistakes_analyzed ?? 0} subvalue={`${evidence24h.mistakes_analyzed ?? 0} classified in last 24h`} icon={<XCircle size={15} />} tone="attention" />
         <MetricCard label="Memory Updates" value={evidenceTotal.memory_updates ?? validation.memory_updates ?? 0} subvalue={`${evidence24h.memory_updates ?? 0} written in last 24h`} icon={<Activity size={15} />} tone="positive" />
       </section>
+
+      <ResearchPlannerPanel planner={planner} />
 
       <section className="grid-2">
         <BloombergPanel title="Current Experiment" value={readableStatus} subtitle="What BLUM is studying now">
@@ -99,6 +102,51 @@ export default function TrainingGroundPage() {
         </BloombergPanel>
       </section>
     </>
+  );
+}
+
+function ResearchPlannerPanel({ planner }: { planner: any }) {
+  const objective = planner.current_research_objective ?? {};
+  const queued = planner.queued_experiments ?? [];
+  const completed = planner.completed_experiments ?? [];
+  const result = planner.experiment_result ?? {};
+  return (
+    <BloombergPanel title="Autonomous Research Planner" value={planner.status ?? "snapshot"} subtitle="The brain behind the Learning Loop: chooses what BLUM studies next.">
+      <div className="grid-2">
+        <div className="brain-list dense">
+          <Fact label="Current Research Objective" value={objective.target ?? "under_sampled_market_coverage"} detail={objective.priority_type} />
+          <Fact label="Why Selected" value={planner.why_selected ?? objective.reason ?? "Planner snapshot not available yet."} />
+          <Fact label="Expected Information Gain" value={formatNumber(planner.expected_information_gain ?? objective.expected_information_gain ?? objective.expected_learning_value)} />
+          <Fact label="Next Hypothesis" value={planner.next_hypothesis ?? "Generate a backend planner snapshot to choose the next experiment."} />
+        </div>
+        <div className="brain-list dense">
+          <Fact label="Experiment Result" value={result.status ?? "not available"} detail={result.summary ?? "No completed experiment result stored yet."} />
+          <Fact label="Exploration Preserved" value={`${Math.round(((planner.exploration_policy?.broad_random_coverage ?? 0.4) * 100))}% broad coverage`} detail={planner.exploration_policy?.rule ?? "Do not always exploit known strategies."} />
+          <Fact label="Queued Experiments" value={queued.length} detail={queued[0]?.experiment ?? queued[0]?.reason ?? "No queued experiment snapshot yet."} />
+          <Fact label="Completed Experiments" value={completed.length} detail={completed[0]?.result ?? "No completed planner experiment stored yet."} />
+        </div>
+      </div>
+      <div className="research-planner-lists">
+        <MiniList title="Queued Experiments" icon={<Compass size={14} />} rows={queued} empty="No queued experiments in the latest snapshot." />
+        <MiniList title="Completed Experiments" icon={<Lightbulb size={14} />} rows={completed} empty="No completed experiments in the latest snapshot." />
+      </div>
+    </BloombergPanel>
+  );
+}
+
+function MiniList({ title, rows, empty, icon }: { title: string; rows: any[]; empty: string; icon: ReactNode }) {
+  return (
+    <div className="research-mini-list">
+      <span>{icon}{title}</span>
+      {rows.slice(0, 5).map((row, index) => (
+        <div key={`${title}-${index}-${row.target ?? row.id ?? row.status}`}>
+          <strong>{row.target ?? row.type ?? row.status ?? "experiment"}</strong>
+          <p>{row.experiment ?? row.reason ?? row.result ?? row.summary ?? "No detail stored."}</p>
+          <em>{row.priority_type ?? row.urgency ?? row.completed_at ?? "stored evidence"}</em>
+        </div>
+      ))}
+      {!rows.length && <div><strong>Empty</strong><p>{empty}</p></div>}
+    </div>
   );
 }
 

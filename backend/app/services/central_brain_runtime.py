@@ -35,6 +35,7 @@ RUNTIME_MODULES = [
     "news_sentiment",
     "signals",
     "learning_loop",
+    "research_planner",
     "trading_game",
     "decision_intelligence",
     "business_quality",
@@ -58,6 +59,7 @@ CRITICAL_SNAPSHOT_TYPES = [
     "capital_allocation_summary",
     "alpha_recovery_summary",
     "meta_cognition_summary",
+    "research_planner_summary",
     "trading_game_readiness",
     "brain_command_summary",
     "alpha_readiness_summary",
@@ -365,6 +367,10 @@ class SnapshotProducerService:
             from app.services.meta_cognition import MetaCognitionEngine
 
             return MetaCognitionEngine().summary(db)
+        if snapshot_type == "research_planner_summary":
+            from app.services.research_planner import AutonomousResearchPlanner
+
+            return AutonomousResearchPlanner().generate(db, persist=False)
         if snapshot_type == "trading_game_readiness":
             from app.services.alpha_operating_system import TradingGameReadinessService
 
