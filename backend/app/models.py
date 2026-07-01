@@ -1446,6 +1446,11 @@ class HistoricalPrediction(Base):
     expected_direction: Mapped[str] = mapped_column(String(40), default="neutral", index=True)
     confidence: Mapped[float] = mapped_column(Float, default=0.0, index=True)
     model_version: Mapped[str] = mapped_column(String(80), default="blum-learning-loop-v1", index=True)
+    model_version_used: Mapped[str] = mapped_column(String(100), default="base-static", index=True)
+    weights_used: Mapped[dict] = mapped_column(JsonType, default=dict)
+    learning_memory_used: Mapped[dict] = mapped_column(JsonType, default=dict)
+    strategy_memory_used: Mapped[dict] = mapped_column(JsonType, default=dict)
+    research_priority_used: Mapped[dict] = mapped_column(JsonType, default=dict)
     data_quality_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
@@ -1482,6 +1487,30 @@ class PredictionOutcome(Base):
     outcome_label: Mapped[str] = mapped_column(String(40), default="inconclusive", index=True)
     confidence_calibration_error: Mapped[float | None] = mapped_column(Float)
     metrics_payload: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    prediction = relationship("HistoricalPrediction")
+
+
+class FeedbackLoopAudit(Base):
+    __tablename__ = "feedback_loop_audits"
+    __table_args__ = (
+        Index("ix_feedback_loop_audits_prediction_created", "prediction_id", "created_at"),
+        Index("ix_feedback_loop_audits_model_created", "model_version_used", "created_at"),
+        Index("ix_feedback_loop_audits_improvement", "improvement_detected", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    prediction_id: Mapped[int | None] = mapped_column(ForeignKey("historical_predictions.id", ondelete="SET NULL"), index=True)
+    ticker: Mapped[str] = mapped_column(String(32), index=True)
+    model_version_used: Mapped[str] = mapped_column(String(100), default="base-static", index=True)
+    learned_knowledge_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    changes_applied_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    future_decision_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    outcome_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    improvement_detected: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    evidence_grade: Mapped[str] = mapped_column(String(80), default="insufficient", index=True)
+    summary: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
     prediction = relationship("HistoricalPrediction")
