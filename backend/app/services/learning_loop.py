@@ -1091,12 +1091,6 @@ class FeedbackLoopAuditService:
         correct = sum(1 for row in usable if row.get("outcome_label") == "correct")
         wrong = sum(1 for row in usable if row.get("outcome_label") == "wrong")
         returns = [safe_float(row.get("realized_return")) for row in usable if row.get("realized_return") is not None]
-        changed_decision = bool(
-            feedback.get("weight_source") == "active_model_version"
-            or safe_float(feedback.get("confidence_adjustment")) != 0.0
-            or (feedback.get("research_priority_used") or {}).get("status") != "not_applicable"
-        )
-        improved = bool(changed_decision and (correct > wrong or (returns and mean(returns) > 0)))
         evidence_grade = "medium" if len(usable) >= 3 else "low" if usable else "insufficient"
         learned = {
             "memory_updates": memory_updates[:12],
@@ -1104,6 +1098,14 @@ class FeedbackLoopAuditService:
             "strategy_memory_used": (feedback.get("strategy_memory_used") or {}).get("rows", []),
         }
         counterfactual = self.counterfactual_audit(prediction, prediction_payload, outcomes)
+        comparison = counterfactual.get("outcome_comparison", {})
+        changed_decision = bool(
+            (counterfactual.get("differences") or {}).get("direction_changed")
+            or (counterfactual.get("differences") or {}).get("actionability_changed")
+            or safe_float((counterfactual.get("differences") or {}).get("score_delta")) != 0.0
+            or safe_float((counterfactual.get("differences") or {}).get("confidence_delta")) != 0.0
+        )
+        improved = bool(comparison.get("improvement_detected"))
         changes = {
             "model_version_used": feedback.get("model_version_used"),
             "weights_used": feedback.get("weights_used"),
@@ -1129,11 +1131,21 @@ class FeedbackLoopAuditService:
             "neutral": sum(1 for row in usable if row.get("outcome_label") == "neutral"),
             "average_realized_return": round(mean(returns), 4) if returns else None,
             "outcomes": {row.get("timeframe"): row.get("outcome_label") for row in outcomes},
+            "baseline_direction_correct": comparison.get("baseline_direction_correct"),
+            "learned_direction_correct": comparison.get("learned_direction_correct"),
+            "baseline_actionability": comparison.get("baseline_actionability"),
+            "learned_actionability": comparison.get("learned_actionability"),
+            "baseline_would_trade": comparison.get("baseline_would_trade"),
+            "learned_would_trade": comparison.get("learned_would_trade"),
+            "avoided_loss": comparison.get("avoided_loss"),
+            "missed_gain": comparison.get("missed_gain"),
+            "improvement_reason": comparison.get("improvement_reason"),
         }
         summary = (
             f"{prediction.ticker} used {feedback.get('model_version_used', 'base-static')} with "
             f"confidence adjustment {safe_float(feedback.get('confidence_adjustment')):.2f}; "
-            f"changed_decision={changed_decision}, improved={improved}."
+            f"changed_decision={changed_decision}, improved={improved}. "
+            f"reason={comparison.get('improvement_reason', 'counterfactual_not_available')}."
         )
         row = FeedbackLoopAudit(
             prediction_id=prediction.id,
@@ -1167,25 +1179,44 @@ class FeedbackLoopAuditService:
         context.pop("future_prices", None)
         baseline = PredictionEngine().baseline_prediction(context) if context else {}
         learned_prediction = prediction_payload.get("prediction") or {}
+        baseline_actionability = baseline.get("actionability")
+        learned_actionability = feedback_actionability(
+            learned_prediction.get("dominant_direction"),
+            learned_prediction.get("aggregate_confidence"),
+            learned_prediction.get("aggregate_score"),
+        )
         learned = {
             "model_version_used": (prediction_payload.get("feedback_loop") or {}).get("model_version_used") or "base-static",
             "weights_used": prediction_payload.get("weights_used") or {},
             "aggregate_score": learned_prediction.get("aggregate_score"),
             "aggregate_confidence": learned_prediction.get("aggregate_confidence"),
             "dominant_direction": learned_prediction.get("dominant_direction"),
-            "actionability": feedback_actionability(
-                learned_prediction.get("dominant_direction"),
-                learned_prediction.get("aggregate_confidence"),
-                learned_prediction.get("aggregate_score"),
-            ),
+            "actionability": learned_actionability,
             "confidence_adjustment": (prediction_payload.get("feedback_loop") or {}).get("confidence_adjustment", 0.0),
             "memory_adjustment_used": bool((prediction_payload.get("feedback_loop") or {}).get("confidence_adjustment")),
         }
+        baseline_correct = direction_correctness_summary(baseline.get("dominant_direction"), outcomes)
+        learned_correct = direction_correctness_summary(learned.get("dominant_direction"), outcomes)
+        baseline_would_trade = feedback_would_trade(baseline_actionability)
+        learned_would_trade = feedback_would_trade(learned_actionability)
+        returns = [safe_float(row.get("realized_return")) for row in outcomes if row.get("realized_return") is not None]
+        average_return = mean(returns) if returns else 0.0
+        avoided_loss = round(abs(average_return), 4) if baseline_would_trade and not learned_would_trade and average_return < 0 else 0.0
+        missed_gain = round(average_return, 4) if baseline_would_trade and not learned_would_trade and average_return > 0 else 0.0
+        improvement_detected, improvement_reason = counterfactual_improvement_reason(
+            baseline_correct,
+            learned_correct,
+            baseline_would_trade,
+            learned_would_trade,
+            average_return,
+            avoided_loss,
+            missed_gain,
+        )
         comparison = {
             "score_delta": round(safe_float(learned.get("aggregate_score")) - safe_float(baseline.get("aggregate_score")), 4),
             "confidence_delta": round(safe_float(learned.get("aggregate_confidence")) - safe_float(baseline.get("aggregate_confidence")), 4),
             "direction_changed": baseline.get("dominant_direction") != learned.get("dominant_direction"),
-            "actionability_changed": baseline.get("actionability") != learned.get("actionability"),
+            "actionability_changed": baseline_actionability != learned_actionability,
         }
         return {
             "baseline_prediction": baseline,
@@ -1196,6 +1227,18 @@ class FeedbackLoopAuditService:
                 "realized_returns": {row.get("timeframe"): row.get("realized_return") for row in outcomes},
                 "learned_direction": learned.get("dominant_direction"),
                 "baseline_direction": baseline.get("dominant_direction"),
+                "baseline_direction_correct": baseline_correct["direction_correct"],
+                "learned_direction_correct": learned_correct["direction_correct"],
+                "baseline_correct_count": baseline_correct["correct_count"],
+                "learned_correct_count": learned_correct["correct_count"],
+                "baseline_actionability": baseline_actionability,
+                "learned_actionability": learned_actionability,
+                "baseline_would_trade": baseline_would_trade,
+                "learned_would_trade": learned_would_trade,
+                "avoided_loss": avoided_loss,
+                "missed_gain": missed_gain,
+                "improvement_detected": improvement_detected,
+                "improvement_reason": improvement_reason,
                 "policy": "Outcome is observed after prediction persistence; baseline is recomputed only from point-in-time context.",
             },
         }
@@ -1685,7 +1728,7 @@ def learning_mode_metadata(trigger: str | None, sample_metadata: dict | None = N
     return {
         "mode": mode,
         "training_replay": mode == "training_replay",
-        "walk_forward_validation": settings.learning_evaluation_mode == "walk_forward" and mode != "paper_forward",
+        "walk_forward_validation": mode == "walk_forward_validation",
         "paper_forward": mode == "paper_forward",
         "trigger": trigger or sample_metadata.get("run_trigger") or "unknown",
         "sampling_reason": sampling_reason,
@@ -1704,6 +1747,60 @@ def feedback_actionability(direction: str | None, confidence: float | None, scor
     if confidence_value >= 54 and direction in {"bullish", "bearish"}:
         return "wait_for_trigger"
     return "watch"
+
+
+def feedback_would_trade(actionability: str | None) -> bool:
+    return actionability in {"active_setup", "wait_for_trigger", "actionable_if_confirmed"}
+
+
+def direction_correctness_summary(direction: str | None, outcomes: list[dict]) -> dict:
+    rows = [row for row in outcomes if row.get("realized_return") is not None]
+    if not rows:
+        return {"direction_correct": None, "correct_count": 0, "wrong_count": 0, "sample_count": 0}
+    correct = sum(1 for row in rows if direction_matches_return(direction, safe_float(row.get("realized_return"))))
+    wrong = len(rows) - correct
+    return {
+        "direction_correct": correct > wrong,
+        "correct_count": correct,
+        "wrong_count": wrong,
+        "sample_count": len(rows),
+    }
+
+
+def direction_matches_return(direction: str | None, realized_return: float) -> bool:
+    if direction == "bullish":
+        return realized_return > 0
+    if direction == "bearish":
+        return realized_return < 0
+    if direction == "neutral":
+        return abs(realized_return) <= 1.0
+    return False
+
+
+def counterfactual_improvement_reason(
+    baseline_correct: dict,
+    learned_correct: dict,
+    baseline_would_trade: bool,
+    learned_would_trade: bool,
+    average_return: float,
+    avoided_loss: float,
+    missed_gain: float,
+) -> tuple[bool, str]:
+    baseline_count = int(baseline_correct.get("correct_count") or 0)
+    learned_count = int(learned_correct.get("correct_count") or 0)
+    if learned_count > baseline_count:
+        return True, "learned_direction_more_correct_than_baseline"
+    if learned_count < baseline_count:
+        return False, "learned_direction_less_correct_than_baseline"
+    if avoided_loss > 0:
+        return True, "learned_actionability_avoided_baseline_loss"
+    if missed_gain > 0:
+        return False, "learned_actionability_missed_baseline_gain"
+    if learned_would_trade and not baseline_would_trade and average_return > 0:
+        return True, "learned_actionability_captured_gain_baseline_would_skip"
+    if learned_would_trade and not baseline_would_trade and average_return < 0:
+        return False, "learned_actionability_entered_losing_trade_baseline_would_skip"
+    return False, "no_counterfactual_improvement_detected"
 
 
 def model_weights_with_fallback(weights: dict) -> dict:

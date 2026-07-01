@@ -22,6 +22,7 @@ from app.services.learning_loop import (
     LearningLoopService,
     ModelScoreService,
     PredictionEngine,
+    learning_mode_metadata,
 )
 from app.services.trading_game import TradingGameSimulator
 
@@ -121,6 +122,25 @@ def test_fallback_to_base_weights_without_active_model_version():
     assert prediction["model_version_used"] == "base-static"
     assert prediction["feedback_loop"]["weight_source"] == "base_signal_weights"
     assert prediction["weights_used"] == BASE_SIGNAL_WEIGHTS
+
+
+def test_learning_mode_metadata_is_mutually_exclusive():
+    training = learning_mode_metadata("test", {"sampling_reason": "learning_focus_priority"})
+    walk_forward = learning_mode_metadata("test", {"sampling_reason": "random_point_in_time"})
+    paper = learning_mode_metadata("paper_forward", {"mode": "paper_forward"})
+
+    assert training["mode"] == "training_replay"
+    assert training["training_replay"] is True
+    assert training["walk_forward_validation"] is False
+    assert training["paper_forward"] is False
+    assert walk_forward["mode"] == "walk_forward_validation"
+    assert walk_forward["training_replay"] is False
+    assert walk_forward["walk_forward_validation"] is True
+    assert walk_forward["paper_forward"] is False
+    assert paper["mode"] == "paper_forward"
+    assert paper["training_replay"] is False
+    assert paper["walk_forward_validation"] is False
+    assert paper["paper_forward"] is True
 
 
 def test_signal_performance_changes_confidence():
@@ -242,13 +262,23 @@ def test_run_single_sample_persists_weights_memory_research_priority_and_audit()
     assert prediction.strategy_memory_used["policy"].startswith("StrategyMemory")
     assert prediction.research_priority_used["priority_type"] == "missed_entry_replay"
     assert prediction.prediction_payload["learning_mode_metadata"]["training_replay"] is True
-    assert prediction.prediction_payload["learning_mode_metadata"]["walk_forward_validation"] is True
+    assert prediction.prediction_payload["learning_mode_metadata"]["walk_forward_validation"] is False
     assert report["feedback_loop_audit"]["model_version_used"] == "learned-active"
     assert report["feedback_loop_audit"]["counterfactual_audit"]["baseline_prediction"]["model_version_used"] == "base-static"
     assert "score_delta" in report["feedback_loop_audit"]["counterfactual_audit"]["differences"]
+    comparison = report["feedback_loop_audit"]["counterfactual_audit"]["outcome_comparison"]
+    assert "baseline_direction_correct" in comparison
+    assert "learned_direction_correct" in comparison
+    assert "baseline_would_trade" in comparison
+    assert "learned_would_trade" in comparison
+    assert "avoided_loss" in comparison
+    assert "missed_gain" in comparison
+    assert "improvement_reason" in comparison
+    assert report["feedback_loop_audit"]["improvement_detected"] == comparison["improvement_detected"]
     assert audit is not None
     assert audit.future_decision_json["ticker"] == "NVDA"
     assert audit.changes_applied_json["counterfactual_audit"]["learned_prediction"]["model_version_used"] == "learned-active"
+    assert audit.outcome_json["improvement_reason"] == comparison["improvement_reason"]
 
 
 def test_paper_trade_payload_includes_feedback_loop_metadata():
