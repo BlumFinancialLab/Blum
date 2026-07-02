@@ -99,6 +99,7 @@ class Settings(BaseSettings):
     live_trading_game_require_actionable_setup: bool = Field(default=True, alias="LIVE_TRADING_GAME_REQUIRE_ACTIONABLE_SETUP")
     live_trading_game_allow_fractional_shares: bool = Field(default=True, alias="LIVE_TRADING_GAME_ALLOW_FRACTIONAL_SHARES")
     live_trading_game_benchmark: str = Field(default="SPY", alias="LIVE_TRADING_GAME_BENCHMARK")
+    paper_forward_lifecycle_enabled: bool = Field(default=False, alias="PAPER_FORWARD_LIFECYCLE_ENABLED")
     self_improvement_enabled: bool = Field(default=True, alias="SELF_IMPROVEMENT_ENABLED")
     self_improvement_auto_apply: bool = Field(default=False, alias="SELF_IMPROVEMENT_AUTO_APPLY")
     self_improvement_auto_apply_low_risk: bool = Field(default=True, alias="SELF_IMPROVEMENT_AUTO_APPLY_LOW_RISK")
