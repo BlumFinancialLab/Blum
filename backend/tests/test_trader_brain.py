@@ -9,6 +9,8 @@ from app.models import (
     LearningBenchmarkComparison,
     LearningFocusPriority,
     LearningRun,
+    LiveForwardPaperGame,
+    LiveForwardPaperTrade,
     SelfImprovementAction,
     TradeLearningEvidence,
     TradingGame,
@@ -174,9 +176,55 @@ def test_alpha_page_reports_insufficient_evidence_instead_of_claiming_alpha():
     with setup_db() as db:
         payload = TraderBrainService().alpha(db)
 
-    assert payload["status"] == "INSUFFICIENT_EVIDENCE"
-    assert payload["historical"]["status"] == "insufficient_evidence"
-    assert payload["policy"].startswith("Alpha page reports benchmark-relative evidence")
+    assert payload["status"] == "NO_DATA"
+    assert payload["evidence_grade"] == "NO_DATA"
+    assert payload["historical"]["status"] == "NO_DATA"
+    assert payload["policy"].startswith("Alpha page reports benchmark-relative paper-forward evidence")
+    assert payload["verdict"] == "No alpha evidence yet."
+    assert payload["current_blockers"]
+
+
+def test_alpha_snapshot_uses_closed_paper_forward_evidence_without_blending_historical():
+    with setup_db() as db:
+        game = LiveForwardPaperGame(game_id="alpha-paper-forward", starting_capital=100.0, current_capital=108.0)
+        db.add(game)
+        db.flush()
+        db.add(
+            LiveForwardPaperTrade(
+                trade_uid="pf-alpha-1",
+                duplicate_key="pf-alpha-1",
+                game_id=game.id,
+                ticker="NVDA",
+                setup_type="momentum_breakout",
+                status="CLOSED",
+                close_reason="TARGET_1_HIT",
+                decision_timestamp=datetime.utcnow(),
+                decision_date=date(2026, 1, 2),
+                entry_price=100.0,
+                exit_price=108.0,
+                position_size=1.0,
+                stop_loss=96.0,
+                target_1=108.0,
+                net_pnl_eur=8.0,
+                pnl_percent=8.0,
+                r_multiple=2.0,
+                benchmark_return_same_period=2.0,
+                excess_return_vs_benchmark=6.0,
+                outcome_label="target_hit",
+                lesson_learned="Momentum breakout worked only with volume confirmation.",
+            )
+        )
+        db.add(LearningBenchmarkComparison(mode="historical_simulation", benchmark_name="SPY", blum_return=30.0, benchmark_return=10.0, excess_return=20.0, sample_size=100, result_label="outperforming"))
+        db.commit()
+
+        payload = TraderBrainService().alpha(db)
+
+    assert payload["sample_size"] == 1
+    assert payload["alpha"] == 6.0
+    assert payload["paper_forward_alpha"] == 6.0
+    assert payload["historical_alpha"] == 20.0
+    assert payload["evidence_grade"] == "INSUFFICIENT_EVIDENCE"
+    assert payload["latest_alpha_lessons"][0]["ticker"] == "NVDA"
 
 
 def test_product_surface_is_reduced_to_four_primary_pages():

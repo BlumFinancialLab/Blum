@@ -46,6 +46,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let mounted = true;
     const onPaperTrading = pathname === "/paper-trading" || pathname === "/copy-trading" || pathname.startsWith("/paper-trading/") || pathname.startsWith("/copy-trading/");
+    const onAlpha = pathname === "/alpha" || pathname.startsWith("/alpha/");
     if (onPaperTrading) {
       api.paperForwardSnapshot().then((paper) => {
         if (!mounted) return;
@@ -66,6 +67,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             alphaEvidenceGrade: "not queried",
           });
         }
+      });
+      return () => {
+        mounted = false;
+      };
+    }
+    if (onAlpha) {
+      setSidebarStatus({
+        workerStatus: "snapshot",
+        modelStatus: "alpha evidence",
+        lastLearningCycle: "not queried",
+        paperForwardStatus: "not queried",
+        alphaEvidenceGrade: "see page",
       });
       return () => {
         mounted = false;

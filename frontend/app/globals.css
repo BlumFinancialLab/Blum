@@ -3128,13 +3128,170 @@ p { color: var(--muted); line-height: 1.55; }
   font-size: 22px;
 }
 
+.alpha-verdict-panel {
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid rgba(255,255,255,.085);
+  border-radius: 8px;
+  padding: 18px;
+  margin-bottom: 14px;
+  background:
+    linear-gradient(135deg, rgba(255,176,0,.08), rgba(42,111,255,.045)),
+    #05080d;
+}
+.alpha-verdict-panel span {
+  color: var(--amber);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  font-weight: 900;
+}
+.alpha-verdict-panel h2 {
+  margin: 6px 0;
+  color: #f6f9ff;
+  font-size: clamp(25px, 3vw, 42px);
+  line-height: 1.05;
+}
+.alpha-verdict-panel p {
+  max-width: 760px;
+  margin: 0;
+  color: #9ca9bb;
+  font-size: 13px;
+}
+.alpha-grade {
+  display: grid;
+  place-content: center;
+  gap: 4px;
+  min-width: 210px;
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 8px;
+  padding: 14px;
+  text-align: center;
+  background: rgba(255,255,255,.035);
+}
+.alpha-grade strong {
+  color: #f5f8ff;
+  font-size: 18px;
+}
+.alpha-grade span {
+  color: #9ba8bb;
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.alpha-grade.tone-positive { border-color: rgba(38,201,122,.35); }
+.alpha-grade.tone-attention { border-color: rgba(255,176,0,.35); }
+.alpha-grade.tone-negative { border-color: rgba(255,91,105,.35); }
+.alpha-evidence-ladder {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 5px;
+}
+.alpha-evidence-ladder div {
+  min-height: 38px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255,255,255,.075);
+  border-radius: 6px;
+  background: #070b11;
+  color: #8996aa;
+  font-size: 10px;
+  font-weight: 900;
+  text-align: center;
+  text-transform: uppercase;
+  overflow-wrap: anywhere;
+}
+.alpha-evidence-ladder div.active {
+  border-color: rgba(255,176,0,.42);
+  background: rgba(255,176,0,.1);
+  color: #f6d27a;
+}
+.alpha-split-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+.alpha-split-card {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(255,255,255,.085);
+  border-radius: 8px;
+  padding: 12px;
+  background: #070b11;
+}
+.alpha-split-card.tone-positive { border-color: rgba(38,201,122,.28); }
+.alpha-split-card.tone-attention { border-color: rgba(255,176,0,.32); }
+.alpha-split-card.tone-negative { border-color: rgba(255,91,105,.32); }
+.alpha-split-card > span {
+  color: #96a3b6;
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+.alpha-split-card > strong {
+  color: #f3f7ff;
+  font-size: 16px;
+}
+.alpha-split-card p {
+  margin: 0;
+  color: #8794a6;
+  font-size: 12px;
+}
+.alpha-split-card div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #aab6c7;
+  font-size: 11px;
+}
+.alpha-split-card em {
+  color: #f1f5fb;
+  font-style: normal;
+  font-weight: 900;
+}
+.alpha-table {
+  display: grid;
+  gap: 4px;
+  overflow-x: auto;
+}
+.alpha-table-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1.3fr) 70px 80px 80px minmax(120px, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-width: 620px;
+  border: 1px solid rgba(255,255,255,.06);
+  border-radius: 6px;
+  padding: 8px;
+  background: #070b11;
+  color: #aab6c7;
+  font-size: 11px;
+}
+.alpha-table-row.head {
+  color: #7f8da2;
+  background: transparent;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  font-weight: 900;
+}
+.alpha-table-row strong {
+  color: #f2f6fd;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 1080px) {
   .app-shell { grid-template-columns: 1fr; }
   .sidebar { position: static; height: auto; }
   .system-card { position: static; margin-top: 14px; }
   .page-header { align-items: flex-start; flex-direction: column; }
+  .alpha-verdict-panel { flex-direction: column; }
+  .alpha-grade { min-width: 0; }
   .header-actions { justify-content: flex-start; }
-  .hero, .grid-2, .grid-3, .grid-4, .live-grid, .realtime-strip, .deployment-banner, .diagnostic-grid, .diagnostic-metric-grid, .truth-summary-grid, .diagnostic-key-values, .instrument-card, .market-strip, .market-strip.compact, .brain-hero, .scenario-grid, .evidence-grid, .method-grid, .event-graph, .financial-brain-grid, .quality-lists, .macro-list, .executive-hero, .executive-command, .executive-grid, .narrative-grid, .sentiment-columns, .opportunity-card, .score-stack, .allocation-list div, .brain-status-grid, .brain-two-col, .chart-snapshot-panel .brain-status-grid, .key-level-grid, .evidence-columns, .terminal-header, .terminal-status-grid, .terminal-command-grid, .market-command-layout, .market-pulse-grid, .pulse-chart-grid, .asset-command-card, .signal-note-grid, .professional-grid-2, .professional-grid-3, .professional-grid-4, .desk-layout, .market-brain-system-grid, .chat-command-layout, .chat-prompt-grid, .chat-answer-grid, .chat-candidate-row, .chatgpt-shell, .chat-evidence-columns, .scenario-mini-grid, .compact-candidate, .asset-context-pill, .context-coverage, .paper-journal-layout, .paper-forward-grid, .paper-forward-card-grid, .paper-blocker-list, .research-planner-lists { grid-template-columns: 1fr; }
+  .hero, .grid-2, .grid-3, .grid-4, .live-grid, .realtime-strip, .deployment-banner, .diagnostic-grid, .diagnostic-metric-grid, .truth-summary-grid, .diagnostic-key-values, .instrument-card, .market-strip, .market-strip.compact, .brain-hero, .scenario-grid, .evidence-grid, .method-grid, .event-graph, .financial-brain-grid, .quality-lists, .macro-list, .executive-hero, .executive-command, .executive-grid, .narrative-grid, .sentiment-columns, .opportunity-card, .score-stack, .allocation-list div, .brain-status-grid, .brain-two-col, .chart-snapshot-panel .brain-status-grid, .key-level-grid, .evidence-columns, .terminal-header, .terminal-status-grid, .terminal-command-grid, .market-command-layout, .market-pulse-grid, .pulse-chart-grid, .asset-command-card, .signal-note-grid, .professional-grid-2, .professional-grid-3, .professional-grid-4, .desk-layout, .market-brain-system-grid, .chat-command-layout, .chat-prompt-grid, .chat-answer-grid, .chat-candidate-row, .chatgpt-shell, .chat-evidence-columns, .scenario-mini-grid, .compact-candidate, .asset-context-pill, .context-coverage, .paper-journal-layout, .paper-forward-grid, .paper-forward-card-grid, .paper-blocker-list, .research-planner-lists, .alpha-evidence-ladder, .alpha-split-grid { grid-template-columns: 1fr; }
   .chat-context-rail { position: static; }
   .chat-thread { max-height: none; }
   .tape-row { grid-template-columns: 1fr; }

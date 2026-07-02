@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import datetime, timedelta
-from statistics import mean
+from statistics import mean, median
 from typing import Any
 
 from sqlalchemy import desc, func, select
@@ -21,6 +22,8 @@ from app.models import (
     ReasoningNoiseFlag,
     SelfImprovementAction,
     TradeLearningEvidence,
+    LiveForwardPaperGame,
+    LiveForwardPaperTrade,
     TradingCapitalCycle,
     TradingGame,
     TradingGameTrade,
@@ -217,37 +220,85 @@ class TraderBrainService:
         }
 
     def alpha(self, db: Session) -> dict:
-        alpha = AlphaReadinessEngine().readiness(db)
-        edge = EdgeMapService().edge_map(db, limit=8)
+        alpha_readiness = AlphaReadinessEngine().readiness(db)
         gates = AlphaGateService().gates(db)
-        game = latest_row(db, TradingGame)
-        metric = latest_row(db, TradingIntelligenceMetric)
-        cycle = latest_row(db, TradingCapitalCycle)
+        live_game = latest_row(db, LiveForwardPaperGame)
         benchmarks = latest_benchmarks(db)
+        paper_rows = db.scalars(select(LiveForwardPaperTrade).order_by(desc(LiveForwardPaperTrade.created_at)).limit(500)).all()
+        lesson_rows = dedupe_lessons(
+            db.scalars(select(TradeLearningEvidence).order_by(desc(TradeLearningEvidence.created_at)).limit(60)).all()
+        )
+        closed_rows = [row for row in paper_rows if paper_forward_trade_is_closed(row)]
+        open_rows = [row for row in paper_rows if paper_forward_trade_is_open(row)]
+        all_benchmark_rows = [row for row in closed_rows if row.benchmark_return_same_period is not None or row.excess_return_vs_benchmark is not None]
+        paper_summary = paper_forward_alpha_summary(paper_rows, live_game)
+        blocker_rows = alpha_blockers(paper_rows, closed_rows, benchmarks, paper_summary)
+        evidence_grade, evidence_reason = alpha_evidence_grade(
+            closed_count=len(closed_rows),
+            has_benchmark=bool(all_benchmark_rows or benchmarks),
+            alpha=paper_summary["alpha"],
+            expectancy=paper_summary["expectancy"],
+            max_drawdown=paper_summary["max_drawdown"],
+            profit_factor=paper_summary["profit_factor"],
+            setup_count=len({row.setup_type for row in closed_rows if row.setup_type}),
+            regime_count=len({(row.frozen_decision_payload or {}).get("market_regime") or "unknown" for row in closed_rows}),
+        )
+        verdict = alpha_verdict(evidence_grade, paper_summary, blocker_rows)
+        latest_update = latest_paper_forward_update(paper_rows, benchmarks)
         return {
-            "status": alpha.get("status"),
+            "status": "READY" if paper_rows else "NO_DATA",
             "version": TRADER_BRAIN_VERSION,
+            "snapshot_type": "AlphaSnapshot",
             "generated_at": datetime.utcnow().isoformat(),
-            "blum_return": return_percent(game, cycle),
-            "benchmark_return": best_benchmark_return(benchmarks),
-            "alpha": best_benchmark_excess(benchmarks),
-            "sharpe": safe_float(getattr(metric, "sharpe_proxy", None), None),
-            "sortino": safe_float(getattr(metric, "sortino_proxy", None), None),
-            "drawdown": first_not_none(safe_float(getattr(metric, "max_drawdown", None), None), safe_float(getattr(game, "max_drawdown", None), None)),
-            "win_rate": first_not_none(safe_float(getattr(metric, "win_rate", None), None), safe_float(getattr(game, "win_rate", None), None)),
-            "expectancy": first_not_none(safe_float(getattr(metric, "expectancy_r", None), None), safe_float(getattr(game, "expectancy_r", None), None)),
-            "profit_factor": safe_float(getattr(game, "profit_factor", None), None),
-            "sample_size": alpha.get("trade_count"),
-            "evidence_grade": alpha.get("evidence_grade"),
+            "readiness_status": evidence_grade,
+            "evidence_grade": evidence_grade,
+            "evidence_reason": evidence_reason,
+            "verdict": verdict,
+            "last_updated_at": latest_update,
+            "sample_size": len(closed_rows),
+            "closed_trade_count": len(closed_rows),
+            "open_trade_count": len(open_rows),
+            "min_required_sample_size": 30,
+            "blum_return": paper_summary["blum_return"],
+            "benchmark_return": paper_summary["benchmark_return"],
+            "alpha": paper_summary["alpha"],
+            "sharpe": paper_summary["sharpe"],
+            "sortino": paper_summary["sortino"],
+            "max_drawdown": paper_summary["max_drawdown"],
+            "drawdown": paper_summary["max_drawdown"],
+            "expectancy": paper_summary["expectancy"],
+            "profit_factor": paper_summary["profit_factor"],
+            "win_rate": paper_summary["win_rate"],
+            "average_r": paper_summary["average_r"],
+            "median_r": paper_summary["median_r"],
+            "best_trade": alpha_trade_summary(paper_summary["best_trade"]),
+            "worst_trade": alpha_trade_summary(paper_summary["worst_trade"]),
+            "benchmark_excess": paper_summary["benchmark_excess"],
+            "realized_pnl": paper_summary["realized_pnl"],
+            "unrealized_pnl": paper_summary["unrealized_pnl"],
+            "paper_forward_alpha": paper_summary["alpha"],
+            "historical_alpha": evidence_slice(benchmarks, mode="historical_simulation").get("average_excess_return"),
+            "walk_forward_alpha": evidence_slice(benchmarks, mode="walk_forward_validation").get("average_excess_return"),
+            "live_forward_alpha": paper_summary["alpha"],
+            "best_edge": edge_summary(paper_rows, "best"),
+            "worst_edge": edge_summary(paper_rows, "worst"),
+            "biggest_weakness": blocker_rows[0] if blocker_rows else None,
+            "current_blocker": blocker_rows[0]["title"] if blocker_rows else None,
+            "current_risk_warning": alpha_risk_warning(paper_summary, blocker_rows),
+            "latest_lesson_affecting_alpha": latest_alpha_lesson(closed_rows, lesson_rows),
+            "confidence_in_evidence": confidence_in_alpha_evidence(evidence_grade, len(closed_rows), bool(all_benchmark_rows or benchmarks)),
             "historical": evidence_slice(benchmarks, mode="historical_simulation"),
-            "walk_forward": evidence_slice(benchmarks, mode="walk_forward"),
-            "paper_forward": evidence_slice(benchmarks, mode="paper_pl_learning"),
-            "live_forward": evidence_slice(benchmarks, mode="live_forward_paper"),
-            "current_alpha_readiness": alpha,
-            "edge_map": edge,
+            "walk_forward": evidence_slice(benchmarks, mode="walk_forward_validation"),
+            "paper_forward": paper_forward_evidence_split(paper_rows, live_game, label="Paper-Forward Evidence"),
+            "live_forward": paper_forward_evidence_split(closed_rows, live_game, label="Live-Forward Closed Evidence"),
+            "current_alpha_readiness": alpha_readiness,
+            "edge_map": alpha_edge_map(paper_rows),
+            "weakness_map": alpha_weakness_map(paper_rows, closed_rows, benchmarks, paper_summary),
+            "current_blockers": blocker_rows,
+            "latest_alpha_lessons": alpha_lessons(closed_rows, lesson_rows),
             "gates": gates,
-            "truth": alpha.get("truth_layer") or alpha.get("warnings") or ["Insufficient evidence."],
-            "policy": "Alpha page reports benchmark-relative evidence. It never hides underperformance and never claims market beating without sufficient samples.",
+            "truth": alpha_truth_lines(verdict, blocker_rows, paper_summary),
+            "policy": "Alpha page reports benchmark-relative paper-forward evidence. It never hides underperformance and never claims market beating without sufficient samples.",
         }
 
 
@@ -933,15 +984,26 @@ def best_benchmark_excess(rows: list[LearningBenchmarkComparison]) -> float | No
 def evidence_slice(rows: list[LearningBenchmarkComparison], mode: str) -> dict:
     selected = [row for row in rows if row.mode == mode]
     if not selected:
-        return {"status": "insufficient_evidence", "sample_size": 0}
+        return {"status": "NO_DATA", "sample_size": 0, "evidence_grade": "NO_DATA"}
+    sample_size = sum(row.sample_size or 0 for row in selected)
+    average_excess = average_present([row.excess_return for row in selected])
+    blum_return = average_present([row.blum_return for row in selected])
+    benchmark_return = average_present([row.benchmark_return for row in selected])
+    grade = evidence_grade_from_benchmark_rows(selected)
     return {
         "status": "ready",
-        "sample_size": sum(row.sample_size or 0 for row in selected),
-        "average_excess_return": average_present([row.excess_return for row in selected]),
+        "sample_size": sample_size,
+        "return": blum_return,
+        "benchmark_return": benchmark_return,
+        "benchmark_excess": average_excess,
+        "average_excess_return": average_excess,
+        "evidence_grade": grade,
         "results": [
             {
                 "benchmark": row.benchmark_name,
                 "result_label": row.result_label,
+                "blum_return": row.blum_return,
+                "benchmark_return": row.benchmark_return,
                 "excess_return": row.excess_return,
                 "sample_size": row.sample_size,
                 "statistical_confidence": row.statistical_confidence,
@@ -949,6 +1011,397 @@ def evidence_slice(rows: list[LearningBenchmarkComparison], mode: str) -> dict:
             for row in selected[:6]
         ],
     }
+
+
+def paper_forward_trade_is_closed(row: LiveForwardPaperTrade) -> bool:
+    return bool(row.closed_at or row.exit_price is not None or row.close_reason or str(row.status or "").upper() in {"CLOSED", "EXITED"})
+
+
+def paper_forward_trade_is_open(row: LiveForwardPaperTrade) -> bool:
+    status = str(row.status or "").upper()
+    return bool(status == "OPEN" or (row.opened_at and not paper_forward_trade_is_closed(row)))
+
+
+def paper_forward_alpha_summary(rows: list[LiveForwardPaperTrade], game: LiveForwardPaperGame | None) -> dict:
+    closed = [row for row in rows if paper_forward_trade_is_closed(row)]
+    open_rows = [row for row in rows if paper_forward_trade_is_open(row)]
+    pnl_values = [safe_float(row.net_pnl_eur, None) for row in closed if row.net_pnl_eur is not None]
+    r_values = [safe_float(row.r_multiple, None) for row in closed if row.r_multiple is not None]
+    positive_pnl = [value for value in pnl_values if value is not None and value > 0]
+    negative_pnl = [abs(value) for value in pnl_values if value is not None and value < 0]
+    benchmark_returns = [safe_float(row.benchmark_return_same_period, None) for row in closed if row.benchmark_return_same_period is not None]
+    excess_values = [safe_float(row.excess_return_vs_benchmark, None) for row in closed if row.excess_return_vs_benchmark is not None]
+    drawdown_candidates = [safe_float(row.max_adverse_excursion, None) for row in closed if row.max_adverse_excursion is not None]
+    realized_pnl = round(sum(value for value in pnl_values if value is not None), 4)
+    unrealized_pnl = round(sum(safe_float(row.unrealized_pnl, 0.0) or 0.0 for row in open_rows), 4)
+    start_capital = safe_float(getattr(game, "starting_capital", None), None)
+    current_capital = safe_float(getattr(game, "current_capital", None), None)
+    if start_capital and current_capital is not None:
+        blum_return = round(((current_capital - start_capital) / start_capital) * 100.0, 4)
+    elif start_capital:
+        blum_return = round((realized_pnl / start_capital) * 100.0, 4)
+    else:
+        blum_return = average_present([row.pnl_percent for row in closed if row.pnl_percent is not None])
+    wins = sum(1 for row in closed if paper_forward_trade_won(row))
+    best_trade = max(closed, key=lambda row: safe_float(row.r_multiple, safe_float(row.net_pnl_eur, 0.0)) or 0.0, default=None)
+    worst_trade = min(closed, key=lambda row: safe_float(row.r_multiple, safe_float(row.net_pnl_eur, 0.0)) or 0.0, default=None)
+    return {
+        "closed_count": len(closed),
+        "open_count": len(open_rows),
+        "blum_return": blum_return,
+        "benchmark_return": average_present(benchmark_returns),
+        "alpha": average_present(excess_values),
+        "benchmark_excess": average_present(excess_values),
+        "realized_pnl": realized_pnl,
+        "unrealized_pnl": unrealized_pnl,
+        "expectancy": average_present(r_values),
+        "average_r": average_present(r_values),
+        "median_r": round(median(r_values), 4) if r_values else None,
+        "win_rate": round(wins / len(closed), 4) if closed else None,
+        "profit_factor": round(sum(positive_pnl) / sum(negative_pnl), 4) if negative_pnl else (None if not positive_pnl else 999.0),
+        "max_drawdown": average_present(drawdown_candidates),
+        "average_loss": round(-mean(negative_pnl), 4) if negative_pnl else None,
+        "best_trade": best_trade,
+        "worst_trade": worst_trade,
+        "sharpe": None,
+        "sortino": None,
+        "dominant_trade_share": dominant_trade_share(pnl_values),
+    }
+
+
+def paper_forward_trade_won(row: LiveForwardPaperTrade) -> bool:
+    outcome = str(row.outcome_label or row.close_reason or "").lower()
+    if outcome in {"win", "target_hit", "target_1_hit", "target_2_hit"}:
+        return True
+    return (safe_float(row.r_multiple, 0.0) or 0.0) > 0 or (safe_float(row.net_pnl_eur, 0.0) or 0.0) > 0
+
+
+def dominant_trade_share(values: list[float | None]) -> float | None:
+    positives = [abs(value) for value in values if value is not None and value > 0]
+    total = sum(positives)
+    if total <= 0:
+        return None
+    return round(max(positives) / total, 4)
+
+
+def alpha_evidence_grade(
+    *,
+    closed_count: int,
+    has_benchmark: bool,
+    alpha: float | None,
+    expectancy: float | None,
+    max_drawdown: float | None,
+    profit_factor: float | None,
+    setup_count: int,
+    regime_count: int,
+) -> tuple[str, str]:
+    if closed_count == 0:
+        return "NO_DATA", "No closed paper-forward trades exist yet."
+    if not has_benchmark:
+        return "NO_DATA", "Benchmark comparison is unavailable for closed paper-forward trades."
+    if closed_count < 30:
+        return "INSUFFICIENT_EVIDENCE", f"Only {closed_count} closed paper-forward trades exist; minimum required sample is 30."
+    if (alpha is not None and alpha < 0) or (expectancy is not None and expectancy < 0) or (profit_factor is not None and profit_factor < 1):
+        return "WEAK", "Alpha, expectancy or profit factor is negative/weak versus the benchmark evidence."
+    if max_drawdown is not None and abs(max_drawdown) > 20:
+        return "WEAK", "Drawdown is too high for the current evidence level."
+    if closed_count < 100:
+        return "PROMISING" if positive_alpha_expectancy(alpha, expectancy) else "MIXED", "Paper-forward evidence is directionally useful but not yet large enough for a strong claim."
+    if positive_alpha_expectancy(alpha, expectancy) and setup_count > 1 and regime_count > 1:
+        return "STRONG", "Positive alpha and expectancy are present with sufficient sample depth and more than one setup/regime."
+    return "MIXED", "Some metrics are positive, but evidence is not robust across enough setups or regimes."
+
+
+def positive_alpha_expectancy(alpha: float | None, expectancy: float | None) -> bool:
+    return (alpha is not None and alpha > 0) and (expectancy is not None and expectancy > 0)
+
+
+def alpha_verdict(grade: str, summary: dict, blockers: list[dict]) -> str:
+    if grade == "NO_DATA":
+        return "No alpha evidence yet."
+    if grade == "INSUFFICIENT_EVIDENCE":
+        return f"Evidence insufficient: only {summary.get('closed_count', 0)} closed paper-forward trades."
+    if grade == "WEAK":
+        return "BLUM is not showing reliable alpha evidence versus benchmark."
+    if grade == "MIXED":
+        return "BLUM shows mixed alpha evidence; do not trust it yet."
+    if grade == "PROMISING":
+        return "BLUM shows promising alpha, but evidence is not strong enough yet."
+    if grade == "STRONG":
+        return "BLUM shows strong paper-forward alpha evidence."
+    return blockers[0]["title"] if blockers else "Alpha evidence is inconclusive."
+
+
+def alpha_blockers(
+    rows: list[LiveForwardPaperTrade],
+    closed_rows: list[LiveForwardPaperTrade],
+    benchmarks: list[LearningBenchmarkComparison],
+    summary: dict,
+) -> list[dict]:
+    blockers: list[dict] = []
+    if not rows:
+        blockers.append(blocker("no_paper_forward_trades", "No paper-forward decisions have been stored yet.", "Let the backend paper-forward worker collect evidence."))
+    if not closed_rows:
+        blockers.append(blocker("no_closed_paper_forward_trades", "No closed paper-forward trades exist yet.", "Alpha cannot be evaluated until trades complete."))
+    if len(closed_rows) < 30:
+        blockers.append(blocker("insufficient_sample_size", f"Closed sample is {len(closed_rows)}; minimum is 30.", "Keep collecting closed paper-forward outcomes."))
+    if not any(row.excess_return_vs_benchmark is not None for row in closed_rows) and not benchmarks:
+        blockers.append(blocker("missing_benchmark_data", "Benchmark comparison unavailable.", "Compare closed paper-forward trades against SPY/QQQ or stored benchmark rows."))
+    if summary.get("alpha") is not None and summary["alpha"] < 0:
+        blockers.append(blocker("alpha_negative", "Paper-forward alpha is negative.", "Diagnose missed entries, exits, sizing and benchmark underperformance before trusting signals."))
+    if summary.get("expectancy") is not None and summary["expectancy"] < 0:
+        blockers.append(blocker("expectancy_negative", "Expectancy is negative.", "Prioritize setups with positive R-multiple evidence."))
+    if summary.get("profit_factor") is not None and summary["profit_factor"] < 1:
+        blockers.append(blocker("profit_factor_weak", "Profit factor is below 1.", "Losses are larger than winners in current evidence."))
+    if summary.get("dominant_trade_share") is not None and summary["dominant_trade_share"] > 0.55:
+        blockers.append(blocker("one_trade_concentration", "Alpha is concentrated in one trade.", "Require broader repeatability before increasing confidence."))
+    if summary.get("max_drawdown") is not None and abs(summary["max_drawdown"]) > 20:
+        blockers.append(blocker("drawdown_too_high", "Drawdown is too high for the current evidence level.", "Reduce confidence until risk control improves."))
+    data_invalid = sum(1 for row in rows if str(row.status or "").upper() in {"ERROR", "DATA_BLOCKED", "SKIPPED"})
+    if data_invalid:
+        blockers.append(blocker("data_invalid_cases", f"{data_invalid} paper-forward rows are skipped, blocked or errored.", "Inspect blockers before treating candidate quality as alpha evidence."))
+    return blockers[:8]
+
+
+def blocker(code: str, title: str, remedy: str) -> dict:
+    return {"code": code, "title": title, "remedy": remedy}
+
+
+def confidence_in_alpha_evidence(grade: str, sample_size: int, has_benchmark: bool) -> float:
+    base = {
+        "NO_DATA": 0.0,
+        "INSUFFICIENT_EVIDENCE": 18.0,
+        "WEAK": 35.0,
+        "MIXED": 48.0,
+        "PROMISING": 62.0,
+        "STRONG": 82.0,
+    }.get(grade, 20.0)
+    sample_boost = min(12.0, sample_size / 10.0)
+    benchmark_boost = 6.0 if has_benchmark else -10.0
+    return round(max(0.0, min(100.0, base + sample_boost + benchmark_boost)), 2)
+
+
+def latest_paper_forward_update(rows: list[LiveForwardPaperTrade], benchmarks: list[LearningBenchmarkComparison]) -> str | None:
+    dates = [row.updated_at or row.created_at for row in rows if row.updated_at or row.created_at]
+    dates += [row.calculated_at for row in benchmarks if row.calculated_at]
+    latest = max(dates, default=None)
+    return latest.isoformat() if latest else None
+
+
+def alpha_trade_summary(row: LiveForwardPaperTrade | None) -> dict | None:
+    if row is None:
+        return None
+    return {
+        "trade_id": row.id,
+        "ticker": row.ticker,
+        "setup_type": row.setup_type,
+        "status": row.status,
+        "outcome": row.outcome_label or row.close_reason,
+        "pnl": row.net_pnl_eur,
+        "pnl_percent": row.pnl_percent,
+        "r_multiple": row.r_multiple,
+        "benchmark_excess": row.excess_return_vs_benchmark,
+        "lesson": row.lesson_learned,
+        "model_version_used": row.model_version_used,
+    }
+
+
+def paper_forward_evidence_split(rows: list[LiveForwardPaperTrade], game: LiveForwardPaperGame | None, *, label: str) -> dict:
+    closed = [row for row in rows if paper_forward_trade_is_closed(row)]
+    summary = paper_forward_alpha_summary(rows, game)
+    has_benchmark = any(row.excess_return_vs_benchmark is not None or row.benchmark_return_same_period is not None for row in closed)
+    grade, reason = alpha_evidence_grade(
+        closed_count=len(closed),
+        has_benchmark=has_benchmark,
+        alpha=summary["alpha"],
+        expectancy=summary["expectancy"],
+        max_drawdown=summary["max_drawdown"],
+        profit_factor=summary["profit_factor"],
+        setup_count=len({row.setup_type for row in closed if row.setup_type}),
+        regime_count=len({(row.frozen_decision_payload or {}).get("market_regime") or "unknown" for row in closed}),
+    )
+    return {
+        "label": label,
+        "status": "ready" if rows else "NO_DATA",
+        "sample_size": len(closed),
+        "total_decisions": len(rows),
+        "return": summary["blum_return"],
+        "benchmark_return": summary["benchmark_return"],
+        "benchmark_excess": summary["benchmark_excess"],
+        "average_excess_return": summary["benchmark_excess"],
+        "evidence_grade": grade,
+        "evidence_reason": reason,
+    }
+
+
+def alpha_edge_map(rows: list[LiveForwardPaperTrade]) -> dict:
+    closed = [row for row in rows if paper_forward_trade_is_closed(row)]
+    return {
+        "status": "ready" if closed else "NO_DATA",
+        "sample_size": len(closed),
+        "by_setup": alpha_edge_groups(closed, lambda row: row.setup_type or "unknown"),
+        "by_ticker": alpha_edge_groups(closed, lambda row: row.ticker or "unknown"),
+        "by_sector": alpha_edge_groups(closed, lambda row: row.sector or "unknown"),
+        "by_regime": alpha_edge_groups(closed, lambda row: str((row.frozen_decision_payload or {}).get("market_regime") or "unknown")),
+        "by_model_version": alpha_edge_groups(closed, lambda row: row.model_version_used or "unknown"),
+        "warnings": ["low_sample_edges"] if len(closed) < 30 else [],
+    }
+
+
+def alpha_edge_groups(rows: list[LiveForwardPaperTrade], key_fn) -> list[dict]:
+    groups: dict[str, list[LiveForwardPaperTrade]] = defaultdict(list)
+    for row in rows:
+        groups[str(key_fn(row) or "unknown")].append(row)
+    output = []
+    for entity, group in groups.items():
+        r_values = [safe_float(row.r_multiple, None) for row in group if row.r_multiple is not None]
+        excess_values = [safe_float(row.excess_return_vs_benchmark, None) for row in group if row.excess_return_vs_benchmark is not None]
+        wins = sum(1 for row in group if paper_forward_trade_won(row))
+        output.append(
+            {
+                "entity": entity,
+                "sample_size": len(group),
+                "alpha": average_present(excess_values),
+                "average_r": average_present(r_values),
+                "win_rate": round(wins / len(group), 4) if group else None,
+                "evidence_grade": "LOW_SAMPLE" if len(group) < 10 else "MEDIUM" if len(group) < 30 else "STRONG_SAMPLE",
+                "warning": "Treat as weak evidence." if len(group) < 10 else "",
+            }
+        )
+    return sorted(output, key=lambda item: safe_float(item.get("alpha"), safe_float(item.get("average_r"), -999.0)) or -999.0, reverse=True)
+
+
+def edge_summary(rows: list[LiveForwardPaperTrade], direction: str) -> dict | None:
+    groups = alpha_edge_groups([row for row in rows if paper_forward_trade_is_closed(row)], lambda row: row.setup_type or row.ticker or "unknown")
+    if not groups:
+        return None
+    return groups[0] if direction == "best" else groups[-1]
+
+
+def alpha_weakness_map(
+    rows: list[LiveForwardPaperTrade],
+    closed_rows: list[LiveForwardPaperTrade],
+    benchmarks: list[LearningBenchmarkComparison],
+    summary: dict,
+) -> list[dict]:
+    weaknesses = alpha_blockers(rows, closed_rows, benchmarks, summary)
+    stop_hits = sum(1 for row in closed_rows if row.stop_hit or str(row.close_reason or "").upper() == "STOP_HIT")
+    poor_exits = sum(1 for row in closed_rows if str(row.close_reason or "").upper() in {"TIME_EXIT", "INVALIDATION_HIT"})
+    negative_excess = sum(1 for row in closed_rows if (safe_float(row.excess_return_vs_benchmark, 0.0) or 0.0) < 0)
+    missed_gains = sum(1 for row in rows if str(row.status or "").upper() == "SKIPPED" and (safe_float(row.expected_r_multiple, 0.0) or 0.0) > 1)
+    if stop_hits:
+        weaknesses.append(blocker("repeated_stop_hits", f"{stop_hits} closed trades hit stops.", "Review entry quality and volatility assumptions."))
+    if poor_exits:
+        weaknesses.append(blocker("poor_exit_quality", f"{poor_exits} trades exited by time/invalidation.", "Test exit timing and thesis decay rules."))
+    if negative_excess:
+        weaknesses.append(blocker("benchmark_underperformance", f"{negative_excess} closed trades underperformed benchmark.", "Reduce confidence in setups that do not beat passive alternatives."))
+    if missed_gains:
+        weaknesses.append(blocker("missed_gains", f"{missed_gains} skipped candidates had meaningful expected R.", "Review no-trade filters against later outcomes before penalizing or relaxing rules."))
+    return weaknesses[:10]
+
+
+def alpha_risk_warning(summary: dict, blockers: list[dict]) -> str | None:
+    if any(item["code"] == "drawdown_too_high" for item in blockers):
+        return "Drawdown is too high for the current evidence level."
+    if any(item["code"] == "one_trade_concentration" for item in blockers):
+        return "Alpha is concentrated in one trade."
+    if summary.get("open_count"):
+        return "Open paper-forward exposure exists; unrealized P/L can change."
+    return blockers[0]["title"] if blockers else None
+
+
+def latest_alpha_lesson(closed_rows: list[LiveForwardPaperTrade], lesson_rows: list[TradeLearningEvidence]) -> dict | None:
+    for row in closed_rows:
+        if row.lesson_learned:
+            return {
+                "ticker": row.ticker,
+                "setup_type": row.setup_type,
+                "outcome": row.outcome_label or row.close_reason,
+                "alpha_impact": row.excess_return_vs_benchmark,
+                "benchmark_impact": row.benchmark_return_same_period,
+                "what_was_correct": "Trade followed stored paper-forward plan." if (safe_float(row.r_multiple, 0.0) or 0.0) >= 0 else "",
+                "what_was_wrong": "" if (safe_float(row.r_multiple, 0.0) or 0.0) >= 0 else "Outcome was negative or benchmark-relative evidence weakened.",
+                "what_should_change_next": row.lesson_learned,
+                "linked_trade_id": row.id,
+            }
+    if lesson_rows:
+        row = lesson_rows[0]
+        return {
+            "ticker": row.ticker,
+            "setup_type": row.setup_type,
+            "outcome": row.lesson_type,
+            "alpha_impact": None,
+            "benchmark_impact": None,
+            "what_was_correct": row.observation,
+            "what_was_wrong": "",
+            "what_should_change_next": row.action_taken,
+            "linked_trade_id": row.trade_id,
+        }
+    return None
+
+
+def alpha_lessons(closed_rows: list[LiveForwardPaperTrade], lesson_rows: list[TradeLearningEvidence]) -> list[dict]:
+    lessons = []
+    for row in closed_rows:
+        if not row.lesson_learned:
+            continue
+        lessons.append(
+            {
+                "ticker": row.ticker,
+                "setup_type": row.setup_type,
+                "outcome": row.outcome_label or row.close_reason,
+                "alpha_impact": row.excess_return_vs_benchmark,
+                "benchmark_impact": row.benchmark_return_same_period,
+                "what_was_correct": "Target/risk plan resolved positively." if paper_forward_trade_won(row) else "",
+                "what_was_wrong": "" if paper_forward_trade_won(row) else "Trade did not produce positive paper-forward evidence.",
+                "what_should_change_next": row.lesson_learned,
+                "linked_trade_id": row.id,
+            }
+        )
+    for row in lesson_rows[: max(0, 6 - len(lessons))]:
+        lessons.append(
+            {
+                "ticker": row.ticker,
+                "setup_type": row.setup_type,
+                "outcome": row.lesson_type,
+                "alpha_impact": None,
+                "benchmark_impact": None,
+                "what_was_correct": row.observation,
+                "what_was_wrong": "",
+                "what_should_change_next": row.action_taken,
+                "linked_trade_id": row.trade_id,
+            }
+        )
+    return lessons[:6]
+
+
+def alpha_truth_lines(verdict: str, blockers: list[dict], summary: dict) -> list[str]:
+    lines = [verdict]
+    if summary.get("alpha") is None:
+        lines.append("Benchmark-relative paper-forward alpha is not available yet.")
+    elif summary["alpha"] < 0:
+        lines.append(f"Paper-forward alpha is negative ({summary['alpha']:.2f}%).")
+    else:
+        lines.append(f"Paper-forward alpha is {summary['alpha']:.2f}%, but sample quality still matters.")
+    for item in blockers[:3]:
+        lines.append(item["title"])
+    return lines[:5]
+
+
+def evidence_grade_from_benchmark_rows(rows: list[LearningBenchmarkComparison]) -> str:
+    sample = sum(row.sample_size or 0 for row in rows)
+    if sample <= 0:
+        return "NO_DATA"
+    if sample < 30:
+        return "INSUFFICIENT_EVIDENCE"
+    labels = {str(row.result_label or "").lower() for row in rows}
+    if "underperforming" in labels:
+        return "WEAK"
+    if "outperforming" in labels and sample >= 100:
+        return "STRONG"
+    if "outperforming" in labels:
+        return "PROMISING"
+    return "MIXED"
 
 
 def safe_float(value: Any, default: float | None = 0.0) -> float | None:
