@@ -246,7 +246,7 @@ class TraderBrainService:
         verdict = alpha_verdict(evidence_grade, paper_summary, blocker_rows)
         latest_update = latest_paper_forward_update(paper_rows, benchmarks)
         return {
-            "status": "READY" if paper_rows else "NO_DATA",
+            "status": evidence_grade,
             "version": TRADER_BRAIN_VERSION,
             "snapshot_type": "AlphaSnapshot",
             "generated_at": datetime.utcnow().isoformat(),
