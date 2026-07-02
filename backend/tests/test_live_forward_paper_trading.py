@@ -8,12 +8,14 @@ from app.models import (
     Asset,
     LiveForwardPaperTrade,
     LiveForwardPaperTradeEvent,
+    PaperForwardTrade,
+    PaperForwardTradeEvent,
     ModelVersion,
     PriceHistory,
     TradeLearningEvidence,
 )
 from app.services.learning_loop import BASE_SIGNAL_WEIGHTS
-from app.services.trading_intelligence_lab import LiveForwardPaperTradingService
+from app.services.live_forward_paper_trading import LiveForwardPaperTradingService
 
 
 def setup_db() -> Session:
@@ -167,3 +169,78 @@ def test_live_forward_missing_entry_price_creates_data_blocked_decision():
         trade = db.scalar(select(LiveForwardPaperTrade).where(LiveForwardPaperTrade.status == "DATA_BLOCKED"))
         assert trade is not None
         assert trade.frozen_decision_payload["price_context"]["latest_price"] is None
+
+
+def test_paper_forward_candidate_foundation_freezes_decision_and_event():
+    with setup_db() as db:
+        service = LiveForwardPaperTradingService()
+
+        trade = service.create_candidate(db, candidate())
+        db.commit()
+
+        stored = db.get(PaperForwardTrade, trade.id)
+        event = db.scalar(select(PaperForwardTradeEvent).where(PaperForwardTradeEvent.paper_trade_id == trade.id))
+        assert stored is not None
+        assert stored.status == "CANDIDATE"
+        assert stored.ledger_trade_id is None
+        assert stored.open_timestamp is None
+        assert stored.decision_payload_frozen["ticker"] == "NVDA"
+        assert stored.decision_payload_frozen["no_future_data_policy"].startswith("Frozen payload")
+        assert stored.weights_used
+        assert event is not None
+        assert event.event_type == "DECISION_CREATED"
+        assert event.trade_id == trade.id
+
+
+def test_paper_forward_create_candidate_is_idempotent():
+    with setup_db() as db:
+        service = LiveForwardPaperTradingService()
+
+        first = service.create_candidate(db, candidate())
+        second = service.create_candidate(db, candidate())
+        db.commit()
+
+        assert second.id == first.id
+        assert db.scalar(select(func.count(PaperForwardTrade.id)).where(PaperForwardTrade.ticker == "NVDA")) == 1
+
+
+def test_paper_forward_append_event_uses_event_log():
+    with setup_db() as db:
+        service = LiveForwardPaperTradingService()
+        trade = service.create_candidate(db, candidate())
+
+        event = service.append_event(db, trade.id, "POSITION_UPDATED", "manual test event", payload={"check": True}, price_used=101.0)
+        db.commit()
+
+        assert event.id is not None
+        assert event.trade_id == trade.id
+        assert event.payload["check"] is True
+        assert event.price_used == 101.0
+
+
+def test_paper_forward_snapshot_get_is_read_only_without_snapshot():
+    with setup_db() as db:
+        service = LiveForwardPaperTradingService()
+
+        before = db.scalar(select(func.count(PaperForwardTrade.id)))
+        payload = service.snapshot(db)
+        after = db.scalar(select(func.count(PaperForwardTrade.id)))
+
+        assert payload["status"] == "missing"
+        assert before == after == 0
+
+
+def test_paper_forward_run_once_freezes_candidates_without_opening_positions():
+    with setup_db() as db:
+        service = LiveForwardPaperTradingService()
+        service.scan_candidates = lambda _db, limit=30: [candidate()]  # type: ignore[method-assign]
+
+        report = service.run_once(db)
+        trade = db.scalar(select(PaperForwardTrade).where(PaperForwardTrade.ticker == "NVDA"))
+        events = db.scalars(select(PaperForwardTradeEvent).where(PaperForwardTradeEvent.paper_trade_id == trade.id)).all()
+
+        assert report["status"] == "ok"
+        assert report["mode"] == "foundation_candidate_freeze"
+        assert trade.status == "CANDIDATE"
+        assert trade.ledger_trade_id is None
+        assert any(event.event_type == "DECISION_CREATED" for event in events)

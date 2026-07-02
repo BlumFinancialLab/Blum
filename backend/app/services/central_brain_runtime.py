@@ -312,7 +312,7 @@ class SnapshotProducerService:
 
             return TradingGameRuntimeSnapshotService().produce_equity_snapshot(db)
         if snapshot_type == "paper_forward_snapshot":
-            from app.services.trading_intelligence_lab import LiveForwardPaperTradingService
+            from app.services.live_forward_paper_trading import LiveForwardPaperTradingService
 
             return LiveForwardPaperTradingService().snapshot_payload(db)
         if snapshot_type == "trading_game_summary":

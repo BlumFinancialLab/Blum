@@ -53,10 +53,10 @@ from app.services.trading_game import TradingGameSimulator
 from app.services.trade_transparency import PnLBreakdownService, TradeLedgerService, TradingGameRealityCheckService
 from app.services.trading_intelligence_lab import (
     HistoricalLiveComparisonService,
-    LiveForwardPaperTradingService,
     TradingCapitalCycleService,
     TradingIntelligenceMetricsService,
 )
+from app.services.live_forward_paper_trading import LiveForwardPaperTradingService
 
 
 DISCLAIMER = "Analisi informativa, non consulenza finanziaria. I livelli sono tecnici e probabilistici, non garanzie."

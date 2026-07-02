@@ -25,7 +25,7 @@ from app.services.market_data import MarketDataService
 from app.services.performance import performance_recorder
 from app.services.pipeline import PipelineService
 from app.services.trading_game import TradingGameSimulator
-from app.services.trading_intelligence_lab import LiveForwardPaperTradingService
+from app.services.live_forward_paper_trading import LiveForwardPaperTradingService
 from app.services.worker_runtime import runtime_worker_coordinator
 from app.signals.engine import SignalEngine
 

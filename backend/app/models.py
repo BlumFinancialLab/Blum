@@ -2368,6 +2368,100 @@ class LiveForwardPaperTrade(Base):
     ledger_trade = relationship("TradingGameTrade")
     feedback_loop_audit = relationship("FeedbackLoopAudit")
 
+    @property
+    def decision_payload_frozen(self) -> dict:
+        return self.frozen_decision_payload
+
+    @decision_payload_frozen.setter
+    def decision_payload_frozen(self, value: dict) -> None:
+        self.frozen_decision_payload = value
+
+    @property
+    def open_price(self) -> float | None:
+        return self.entry_price
+
+    @open_price.setter
+    def open_price(self, value: float | None) -> None:
+        self.entry_price = value
+
+    @property
+    def open_timestamp(self) -> datetime | None:
+        return self.opened_at
+
+    @open_timestamp.setter
+    def open_timestamp(self, value: datetime | None) -> None:
+        self.opened_at = value
+
+    @property
+    def close_price(self) -> float | None:
+        return self.exit_price
+
+    @close_price.setter
+    def close_price(self, value: float | None) -> None:
+        self.exit_price = value
+
+    @property
+    def close_timestamp(self) -> datetime | None:
+        return self.closed_at
+
+    @close_timestamp.setter
+    def close_timestamp(self, value: datetime | None) -> None:
+        self.closed_at = value
+
+    @property
+    def pnl(self) -> float | None:
+        return self.net_pnl_eur
+
+    @pnl.setter
+    def pnl(self, value: float | None) -> None:
+        self.net_pnl_eur = value
+
+    @property
+    def benchmark_return(self) -> float | None:
+        return self.benchmark_return_same_period
+
+    @benchmark_return.setter
+    def benchmark_return(self, value: float | None) -> None:
+        self.benchmark_return_same_period = value
+
+    @property
+    def benchmark_excess(self) -> float | None:
+        return self.excess_return_vs_benchmark
+
+    @benchmark_excess.setter
+    def benchmark_excess(self, value: float | None) -> None:
+        self.excess_return_vs_benchmark = value
+
+    @property
+    def outcome(self) -> str | None:
+        return self.outcome_label
+
+    @outcome.setter
+    def outcome(self, value: str | None) -> None:
+        self.outcome_label = value
+
+    @property
+    def entry_type(self) -> str | None:
+        payload = self.frozen_decision_payload or {}
+        plan = payload.get("trade_plan") or {}
+        return plan.get("entry_type") or self.actionability_state or "conditional"
+
+    @property
+    def reward_amount(self) -> float | None:
+        return self.expected_reward
+
+    @reward_amount.setter
+    def reward_amount(self, value: float | None) -> None:
+        self.expected_reward = value
+
+    @property
+    def risk_reward_ratio(self) -> float | None:
+        return self.expected_r_multiple
+
+    @risk_reward_ratio.setter
+    def risk_reward_ratio(self, value: float | None) -> None:
+        self.expected_r_multiple = value
+
 
 class LiveForwardPaperTradeEvent(Base):
     __tablename__ = "live_forward_paper_trade_events"
@@ -2386,6 +2480,18 @@ class LiveForwardPaperTradeEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
     paper_trade = relationship("LiveForwardPaperTrade")
+
+    @property
+    def trade_id(self) -> int:
+        return self.paper_trade_id
+
+    @trade_id.setter
+    def trade_id(self, value: int) -> None:
+        self.paper_trade_id = value
+
+
+PaperForwardTrade = LiveForwardPaperTrade
+PaperForwardTradeEvent = LiveForwardPaperTradeEvent
 
 
 class HistoricalLiveComparison(Base):

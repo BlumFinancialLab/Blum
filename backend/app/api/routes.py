@@ -280,10 +280,10 @@ from app.services.trade_transparency import (
 from app.services.trading_intelligence_lab import (
     AdvancedTradeLedgerAnalyticsService,
     HistoricalLiveComparisonService,
-    LiveForwardPaperTradingService,
     TradingCapitalCycleService,
     TradingIntelligenceMetricsService,
 )
+from app.services.live_forward_paper_trading import LiveForwardPaperTradingService
 from app.services.performance import performance_recorder
 from app.services.trader_brain import TraderBrainService
 from app.signals.backtest import run_simple_backtest
@@ -1334,7 +1334,7 @@ def paper_forward_trade_events(trade_id: int, db: Session = Depends(get_db)) -> 
 
 @router.post("/api/paper-forward/run")
 def paper_forward_run(db: Session = Depends(get_db)) -> dict:
-    return LiveForwardPaperTradingService().run_cycle(db)
+    return LiveForwardPaperTradingService().run_once(db)
 
 
 @router.get("/api/learning-intelligence/dashboard")
