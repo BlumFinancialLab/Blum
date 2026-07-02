@@ -71,10 +71,17 @@ def add_price(db: Session, asset: Asset, day_offset: int, close: float) -> None:
     db.commit()
 
 
+def run_lifecycle(service: LiveForwardPaperTradingService, db: Session) -> dict:
+    return service.run_lifecycle(db, override=True)
+
+
 def candidate(
     ticker: str = "NVDA",
     price: float | None = 100.0,
     *,
+    actionability: str = "active_setup",
+    confidence: float | None = 64.0,
+    data_quality_score: float = 88.0,
     entry_type: str = "MARKET",
     trigger_price: float | None = None,
     invalidation_level: float = 96.0,
@@ -94,12 +101,12 @@ def candidate(
     return {
         "ticker": ticker,
         "asset": {"name": ticker, "asset_type": "Stock", "sector": "Technology"},
-        "actionability": "active_setup",
+        "actionability": actionability,
         "sniper_score": 78.0,
-        "confidence": 64.0,
+        "confidence": confidence,
         "setup": {"setup_type": "momentum_breakout"},
         "trade_plan": plan,
-        "price_context": {"latest_price": price, "data_quality_score": 88.0},
+        "price_context": {"latest_price": price, "data_quality_score": data_quality_score},
         "market_regime": {"regime_primary": "risk_on"},
     }
 
@@ -218,6 +225,54 @@ def test_paper_forward_create_candidate_is_idempotent():
         assert db.scalar(select(func.count(PaperForwardTrade.id)).where(PaperForwardTrade.ticker == "NVDA")) == 1
 
 
+def test_paper_forward_avoid_candidate_is_skipped_with_actionability_rejection_event():
+    with setup_db() as db:
+        service = LiveForwardPaperTradingService()
+
+        trade = service.create_candidate(db, candidate(actionability="avoid", target_1=110.0, invalidation_level=96.0))
+        db.commit()
+
+        stored = db.get(PaperForwardTrade, trade.id)
+        events = db.scalars(select(PaperForwardTradeEvent).where(PaperForwardTradeEvent.paper_trade_id == trade.id)).all()
+        rejection = [event for event in events if event.event_type == "ACTIONABILITY_REJECTED"][0]
+
+        assert stored.status == "SKIPPED"
+        assert stored.decision_payload_frozen["actionability_diagnosis"]["actionability_status"] == "SKIPPED_AVOID_SIGNAL"
+        assert rejection.reason == "actionability_avoid"
+        assert rejection.payload["actionability_status"] == "SKIPPED_AVOID_SIGNAL"
+        assert not any(event.event_type == "ERROR" for event in events)
+
+
+def test_paper_forward_bad_risk_reward_has_specific_rejection_reason():
+    with setup_db() as db:
+        service = LiveForwardPaperTradingService()
+
+        trade = service.create_candidate(db, candidate(actionability="active_setup", target_1=101.0, invalidation_level=96.0))
+        db.commit()
+
+        stored = db.get(PaperForwardTrade, trade.id)
+        event = db.scalar(select(PaperForwardTradeEvent).where(PaperForwardTradeEvent.paper_trade_id == trade.id, PaperForwardTradeEvent.event_type == "ACTIONABILITY_REJECTED"))
+
+        assert stored.status == "SKIPPED"
+        assert stored.decision_payload_frozen["actionability_diagnosis"]["actionability_status"] == "REJECTED_BAD_RISK_REWARD"
+        assert event.payload["risk_reward_ratio"] == 0.25
+
+
+def test_paper_forward_wait_for_trigger_status_is_not_error():
+    with setup_db() as db:
+        service = LiveForwardPaperTradingService()
+
+        trade = service.create_candidate(db, candidate(actionability="wait_for_trigger"))
+        db.commit()
+
+        stored = db.get(PaperForwardTrade, trade.id)
+        event = db.scalar(select(PaperForwardTradeEvent).where(PaperForwardTradeEvent.paper_trade_id == trade.id, PaperForwardTradeEvent.event_type == "ACTIONABILITY_REJECTED"))
+
+        assert stored.status == "WAITING_FOR_TRIGGER"
+        assert stored.decision_payload_frozen["actionability_diagnosis"]["actionability_status"] == "WAITING_FOR_TRIGGER"
+        assert event is not None
+
+
 def test_paper_forward_append_event_uses_event_log():
     with setup_db() as db:
         service = LiveForwardPaperTradingService()
@@ -279,6 +334,41 @@ def test_paper_forward_run_once_freezes_candidates_without_opening_positions():
         assert any(event.event_type == "DECISION_CREATED" for event in events)
 
 
+def test_paper_forward_run_once_reports_actionability_summary():
+    with setup_db() as db:
+        service = LiveForwardPaperTradingService()
+        service.scan_candidates = lambda _db, limit=30: [
+            candidate(),
+            candidate(ticker="AMD", actionability="avoid", target_1=101.0),
+            candidate(ticker="MSFT", price=None),
+        ]  # type: ignore[method-assign]
+
+        report = service.run_once(db)
+        snapshot = service.snapshot(db)["payload"]
+
+        assert report["actionability_summary"]["total_candidates"] == 3
+        assert snapshot["actionability_summary"]["actionable_count"] == 1
+        assert snapshot["actionability_summary"]["skipped_count"] == 1
+        assert snapshot["actionability_summary"]["data_blocked_count"] == 1
+        assert snapshot["paper_forward_lifecycle_mode"] == "CANDIDATE_FREEZE_ONLY"
+
+
+def test_paper_forward_run_lifecycle_refuses_when_disabled_without_override():
+    with setup_db() as db:
+        service = LiveForwardPaperTradingService()
+        service.create_candidate(db, candidate())
+        db.commit()
+
+        report = service.run_lifecycle(db)
+        stored = db.scalar(select(PaperForwardTrade).where(PaperForwardTrade.ticker == "NVDA"))
+
+        assert report["status"] == "disabled"
+        assert report["paper_forward_lifecycle_mode"] == "LIFECYCLE_DISABLED_BY_SETTINGS"
+        assert "paper_forward_lifecycle_disabled_by_settings" in report["current_blockers"]
+        assert stored.status == "CANDIDATE"
+        assert stored.ledger_trade_id is None
+
+
 def test_paper_forward_run_once_duplicate_does_not_overwrite_frozen_payload():
     with setup_db() as db:
         service = LiveForwardPaperTradingService()
@@ -308,7 +398,7 @@ def test_paper_forward_lifecycle_opens_candidate_when_trigger_is_met():
         frozen_before = dict(trade.frozen_decision_payload)
         add_price(db, asset, 1, 103.0)
 
-        report = service.run_lifecycle(db)
+        report = run_lifecycle(service, db)
         opened = db.get(PaperForwardTrade, trade.id)
         events = db.scalars(select(PaperForwardTradeEvent).where(PaperForwardTradeEvent.paper_trade_id == trade.id)).all()
 
@@ -328,7 +418,7 @@ def test_paper_forward_lifecycle_keeps_candidate_when_trigger_not_met():
         trade = service.create_candidate(db, candidate(entry_type="ABOVE_TRIGGER", trigger_price=104.0, target_1=130.0, target_2=150.0))
         add_price(db, asset, 1, 101.0)
 
-        report = service.run_lifecycle(db)
+        report = run_lifecycle(service, db)
         stored = db.get(PaperForwardTrade, trade.id)
         opened_events = db.scalars(
             select(PaperForwardTradeEvent).where(PaperForwardTradeEvent.paper_trade_id == trade.id, PaperForwardTradeEvent.event_type == "POSITION_OPENED")
@@ -345,7 +435,7 @@ def test_paper_forward_lifecycle_data_blocked_when_market_data_missing():
         service = LiveForwardPaperTradingService()
         trade = service.create_candidate(db, candidate())
 
-        report = service.run_lifecycle(db)
+        report = run_lifecycle(service, db)
         stored = db.get(PaperForwardTrade, trade.id)
         events = db.scalars(select(PaperForwardTradeEvent).where(PaperForwardTradeEvent.paper_trade_id == trade.id)).all()
 
@@ -360,10 +450,10 @@ def test_paper_forward_lifecycle_updates_open_trade_unrealized_pnl():
         service = LiveForwardPaperTradingService()
         trade = service.create_candidate(db, candidate(target_1=130.0, target_2=150.0))
         add_price(db, asset, 1, 100.0)
-        service.run_lifecycle(db)
+        run_lifecycle(service, db)
         add_price(db, asset, 2, 103.0)
 
-        report = service.run_lifecycle(db)
+        report = run_lifecycle(service, db)
         refreshed = db.get(PaperForwardTrade, trade.id)
         events = db.scalars(select(PaperForwardTradeEvent).where(PaperForwardTradeEvent.paper_trade_id == trade.id)).all()
 
@@ -380,10 +470,10 @@ def test_paper_forward_lifecycle_stop_hit_closes_trade_and_calculates_pnl():
         service = LiveForwardPaperTradingService()
         trade = service.create_candidate(db, candidate(invalidation_level=96.0, target_1=130.0, target_2=150.0))
         add_price(db, asset, 1, 100.0)
-        service.run_lifecycle(db)
+        run_lifecycle(service, db)
         add_price(db, asset, 2, 94.0)
 
-        service.run_lifecycle(db)
+        run_lifecycle(service, db)
         closed = db.get(PaperForwardTrade, trade.id)
         events = db.scalars(select(PaperForwardTradeEvent).where(PaperForwardTradeEvent.paper_trade_id == trade.id)).all()
 
@@ -403,10 +493,10 @@ def test_paper_forward_lifecycle_target_hit_closes_with_lesson_and_audit_events(
         service = LiveForwardPaperTradingService()
         trade = service.create_candidate(db, candidate(target_1=104.0, target_2=150.0))
         add_price(db, asset, 1, 100.0)
-        service.run_lifecycle(db)
+        run_lifecycle(service, db)
         add_price(db, asset, 2, 106.0)
 
-        service.run_lifecycle(db)
+        run_lifecycle(service, db)
         closed = db.get(PaperForwardTrade, trade.id)
         events = db.scalars(select(PaperForwardTradeEvent).where(PaperForwardTradeEvent.paper_trade_id == trade.id)).all()
         lesson = db.scalar(select(TradeLearningEvidence).where(TradeLearningEvidence.trade_id == closed.ledger_trade_id))
@@ -428,13 +518,13 @@ def test_paper_forward_lifecycle_expiry_closes_trade():
         service = LiveForwardPaperTradingService()
         trade = service.create_candidate(db, candidate(target_1=130.0, target_2=150.0))
         add_price(db, asset, 1, 100.0)
-        service.run_lifecycle(db)
+        run_lifecycle(service, db)
         opened = db.get(PaperForwardTrade, trade.id)
         opened.expires_at = datetime.utcnow() - timedelta(seconds=1)
         db.commit()
         add_price(db, asset, 2, 101.0)
 
-        service.run_lifecycle(db)
+        run_lifecycle(service, db)
         closed = db.get(PaperForwardTrade, trade.id)
 
         assert closed.status == "EXPIRED"
@@ -448,13 +538,13 @@ def test_paper_forward_lifecycle_invalidation_closes_trade():
         service = LiveForwardPaperTradingService()
         trade = service.create_candidate(db, candidate(invalidation_level=96.0, target_1=130.0, target_2=150.0))
         add_price(db, asset, 1, 100.0)
-        service.run_lifecycle(db)
+        run_lifecycle(service, db)
         opened = db.get(PaperForwardTrade, trade.id)
         opened.stop_loss = None
         db.commit()
         add_price(db, asset, 2, 95.0)
 
-        service.run_lifecycle(db)
+        run_lifecycle(service, db)
         closed = db.get(PaperForwardTrade, trade.id)
 
         assert closed.status == "INVALIDATED"
@@ -468,13 +558,13 @@ def test_paper_forward_lifecycle_is_idempotent_after_open_and_close():
         service = LiveForwardPaperTradingService()
         trade = service.create_candidate(db, candidate(target_1=104.0, target_2=150.0))
         add_price(db, asset, 1, 100.0)
-        service.run_lifecycle(db)
+        run_lifecycle(service, db)
         add_price(db, asset, 2, 106.0)
-        service.run_lifecycle(db)
+        run_lifecycle(service, db)
         event_count = db.scalar(select(func.count(PaperForwardTradeEvent.id)).where(PaperForwardTradeEvent.paper_trade_id == trade.id))
         lesson_count = db.scalar(select(func.count(TradeLearningEvidence.id)))
 
-        service.run_lifecycle(db)
+        run_lifecycle(service, db)
         event_count_after = db.scalar(select(func.count(PaperForwardTradeEvent.id)).where(PaperForwardTradeEvent.paper_trade_id == trade.id))
         lesson_count_after = db.scalar(select(func.count(TradeLearningEvidence.id)))
 
@@ -490,11 +580,11 @@ def test_paper_forward_lifecycle_calculates_benchmark_excess_when_available():
         trade = service.create_candidate(db, candidate(target_1=104.0, target_2=150.0))
         add_price(db, asset, 1, 100.0)
         add_price(db, spy, 1, 101.0)
-        service.run_lifecycle(db)
+        run_lifecycle(service, db)
         add_price(db, asset, 2, 106.0)
         add_price(db, spy, 2, 102.0)
 
-        service.run_lifecycle(db)
+        run_lifecycle(service, db)
         closed = db.get(PaperForwardTrade, trade.id)
 
         assert closed.benchmark_return is not None

@@ -42,7 +42,7 @@ type DetailState = {
   error: string;
 };
 
-const CANDIDATE_STATUSES = new Set(["CANDIDATE", "SKIPPED", "DATA_BLOCKED", "ERROR"]);
+const CANDIDATE_STATUSES = new Set(["CANDIDATE", "WAITING_FOR_TRIGGER", "SKIPPED", "DATA_BLOCKED", "ERROR"]);
 const OPEN_STATUSES = new Set(["OPEN"]);
 const CLOSED_STATUSES = new Set(["CLOSED", "EXPIRED", "INVALIDATED"]);
 
@@ -179,6 +179,8 @@ export default function PaperTradingPage() {
   const counts = snapshot.counts ?? {};
   const game = snapshot.game ?? {};
   const statusLabel = snapshot.readiness_status ?? snapshot.readiness ?? readiness;
+  const actionability = snapshot.actionability_summary ?? {};
+  const topRejection = (actionability.top_rejection_reasons ?? [])[0];
 
   return (
     <>
@@ -206,6 +208,23 @@ export default function PaperTradingPage() {
       <section className="paper-forward-grid">
         <BloombergPanel title="Paper Forward Status" value={readiness} subtitle="A valid no-trade state is better than fabricated activity.">
           <ReadinessStateCard state={readiness} explanation={snapshot.explanation} compact />
+          <div className="brain-list dense" style={{ marginTop: 10 }}>
+            <div>
+              <StatusBadge label="lifecycle" />
+              <strong>{lifecycleLabel(readiness, snapshot)}</strong>
+              <p>{snapshot.lifecycle_message ?? "Lifecycle state is read from the backend snapshot."}</p>
+            </div>
+            <div>
+              <StatusBadge label="actionability" />
+              <strong>{numberLike(actionability.actionable_count)} actionable / {numberLike(actionability.waiting_for_trigger_count)} waiting</strong>
+              <p>{numberLike(actionability.skipped_count)} skipped, {numberLike(actionability.data_blocked_count)} data blocked, {numberLike(actionability.error_count)} real errors.</p>
+            </div>
+            <div>
+              <StatusBadge label="main rejection" />
+              <strong>{topRejection?.reason ? String(topRejection.reason).replaceAll("_", " ") : "none stored"}</strong>
+              <p>{topRejection?.count ? `${topRejection.count} recent candidate(s).` : "No actionability rejection distribution is available yet."}</p>
+            </div>
+          </div>
         </BloombergPanel>
 
         <BloombergPanel title="Current Blockers" value={`${blockers.length} active`} subtitle="Why BLUM is not opening or closing more trades.">
@@ -710,6 +729,7 @@ function readinessTone(value: ReadinessState): "positive" | "attention" | "negat
 }
 
 function lifecycleLabel(readiness: ReadinessState, snapshot: any) {
+  if (snapshot?.paper_forward_lifecycle_mode) return String(snapshot.paper_forward_lifecycle_mode).replaceAll("_", " ").toLowerCase();
   if (readiness === "WORKER_DISABLED") return "disabled";
   if (snapshot?.status === "ready" || snapshot?.readiness === "READY") return "observing";
   return "read-only";

@@ -18,15 +18,18 @@ from app.models import (
     TradingGameTrade,
 )
 from app.services.trading_intelligence_lab import (
+    ActionabilityPolicy,
     LAB_POLICY,
     LiveForwardPaperTradingService as _TradingLabLiveForwardService,
+    actionability_event_payload,
+    diagnose_candidate_actionability,
     compact_candidate,
     ensure_live_trade_game,
     freeze_decision_payload,
     latest_market_price_after,
-    live_candidate_is_actionable,
     live_position_for_paper_trade,
     live_forward_duplicate_key,
+    paper_forward_actionability_summary,
     period_return,
     safe_float,
     serialize_live_event,
@@ -72,13 +75,18 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
         if existing:
             return existing
 
+        diagnosis = diagnose_candidate_actionability(decision_payload, strict=True)
+        decision_payload_with_diagnosis = {**decision_payload, "actionability_diagnosis": diagnosis.to_dict()}
         price = safe_float((decision_payload.get("price_context") or {}).get("latest_price"))
-        if not ticker or price <= 0:
+        if diagnosis.actionability_status == "DATA_BLOCKED":
             status = "DATA_BLOCKED"
-            block_reason = "missing_ticker_or_live_entry_price"
-        elif not live_candidate_is_actionable(decision_payload):
+            block_reason = diagnosis.rejection_reason
+        elif diagnosis.actionability_status == "WAITING_FOR_TRIGGER":
+            status = "WAITING_FOR_TRIGGER"
+            block_reason = diagnosis.rejection_reason
+        elif diagnosis.actionability_status != "ACTIONABLE":
             status = "SKIPPED"
-            block_reason = "candidate_not_actionable"
+            block_reason = diagnosis.rejection_reason
         else:
             status = "CANDIDATE"
             block_reason = ""
@@ -108,7 +116,7 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
             learning_memory_used=feedback["learning_memory_used"],
             strategy_memory_used=feedback["strategy_memory_used"],
             research_priority_used=feedback["research_priority_used"],
-            frozen_decision_payload=freeze_decision_payload(decision_payload, feedback, now),
+            frozen_decision_payload=freeze_decision_payload(decision_payload_with_diagnosis, feedback, now),
             actionability_state=decision_payload.get("actionability"),
             confidence=decision_payload.get("confidence"),
             sniper_score=decision_payload.get("sniper_score"),
@@ -137,13 +145,13 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
             trade.id,
             "DECISION_CREATED",
             "Decision frozen from current BLUM evidence.",
-            payload={"candidate": compact_candidate(decision_payload), "feedback": feedback},
+            payload={"candidate": compact_candidate(decision_payload), "feedback": feedback, "actionability_diagnosis": diagnosis.to_dict()},
             price_used=price if price > 0 else None,
         )
         if status == "DATA_BLOCKED":
-            self.append_event(db, trade.id, "DATA_BLOCKED", block_reason, payload={"price_context": decision_payload.get("price_context")})
-        elif status == "SKIPPED":
-            self.append_event(db, trade.id, "ERROR", block_reason, payload={"actionability": decision_payload.get("actionability")})
+            self.append_event(db, trade.id, "DATA_BLOCKED", block_reason, payload={"price_context": decision_payload.get("price_context"), "actionability_diagnosis": diagnosis.to_dict()})
+        elif status in {"SKIPPED", "WAITING_FOR_TRIGGER"}:
+            self.append_event(db, trade.id, "ACTIONABILITY_REJECTED", block_reason, payload=actionability_event_payload(decision_payload, diagnosis, feedback), price_used=price if price > 0 else None)
         return trade
 
     def append_event(
@@ -162,6 +170,34 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
         db.flush()
         return event
 
+    def status_readonly(self, db: Session) -> dict:
+        game = self.active_game(db)
+        if not game:
+            return {
+                "status": "NO_SNAPSHOTS",
+                "readiness": "NO_SNAPSHOTS",
+                "enabled": settings.live_trading_game_enabled,
+                "paper_forward_lifecycle_mode": "LIFECYCLE_DISABLED_BY_SETTINGS" if not settings.paper_forward_lifecycle_enabled else "LIFECYCLE_BLOCKED_BY_NO_ACTIONABLE_CANDIDATES",
+                "actionability_summary": empty_actionability_summary(),
+                "current_blockers": ["no_live_forward_paper_game"],
+                "policy": LAB_POLICY,
+            }
+        return self.status_payload(db, game)
+
+    def status_payload(self, db: Session, game: LiveForwardPaperGame) -> dict:
+        payload = super().status_payload(db, game)
+        summary = self.actionability_summary(db, game)
+        mode = self.lifecycle_mode(summary)
+        payload.update(
+            {
+                "paper_forward_lifecycle_mode": mode,
+                "actionability_summary": summary,
+                "current_blockers": sorted(set([*(payload.get("current_blockers", []) or []), *self.paper_forward_blockers_from_counts(summary)])),
+                "lifecycle_message": lifecycle_message(mode),
+            }
+        )
+        return payload
+
     def run_once(self, db: Session) -> dict:
         """Run one foundation scan without opening/closing positions."""
 
@@ -176,6 +212,8 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
         created: list[dict] = []
         duplicates: list[dict] = []
         blocked: list[dict] = []
+        skipped: list[dict] = []
+        waiting: list[dict] = []
         for candidate in candidates:
             before_id = existing_candidate_id(db, self, candidate)
             trade = self.create_candidate(db, candidate)
@@ -184,24 +222,32 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
                 duplicates.append(serialized)
             elif trade.status == "DATA_BLOCKED":
                 blocked.append(serialized)
+            elif trade.status == "SKIPPED":
+                skipped.append(serialized)
+            elif trade.status == "WAITING_FOR_TRIGGER":
+                waiting.append(serialized)
             else:
                 created.append(serialized)
 
         db.commit()
         snapshot = self.publish_snapshot(db)
+        actionability_summary = snapshot.get("payload", {}).get("actionability_summary") if isinstance(snapshot, dict) else None
         return {
             "status": "ok",
             "mode": "foundation_candidate_freeze",
             "candidates_seen": len(candidates),
             "created": created,
             "duplicates": duplicates,
+            "waiting_for_trigger": waiting,
+            "skipped": skipped,
             "data_blocked": blocked,
+            "actionability_summary": actionability_summary,
             "snapshot_status": snapshot.get("status"),
-            "current_blockers": [] if created or duplicates else ["no_candidate_decisions_available"],
+            "current_blockers": self.paper_forward_blockers_from_counts(actionability_summary) if actionability_summary else ([] if created or duplicates else ["no_candidate_decisions_available"]),
             "policy": LAB_POLICY,
         }
 
-    def run_lifecycle(self, db: Session) -> dict:
+    def run_lifecycle(self, db: Session, *, override: bool = False) -> dict:
         """Advance frozen paper-forward candidates through the paper lifecycle.
 
         This is deliberately separate from run_once(): run_once only freezes
@@ -211,6 +257,17 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
 
         if not settings.live_trading_game_enabled:
             return {"status": "disabled", "policy": LAB_POLICY, "current_blockers": ["live_forward_paper_disabled"]}
+        game = self.active_game(db)
+        if not settings.paper_forward_lifecycle_enabled and not override:
+            summary = self.actionability_summary(db, game) if game else empty_actionability_summary()
+            return {
+                "status": "disabled",
+                "mode": "LIFECYCLE_DISABLED_BY_SETTINGS",
+                "paper_forward_lifecycle_mode": "LIFECYCLE_DISABLED_BY_SETTINGS",
+                "actionability_summary": summary,
+                "current_blockers": sorted(set(["paper_forward_lifecycle_disabled_by_settings", *self.paper_forward_blockers_from_counts(summary)])),
+                "policy": "Paper-forward lifecycle is currently disabled. BLUM is freezing decisions but not opening or closing trades.",
+            }
 
         game = self.active_or_create_live_game(db)
         try:
@@ -224,12 +281,14 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
             return {
                 "status": "ok",
                 "mode": "paper_forward_lifecycle",
+                "paper_forward_lifecycle_mode": "LIFECYCLE_ENABLED",
                 "phases": {
                     "open_eligible_trades": opened,
                     "update_open_trades": updated,
                     "close_resolved_trades": closed,
                     "publish_lessons": {"created": len(lessons), "lessons": lessons[:8]},
                 },
+                "actionability_summary": snapshot.get("payload", {}).get("actionability_summary") if isinstance(snapshot, dict) else None,
                 "snapshot_status": snapshot.get("status"),
                 "current_blockers": snapshot.get("payload", {}).get("current_blockers", []) if isinstance(snapshot, dict) else [],
                 "policy": LAB_POLICY,
@@ -257,7 +316,7 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
         live_game = game or self.active_or_create_live_game(db)
         rows = db.scalars(
             select(LiveForwardPaperTrade)
-            .where(LiveForwardPaperTrade.game_id == live_game.id, LiveForwardPaperTrade.status == "CANDIDATE")
+            .where(LiveForwardPaperTrade.game_id == live_game.id, LiveForwardPaperTrade.status.in_(["CANDIDATE", "WAITING_FOR_TRIGGER"]))
             .order_by(LiveForwardPaperTrade.created_at)
             .limit(50)
         ).all()
@@ -562,14 +621,23 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
             "expired_count": int(db.scalar(select(func.count(LiveForwardPaperTrade.id)).where(LiveForwardPaperTrade.game_id == game.id, LiveForwardPaperTrade.status == "EXPIRED")) or 0),
             "invalidated_count": int(db.scalar(select(func.count(LiveForwardPaperTrade.id)).where(LiveForwardPaperTrade.game_id == game.id, LiveForwardPaperTrade.status == "INVALIDATED")) or 0),
             "data_blocked_count": int(db.scalar(select(func.count(LiveForwardPaperTrade.id)).where(LiveForwardPaperTrade.game_id == game.id, LiveForwardPaperTrade.status == "DATA_BLOCKED")) or 0),
-            "error_count": int(db.scalar(select(func.count(LiveForwardPaperTrade.id)).where(LiveForwardPaperTrade.game_id == game.id, LiveForwardPaperTrade.status.in_(["ERROR", "SKIPPED"]))) or 0),
+            "waiting_for_trigger_count": int(db.scalar(select(func.count(LiveForwardPaperTrade.id)).where(LiveForwardPaperTrade.game_id == game.id, LiveForwardPaperTrade.status == "WAITING_FOR_TRIGGER")) or 0),
+            "skipped_count": int(db.scalar(select(func.count(LiveForwardPaperTrade.id)).where(LiveForwardPaperTrade.game_id == game.id, LiveForwardPaperTrade.status == "SKIPPED")) or 0),
+            "error_count": int(db.scalar(select(func.count(LiveForwardPaperTrade.id)).where(LiveForwardPaperTrade.game_id == game.id, LiveForwardPaperTrade.status == "ERROR")) or 0),
         }
         latest_events = db.scalars(select(LiveForwardPaperTradeEvent).order_by(desc(LiveForwardPaperTradeEvent.event_timestamp)).limit(20)).all()
+        actionability_summary = self.actionability_summary(db, game)
+        lifecycle_mode = self.lifecycle_mode(actionability_summary)
         payload.update(
             {
                 "readiness_status": payload.get("readiness"),
                 "last_run_at": payload.get("last_worker_run"),
+                "paper_forward_lifecycle_mode": lifecycle_mode,
+                "actionability_policy": ActionabilityPolicy().to_dict(),
+                "actionability_summary": actionability_summary,
                 "candidate_count": total_counts["candidate_count"],
+                "waiting_for_trigger_count": total_counts["waiting_for_trigger_count"],
+                "skipped_count": total_counts["skipped_count"],
                 "open_count": total_counts["open_count"],
                 "closed_count": total_counts["closed_count"],
                 "expired_count": total_counts["expired_count"],
@@ -585,11 +653,55 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
                 "win_rate": (payload.get("metrics") or {}).get("win_rate"),
                 "benchmark_excess": (payload.get("metrics") or {}).get("benchmark_excess"),
                 "latest_lesson": payload.get("last_lesson"),
-                "current_blockers": payload.get("blockers", []),
+                "current_blockers": sorted(set([*(payload.get("blockers", []) or []), *self.paper_forward_blockers_from_counts(actionability_summary)])),
+                "lifecycle_message": lifecycle_message(lifecycle_mode),
             }
         )
         payload["counts"] = {**(payload.get("counts") or {}), **total_counts}
         return payload
+
+    def actionability_summary(self, db: Session, game: LiveForwardPaperGame | None = None) -> dict:
+        game = game or self.active_game(db)
+        if not game:
+            return empty_actionability_summary()
+        rows = db.scalars(
+            select(LiveForwardPaperTrade)
+            .where(LiveForwardPaperTrade.game_id == game.id, LiveForwardPaperTrade.status.in_(["CANDIDATE", "WAITING_FOR_TRIGGER", "SKIPPED", "DATA_BLOCKED", "ERROR"]))
+            .order_by(desc(LiveForwardPaperTrade.created_at))
+            .limit(250)
+        ).all()
+        return paper_forward_actionability_summary(rows)
+
+    def lifecycle_mode(self, actionability_summary: dict | None = None) -> str:
+        if not settings.paper_forward_lifecycle_enabled:
+            return "CANDIDATE_FREEZE_ONLY"
+        summary = actionability_summary or {}
+        if int(summary.get("actionable_count") or 0) <= 0 and int(summary.get("waiting_for_trigger_count") or 0) <= 0:
+            return "LIFECYCLE_BLOCKED_BY_NO_ACTIONABLE_CANDIDATES"
+        return "LIFECYCLE_ENABLED"
+
+    def paper_forward_blockers_from_counts(self, actionability_summary: dict | None) -> list[str]:
+        summary = actionability_summary or {}
+        blockers: list[str] = []
+        if not settings.paper_forward_lifecycle_enabled:
+            blockers.append("paper_forward_lifecycle_disabled_by_settings")
+        total = int(summary.get("total_candidates") or 0)
+        actionable = int(summary.get("actionable_count") or 0)
+        waiting = int(summary.get("waiting_for_trigger_count") or 0)
+        skipped = int(summary.get("skipped_count") or 0)
+        blocked = int(summary.get("data_blocked_count") or 0)
+        errors = int(summary.get("error_count") or 0)
+        if total == 0:
+            blockers.append("no_paper_forward_candidates")
+        elif actionable == 0 and waiting == 0 and skipped > 0:
+            blockers.append("all_candidates_skipped_by_actionability_policy")
+        elif waiting > 0 and actionable == 0:
+            blockers.append("actionable_candidates_waiting_for_entry_trigger")
+        if blocked:
+            blockers.append("paper_forward_data_blocked")
+        if errors:
+            blockers.append("paper_forward_errors_present")
+        return blockers
 
     def open_candidate_trade(
         self,
@@ -601,7 +713,7 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
         condition: dict,
     ) -> dict:
         now = datetime.utcnow()
-        if trade.status != "CANDIDATE":
+        if trade.status not in {"CANDIDATE", "WAITING_FOR_TRIGGER"}:
             return serialize_paper_forward_trade(trade, compact=True)
 
         ledger_game = ensure_live_trade_game(db)
@@ -832,6 +944,33 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
         if exists:
             return None
         return self.add_event(db, trade, event_type, price_used, reason, payload)
+
+
+def empty_actionability_summary() -> dict:
+    return {
+        "total_candidates": 0,
+        "actionable_count": 0,
+        "waiting_for_trigger_count": 0,
+        "skipped_count": 0,
+        "data_blocked_count": 0,
+        "error_count": 0,
+        "status_distribution": {},
+        "top_rejection_reasons": [],
+        "latest_actionable_candidate": None,
+        "latest_waiting_candidate": None,
+        "latest_skipped_candidate": None,
+        "latest_data_blocked_candidate": None,
+    }
+
+
+def lifecycle_message(mode: str) -> str:
+    messages = {
+        "CANDIDATE_FREEZE_ONLY": "Paper-forward lifecycle is currently disabled. BLUM is freezing decisions but not opening or closing trades.",
+        "LIFECYCLE_ENABLED": "Paper-forward lifecycle is enabled. BLUM may open only candidates that pass actionability and trigger checks.",
+        "LIFECYCLE_DISABLED_BY_SETTINGS": "Paper-forward lifecycle is disabled by settings. Manual lifecycle runs require explicit override.",
+        "LIFECYCLE_BLOCKED_BY_NO_ACTIONABLE_CANDIDATES": "Lifecycle is enabled but no actionable candidates are available.",
+    }
+    return messages.get(mode, "Paper-forward lifecycle state is unknown.")
 
 
 def existing_candidate_id(db: Session, service: LiveForwardPaperTradingService, candidate: dict[str, Any]) -> int | None:

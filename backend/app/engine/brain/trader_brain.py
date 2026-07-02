@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.engine.contracts import ENGINE_VERSION, PROJECT_FEATURE_SET
 from app.models import (
     AlphaRecoveryAction,
@@ -42,10 +43,12 @@ from app.services.alpha_operating_system import (
 )
 from app.services.learning_summary import LearningSummaryService
 from app.services.research_planner import AutonomousResearchPlanner
+from app.services.trading_intelligence_lab import paper_forward_actionability_summary
 
 
 TRADER_BRAIN_VERSION = ENGINE_VERSION
 TRADER_BRAIN_FEATURE_SET = PROJECT_FEATURE_SET
+settings = get_settings()
 
 
 class TraderBrainService:
@@ -164,6 +167,8 @@ class TraderBrainService:
         improvements = db.scalars(select(SelfImprovementAction).order_by(desc(SelfImprovementAction.created_at)).limit(8)).all()
         noise = db.scalars(select(ReasoningNoiseFlag).order_by(desc(ReasoningNoiseFlag.created_at)).limit(8)).all()
         latest_trade = latest_row(db, TradingGameTrade)
+        paper_rows = db.scalars(select(LiveForwardPaperTrade).order_by(desc(LiveForwardPaperTrade.created_at)).limit(250)).all()
+        paper_actionability = paper_forward_actionability_summary(paper_rows)
         return {
             "status": "ready",
             "version": TRADER_BRAIN_VERSION,
@@ -182,6 +187,8 @@ class TraderBrainService:
             "active_focus": [focus_payload(row) for row in focus],
             "noise_flags": [noise_payload(row) for row in noise],
             "latest_trade": trade_payload(latest_trade),
+            "paper_forward_learning_blocker": paper_forward_learning_blocker(paper_actionability),
+            "paper_forward_actionability_summary": paper_actionability,
             "policy": "Training Ground observes the autonomous Learning Loop. It does not start experiments from the frontend.",
         }
 
@@ -236,11 +243,13 @@ class TraderBrainService:
         open_rows = [row for row in paper_rows if paper_forward_trade_is_open(row)]
         all_benchmark_rows = [row for row in closed_rows if row.benchmark_return_same_period is not None or row.excess_return_vs_benchmark is not None]
         paper_summary = paper_forward_alpha_summary(paper_rows, live_game)
-        blocker_rows = alpha_blockers(paper_rows, closed_rows, benchmarks, paper_summary)
+        actionability_summary = paper_forward_actionability_summary(paper_rows)
+        lifecycle_mode = paper_forward_lifecycle_mode(actionability_summary)
+        blocker_rows = alpha_blockers(paper_rows, closed_rows, benchmarks, paper_summary, actionability_summary=actionability_summary, lifecycle_mode=lifecycle_mode)
         historical_split = historical_replay_evidence_split(db, benchmarks)
         walk_forward_split = walk_forward_evidence_split(db, benchmarks)
-        paper_split = paper_forward_evidence_split(paper_rows, live_game, label="Paper-Forward Evidence")
-        live_split = live_forward_evidence_split(paper_rows, live_game)
+        paper_split = paper_forward_evidence_split(paper_rows, live_game, label="Paper-Forward Evidence", actionability_summary=actionability_summary, lifecycle_mode=lifecycle_mode)
+        live_split = live_forward_evidence_split(paper_rows, live_game, actionability_summary=actionability_summary, lifecycle_mode=lifecycle_mode)
         evidence_split = {
             "historical_replay": historical_split,
             "walk_forward_validation": walk_forward_split,
@@ -263,6 +272,8 @@ class TraderBrainService:
             "sample_size": len(closed_rows),
             "closed_trade_count": len(closed_rows),
             "open_trade_count": len(open_rows),
+            "paper_forward_lifecycle_mode": lifecycle_mode,
+            "paper_forward_actionability_summary": actionability_summary,
             "min_required_sample_size": 30,
             "blum_return": paper_summary["blum_return"],
             "benchmark_return": paper_summary["benchmark_return"],
@@ -925,6 +936,54 @@ def training_validation_summary(latest: dict, productive: dict, totals: dict, to
         f"Stored evidence: {totals['runs']} runs, {totals['predictions_generated']} predictions, "
         f"{totals['outcomes_evaluated']} outcomes and {totals['memory_updates']} memory updates."
     )
+
+
+def paper_forward_learning_blocker(summary: dict) -> dict:
+    total = int(summary.get("total_candidates") or 0)
+    actionable = int(summary.get("actionable_count") or 0)
+    waiting = int(summary.get("waiting_for_trigger_count") or 0)
+    skipped = int(summary.get("skipped_count") or 0)
+    blocked = int(summary.get("data_blocked_count") or 0)
+    if total <= 0:
+        return {
+            "status": "NO_CANDIDATES",
+            "summary": "Paper-forward has not produced candidate decisions yet.",
+            "learning_impact": "No forward outcomes can be learned until candidates exist.",
+        }
+    if not settings.paper_forward_lifecycle_enabled:
+        return {
+            "status": "LIFECYCLE_DISABLED",
+            "summary": "Paper-forward lifecycle is disabled; BLUM is freezing decisions but not opening or closing trades.",
+            "learning_impact": "Forward learning is limited to candidate/actionability diagnostics until lifecycle is enabled.",
+            "top_rejection_reasons": summary.get("top_rejection_reasons") or [],
+        }
+    if actionable <= 0 and waiting <= 0 and skipped > 0:
+        return {
+            "status": "NO_ACTIONABLE_CANDIDATES",
+            "summary": "Paper-forward is not producing outcomes because candidates are rejected by actionability policy.",
+            "learning_impact": "Learning should focus on rejection reasons before changing thresholds.",
+            "top_rejection_reasons": summary.get("top_rejection_reasons") or [],
+        }
+    if waiting > 0 and actionable <= 0:
+        return {
+            "status": "WAITING_FOR_TRIGGER",
+            "summary": "Paper-forward candidates are waiting for entry triggers.",
+            "learning_impact": "No forward outcome exists until price confirms an entry condition.",
+            "top_rejection_reasons": summary.get("top_rejection_reasons") or [],
+        }
+    if blocked > 0:
+        return {
+            "status": "DATA_BLOCKED",
+            "summary": "Some paper-forward candidates are blocked by data quality or missing prices.",
+            "learning_impact": "Forward evidence is not reliable until data blockers are resolved.",
+            "top_rejection_reasons": summary.get("top_rejection_reasons") or [],
+        }
+    return {
+        "status": "READY_FOR_OUTCOMES",
+        "summary": "Paper-forward has candidates that can produce forward outcomes once lifecycle and triggers permit it.",
+        "learning_impact": "Closed paper-forward trades will feed future learning evidence.",
+        "top_rejection_reasons": summary.get("top_rejection_reasons") or [],
+    }
 
 
 def dedupe_lessons(rows: list[TradeLearningEvidence]) -> list[TradeLearningEvidence]:
@@ -1622,6 +1681,39 @@ def alpha_verdict_from_splits(evidence_split: dict, grade: str) -> str:
     return "Paper-forward evidence is inconclusive."
 
 
+def paper_forward_lifecycle_mode(actionability_summary: dict | None = None) -> str:
+    if not settings.paper_forward_lifecycle_enabled:
+        return "CANDIDATE_FREEZE_ONLY"
+    summary = actionability_summary or {}
+    if int(summary.get("actionable_count") or 0) <= 0 and int(summary.get("waiting_for_trigger_count") or 0) <= 0:
+        return "LIFECYCLE_BLOCKED_BY_NO_ACTIONABLE_CANDIDATES"
+    return "LIFECYCLE_ENABLED"
+
+
+def paper_forward_no_closed_reason(rows: list[LiveForwardPaperTrade], actionability_summary: dict | None, lifecycle_mode: str | None) -> str:
+    summary = actionability_summary or {}
+    total = int(summary.get("total_candidates") or len(rows))
+    actionable = int(summary.get("actionable_count") or 0)
+    waiting = int(summary.get("waiting_for_trigger_count") or 0)
+    skipped = int(summary.get("skipped_count") or 0)
+    blocked = int(summary.get("data_blocked_count") or 0)
+    if lifecycle_mode == "CANDIDATE_FREEZE_ONLY":
+        return "Paper-forward lifecycle is currently disabled. BLUM is freezing decisions but not opening or closing trades."
+    if total <= 0:
+        return "No paper-forward candidates have been stored yet."
+    if actionable <= 0 and waiting <= 0 and skipped > 0:
+        top = summary.get("top_rejection_reasons") or []
+        reason = top[0].get("reason") if top and isinstance(top[0], dict) else "actionability policy"
+        return f"Paper-forward candidates exist, but none are actionable. Main rejection reason: {reason}."
+    if waiting > 0 and actionable <= 0:
+        return "Paper-forward has candidates waiting for entry trigger; no trigger has fired yet."
+    if actionable > 0:
+        return "Actionable paper-forward candidates exist, but no trade has closed yet."
+    if blocked > 0:
+        return "Paper-forward candidates are blocked by missing or weak data."
+    return "No closed paper-forward trades exist yet."
+
+
 def split_has_data(split: dict) -> bool:
     return str(split.get("status") or "") != "NO_DATA" and (safe_float(split.get("sample_size"), 0.0) or 0.0) > 0
 
@@ -1644,12 +1736,29 @@ def alpha_blockers(
     closed_rows: list[LiveForwardPaperTrade],
     benchmarks: list[LearningBenchmarkComparison],
     summary: dict,
+    actionability_summary: dict | None = None,
+    lifecycle_mode: str | None = None,
 ) -> list[dict]:
     blockers: list[dict] = []
+    actionability_summary = actionability_summary or paper_forward_actionability_summary(rows)
+    lifecycle_mode = lifecycle_mode or paper_forward_lifecycle_mode(actionability_summary)
     if not rows:
-        blockers.append(blocker("no_paper_forward_trades", "No paper-forward decisions have been stored yet.", "Let the backend paper-forward worker collect evidence."))
+        blockers.append(blocker("no_paper_forward_candidates", "No paper-forward candidates have been stored yet.", "Let the backend paper-forward worker collect candidate evidence."))
     if not closed_rows:
-        blockers.append(blocker("no_closed_paper_forward_trades", "No closed paper-forward trades exist yet.", "Alpha cannot be evaluated until trades complete."))
+        blockers.append(blocker("no_closed_paper_forward_trades", paper_forward_no_closed_reason(rows, actionability_summary, lifecycle_mode), "Alpha cannot be evaluated until paper-forward trades complete."))
+    if lifecycle_mode == "CANDIDATE_FREEZE_ONLY":
+        blockers.append(blocker("paper_forward_lifecycle_disabled", "Paper-forward lifecycle is currently disabled. BLUM is freezing decisions but not opening or closing trades.", "Enable lifecycle explicitly only after actionability gates are certified."))
+    if int(actionability_summary.get("total_candidates") or 0) > 0:
+        actionable = int(actionability_summary.get("actionable_count") or 0)
+        waiting = int(actionability_summary.get("waiting_for_trigger_count") or 0)
+        skipped = int(actionability_summary.get("skipped_count") or 0)
+        blocked = int(actionability_summary.get("data_blocked_count") or 0)
+        if actionable == 0 and waiting == 0 and skipped > 0:
+            blockers.append(blocker("no_actionable_paper_forward_candidates", "Paper-forward candidates exist, but all recent candidates were rejected by actionability policy.", "Review top rejection reasons before changing thresholds."))
+        if waiting > 0 and actionable == 0:
+            blockers.append(blocker("entry_trigger_not_reached", "Paper-forward has candidates waiting for trigger; no entry condition has fired yet.", "Keep observing without forcing trades."))
+        if blocked > 0:
+            blockers.append(blocker("paper_forward_data_blocked", f"{blocked} paper-forward candidates are blocked by missing or weak data.", "Repair data before evaluating alpha."))
     if len(closed_rows) < 30:
         blockers.append(blocker("insufficient_sample_size", f"Closed sample is {len(closed_rows)}; minimum is 30.", "Keep collecting closed paper-forward outcomes."))
     if not any(row.excess_return_vs_benchmark is not None for row in closed_rows) and not benchmarks:
@@ -1713,10 +1822,20 @@ def alpha_trade_summary(row: LiveForwardPaperTrade | None) -> dict | None:
     }
 
 
-def paper_forward_evidence_split(rows: list[LiveForwardPaperTrade], game: LiveForwardPaperGame | None, *, label: str) -> dict:
+def paper_forward_evidence_split(
+    rows: list[LiveForwardPaperTrade],
+    game: LiveForwardPaperGame | None,
+    *,
+    label: str,
+    actionability_summary: dict | None = None,
+    lifecycle_mode: str | None = None,
+) -> dict:
     closed = [row for row in rows if paper_forward_trade_is_closed(row)]
     if not closed:
-        return empty_alpha_evidence_split(label, "live_forward_paper_trades", "No closed paper-forward trades exist yet.")
+        split = empty_alpha_evidence_split(label, "live_forward_paper_trades", paper_forward_no_closed_reason(rows, actionability_summary, lifecycle_mode))
+        split["actionability_summary"] = actionability_summary or paper_forward_actionability_summary(rows)
+        split["paper_forward_lifecycle_mode"] = lifecycle_mode or paper_forward_lifecycle_mode(split["actionability_summary"])
+        return split
     summary = paper_forward_alpha_summary(rows, game)
     has_benchmark = any(row.excess_return_vs_benchmark is not None or row.benchmark_return_same_period is not None for row in closed)
     grade, reason = alpha_evidence_grade(
@@ -1750,14 +1869,19 @@ def paper_forward_evidence_split(rows: list[LiveForwardPaperTrade], game: LiveFo
         "evidence_reason": reason,
         "data_source": "live_forward_paper_trades",
         "last_updated_at": latest_iso([row.updated_at or row.created_at for row in rows if row.updated_at or row.created_at]),
+        "actionability_summary": actionability_summary or paper_forward_actionability_summary(rows),
+        "paper_forward_lifecycle_mode": lifecycle_mode or paper_forward_lifecycle_mode(actionability_summary),
     }
 
 
-def live_forward_evidence_split(rows: list[LiveForwardPaperTrade], game: LiveForwardPaperGame | None) -> dict:
+def live_forward_evidence_split(rows: list[LiveForwardPaperTrade], game: LiveForwardPaperGame | None, actionability_summary: dict | None = None, lifecycle_mode: str | None = None) -> dict:
     closed = [row for row in rows if paper_forward_trade_is_closed(row)]
     if not closed:
-        return empty_alpha_evidence_split("Live-Forward Evidence", "live_forward_paper_trades", "No live-forward evaluated paper trades found.")
-    split = paper_forward_evidence_split(rows, game, label="Live-Forward Evidence")
+        split = empty_alpha_evidence_split("Live-Forward Evidence", "live_forward_paper_trades", paper_forward_no_closed_reason(rows, actionability_summary, lifecycle_mode))
+        split["actionability_summary"] = actionability_summary or paper_forward_actionability_summary(rows)
+        split["paper_forward_lifecycle_mode"] = lifecycle_mode or paper_forward_lifecycle_mode(split["actionability_summary"])
+        return split
+    split = paper_forward_evidence_split(rows, game, label="Live-Forward Evidence", actionability_summary=actionability_summary, lifecycle_mode=lifecycle_mode)
     split["data_source"] = "live_forward_paper_trades"
     return split
 

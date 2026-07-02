@@ -33,6 +33,7 @@ export default function TrainingGroundPage() {
   const displayStatus = validation.display_status ?? validation.status ?? "unknown";
   const readableStatus = humanStatus(displayStatus);
   const planner = data.research_planner ?? {};
+  const paperForwardBlocker = data.paper_forward_learning_blocker ?? {};
 
   return (
     <>
@@ -63,6 +64,7 @@ export default function TrainingGroundPage() {
             <Fact label="Target" value={data.current_experiment?.target ?? "broad coverage"} />
             <Fact label="Hypothesis" value={data.current_hypothesis} />
             <Fact label="Training evidence" value={readableStatus} detail={validation.summary ?? "No training summary available."} />
+            <Fact label="Paper-forward blocker" value={paperForwardBlocker.status ?? "not available"} detail={paperForwardBlocker.summary ?? "No paper-forward blocker stored in snapshot."} />
             <Fact label="Expected learning value" value={formatNumber(data.current_experiment?.expected_learning_value)} />
           </div>
         </BloombergPanel>

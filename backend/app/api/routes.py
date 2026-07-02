@@ -1338,8 +1338,11 @@ def paper_forward_run(db: Session = Depends(get_db)) -> dict:
 
 
 @router.post("/api/paper-forward/run-lifecycle")
-def paper_forward_run_lifecycle(db: Session = Depends(get_db)) -> dict:
-    return LiveForwardPaperTradingService().run_lifecycle(db)
+def paper_forward_run_lifecycle(
+    override: bool = Query(default=False),
+    db: Session = Depends(get_db),
+) -> dict:
+    return LiveForwardPaperTradingService().run_lifecycle(db, override=override)
 
 
 @router.get("/api/learning-intelligence/dashboard")

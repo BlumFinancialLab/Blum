@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta
 import hashlib
 from statistics import mean, median
@@ -45,6 +46,53 @@ LAB_POLICY = (
     "Trading Intelligence Lab is paper research only. Historical simulation and live forward paper data are "
     "evidence streams, not financial advice and not proof of future outperformance."
 )
+
+
+@dataclass(frozen=True)
+class ActionabilityPolicy:
+    """Current paper-forward gate policy.
+
+    The policy documents thresholds used to explain candidate rejection. It is
+    deliberately conservative: it exposes why a candidate failed, but does not
+    loosen BLUM's trading gates.
+    """
+
+    require_actionable_setup: bool = settings.live_trading_game_require_actionable_setup
+    actionable_states: tuple[str, ...] = ("active_setup", "actionable_if_confirmed")
+    waiting_states: tuple[str, ...] = ("wait_for_trigger", "actionable_if_confirmed")
+    minimum_data_quality: float = 50.0
+    minimum_confidence: float = 50.0
+    minimum_reward_to_risk: float = 1.0
+    require_entry: bool = True
+    require_stop: bool = True
+    require_target: bool = True
+    require_ticker: bool = True
+    require_price: bool = True
+
+    def to_dict(self) -> dict:
+        payload = asdict(self)
+        payload["actionable_states"] = list(self.actionable_states)
+        payload["waiting_states"] = list(self.waiting_states)
+        return payload
+
+
+@dataclass(frozen=True)
+class ActionabilityDiagnosis:
+    actionability_status: str
+    rejection_reason: str
+    is_actionable: bool
+    should_wait: bool
+    missing_fields: tuple[str, ...]
+    confidence: float | None
+    risk_reward_ratio: float | None
+    data_quality_score: float | None
+    policy_thresholds: dict
+    raw_actionability: str
+
+    def to_dict(self) -> dict:
+        payload = asdict(self)
+        payload["missing_fields"] = list(self.missing_fields)
+        return payload
 
 
 class AdvancedTradeLedgerAnalyticsService:
@@ -498,14 +546,15 @@ class LiveForwardPaperTradingService:
         if not ticker or self.duplicate_or_open_trade(db, game, ticker, duplicate_key):
             return None
 
-        actionable = live_candidate_is_actionable(candidate)
-        status = "OPEN" if actionable else "SKIPPED"
+        diagnosis = diagnose_candidate_actionability(candidate, strict=True)
+        actionable = diagnosis.actionability_status == "ACTIONABLE"
+        status = "OPEN" if actionable else "WAITING_FOR_TRIGGER" if diagnosis.should_wait else "SKIPPED"
         block_reason = ""
-        if price <= 0:
+        if diagnosis.actionability_status == "DATA_BLOCKED" or price <= 0:
             status = "DATA_BLOCKED"
-            block_reason = "missing_live_entry_price"
+            block_reason = diagnosis.rejection_reason or "missing_live_entry_price"
         elif not actionable:
-            block_reason = "candidate_not_actionable"
+            block_reason = diagnosis.rejection_reason
 
         risk_amount = game.current_capital * settings.live_trading_game_max_risk_per_trade / 100
         stop = safe_float(plan.get("invalidation_level")) or (price * 0.97 if price else None)
@@ -577,7 +626,7 @@ class LiveForwardPaperTradingService:
             learning_memory_used=feedback["learning_memory_used"],
             strategy_memory_used=feedback["strategy_memory_used"],
             research_priority_used=feedback["research_priority_used"],
-            frozen_decision_payload=freeze_decision_payload(candidate, feedback, now),
+            frozen_decision_payload=freeze_decision_payload({**candidate, "actionability_diagnosis": diagnosis.to_dict()}, feedback, now),
             actionability_state=candidate.get("actionability"),
             confidence=candidate.get("confidence"),
             sniper_score=candidate.get("sniper_score"),
@@ -604,12 +653,19 @@ class LiveForwardPaperTradingService:
         )
         db.add(paper_trade)
         db.flush()
-        self.add_event(db, paper_trade, "DECISION_CREATED", price, "Decision frozen from current BLUM evidence.", {"candidate": compact_candidate(candidate), "feedback": feedback})
+        self.add_event(
+            db,
+            paper_trade,
+            "DECISION_CREATED",
+            price,
+            "Decision frozen from current BLUM evidence.",
+            {"candidate": compact_candidate(candidate), "feedback": feedback, "actionability_diagnosis": diagnosis.to_dict()},
+        )
         if status == "DATA_BLOCKED":
-            self.add_event(db, paper_trade, "DATA_BLOCKED", None, block_reason, {"price_context": candidate.get("price_context")})
+            self.add_event(db, paper_trade, "DATA_BLOCKED", None, block_reason, {"price_context": candidate.get("price_context"), "actionability_diagnosis": diagnosis.to_dict()})
             return paper_trade
-        if status == "SKIPPED":
-            self.add_event(db, paper_trade, "DATA_BLOCKED" if block_reason == "missing_live_entry_price" else "ERROR", price, block_reason, {"actionability": candidate.get("actionability")})
+        if status in {"SKIPPED", "WAITING_FOR_TRIGGER"}:
+            self.add_event(db, paper_trade, "ACTIONABILITY_REJECTED", price, block_reason, actionability_event_payload(candidate, diagnosis, feedback))
             return paper_trade
 
         position = LiveForwardPaperPosition(
@@ -1292,11 +1348,189 @@ def latest_price_after(db: Session, ticker: str, timestamp: datetime) -> tuple[d
 
 
 def live_candidate_is_actionable(candidate: dict) -> bool:
-    action = str(candidate.get("actionability") or "").lower()
-    if settings.live_trading_game_require_actionable_setup and action not in {"active_setup", "actionable_if_confirmed"}:
-        return False
-    price = safe_float((candidate.get("price_context") or {}).get("latest_price"))
-    return bool(candidate.get("ticker") and price > 0)
+    diagnosis = diagnose_candidate_actionability(candidate, strict=False)
+    return diagnosis.actionability_status == "ACTIONABLE"
+
+
+def diagnose_candidate_actionability(candidate: dict, *, strict: bool = True, policy: ActionabilityPolicy | None = None) -> ActionabilityDiagnosis:
+    policy = policy or ActionabilityPolicy()
+    plan = candidate.get("trade_plan") or {}
+    price_context = candidate.get("price_context") or {}
+    raw_actionability = str(candidate.get("actionability") or "").lower()
+    ticker = str(candidate.get("ticker") or "").strip().upper()
+    price = safe_float(price_context.get("latest_price"), None)
+    data_quality = safe_float(price_context.get("data_quality_score"), None)
+    confidence = safe_float(candidate.get("confidence"), None)
+    if confidence is None:
+        confidence = safe_float(plan.get("confidence"), None)
+    risk_reward = risk_reward_ratio_from_plan(plan, price)
+
+    missing: list[str] = []
+    if policy.require_ticker and not ticker:
+        missing.append("ticker")
+    if policy.require_price and (price is None or price <= 0):
+        missing.append("latest_price")
+
+    if strict:
+        if policy.require_entry and not has_entry_definition(plan):
+            missing.append("entry_condition")
+        if policy.require_stop and not has_stop_definition(plan):
+            missing.append("invalidation_or_stop")
+        if policy.require_target and not has_target_definition(plan):
+            missing.append("target")
+
+    if "ticker" in missing or "latest_price" in missing:
+        return actionability_diagnosis(
+            "DATA_BLOCKED",
+            "missing_required_market_identity_or_price",
+            False,
+            False,
+            missing,
+            confidence,
+            risk_reward,
+            data_quality,
+            raw_actionability,
+            policy,
+        )
+    if data_quality is not None and data_quality < policy.minimum_data_quality:
+        return actionability_diagnosis(
+            "REJECTED_BAD_DATA",
+            f"data_quality_below_{policy.minimum_data_quality:g}",
+            False,
+            False,
+            missing,
+            confidence,
+            risk_reward,
+            data_quality,
+            raw_actionability,
+            policy,
+        )
+    if strict and "entry_condition" in missing:
+        return actionability_diagnosis("REJECTED_NO_ENTRY", "missing_entry_condition", False, False, missing, confidence, risk_reward, data_quality, raw_actionability, policy)
+    if strict and "invalidation_or_stop" in missing:
+        return actionability_diagnosis("REJECTED_NO_STOP", "missing_invalidation_or_stop", False, False, missing, confidence, risk_reward, data_quality, raw_actionability, policy)
+    if strict and "target" in missing:
+        return actionability_diagnosis("REJECTED_NO_TARGET", "missing_target", False, False, missing, confidence, risk_reward, data_quality, raw_actionability, policy)
+    if confidence is not None and confidence < policy.minimum_confidence:
+        return actionability_diagnosis(
+            "REJECTED_LOW_CONFIDENCE",
+            f"confidence_below_{policy.minimum_confidence:g}",
+            False,
+            False,
+            missing,
+            confidence,
+            risk_reward,
+            data_quality,
+            raw_actionability,
+            policy,
+        )
+    if risk_reward is not None and risk_reward < policy.minimum_reward_to_risk:
+        return actionability_diagnosis(
+            "REJECTED_BAD_RISK_REWARD",
+            f"reward_to_risk_below_{policy.minimum_reward_to_risk:g}",
+            False,
+            False,
+            missing,
+            confidence,
+            risk_reward,
+            data_quality,
+            raw_actionability,
+            policy,
+        )
+    if raw_actionability in {"avoid", "exit_or_reduce", "reduce", "exit"}:
+        return actionability_diagnosis("SKIPPED_AVOID_SIGNAL", f"actionability_{raw_actionability}", False, False, missing, confidence, risk_reward, data_quality, raw_actionability, policy)
+    if raw_actionability in set(policy.waiting_states):
+        return actionability_diagnosis("WAITING_FOR_TRIGGER", f"actionability_{raw_actionability}", False, True, missing, confidence, risk_reward, data_quality, raw_actionability, policy)
+    if policy.require_actionable_setup and raw_actionability not in set(policy.actionable_states):
+        return actionability_diagnosis(
+            "REJECTED_INSUFFICIENT_EVIDENCE",
+            f"actionability_{raw_actionability or 'missing'}_not_actionable",
+            False,
+            False,
+            missing,
+            confidence,
+            risk_reward,
+            data_quality,
+            raw_actionability,
+            policy,
+        )
+    if confidence is None and strict:
+        return actionability_diagnosis("REJECTED_MODEL_UNCERTAIN", "missing_confidence", False, False, missing, confidence, risk_reward, data_quality, raw_actionability, policy)
+    return actionability_diagnosis("ACTIONABLE", "passed_actionability_policy", True, False, missing, confidence, risk_reward, data_quality, raw_actionability, policy)
+
+
+def actionability_diagnosis(
+    status: str,
+    reason: str,
+    is_actionable: bool,
+    should_wait: bool,
+    missing_fields: list[str],
+    confidence: float | None,
+    risk_reward_ratio: float | None,
+    data_quality_score: float | None,
+    raw_actionability: str,
+    policy: ActionabilityPolicy,
+) -> ActionabilityDiagnosis:
+    return ActionabilityDiagnosis(
+        actionability_status=status,
+        rejection_reason=reason,
+        is_actionable=is_actionable,
+        should_wait=should_wait,
+        missing_fields=tuple(missing_fields),
+        confidence=round(confidence, 4) if confidence is not None else None,
+        risk_reward_ratio=round(risk_reward_ratio, 4) if risk_reward_ratio is not None else None,
+        data_quality_score=round(data_quality_score, 4) if data_quality_score is not None else None,
+        policy_thresholds=policy.to_dict(),
+        raw_actionability=raw_actionability,
+    )
+
+
+def has_entry_definition(plan: dict) -> bool:
+    return bool(plan.get("entry_trigger") or plan.get("confirmation_condition") or plan.get("entry_zone") or plan.get("trigger_price") or plan.get("entry_type"))
+
+
+def has_stop_definition(plan: dict) -> bool:
+    return safe_float(plan.get("invalidation_level"), None) is not None or safe_float(plan.get("stop_price"), None) is not None or safe_float(plan.get("stop_loss"), None) is not None
+
+
+def has_target_definition(plan: dict) -> bool:
+    return safe_float(plan.get("target_1"), None) is not None or safe_float(plan.get("target_2"), None) is not None
+
+
+def risk_reward_ratio_from_plan(plan: dict, price: float | None) -> float | None:
+    estimate = plan.get("risk_reward_estimate") or {}
+    value = safe_float(estimate.get("reward_to_risk"), None) if isinstance(estimate, dict) else None
+    if value is not None:
+        return value
+    target = safe_float(plan.get("target_1"), None)
+    stop = safe_float(plan.get("invalidation_level"), None)
+    if stop is None:
+        stop = safe_float(plan.get("stop_price"), None)
+    if price is None or price <= 0 or target is None or stop is None:
+        return None
+    risk = abs(price - stop)
+    if risk <= 0:
+        return None
+    return abs(target - price) / risk
+
+
+def actionability_event_payload(candidate: dict, diagnosis: ActionabilityDiagnosis, feedback: dict | None = None) -> dict:
+    plan = candidate.get("trade_plan") or {}
+    return {
+        "actionability_status": diagnosis.actionability_status,
+        "rejection_reason": diagnosis.rejection_reason,
+        "confidence": diagnosis.confidence,
+        "risk_reward_ratio": diagnosis.risk_reward_ratio,
+        "missing_fields": list(diagnosis.missing_fields),
+        "policy_thresholds": diagnosis.policy_thresholds,
+        "setup_type": (candidate.get("setup") or {}).get("setup_type"),
+        "model_version_used": (feedback or {}).get("model_version_used"),
+        "raw_actionability": diagnosis.raw_actionability,
+        "entry_trigger": plan.get("entry_trigger") or plan.get("confirmation_condition"),
+        "target_1": plan.get("target_1"),
+        "target_2": plan.get("target_2"),
+        "invalidation_level": plan.get("invalidation_level") or plan.get("stop_price"),
+    }
 
 
 def ensure_live_trade_game(db: Session) -> TradingGame:
@@ -1399,6 +1633,7 @@ def freeze_decision_payload(candidate: dict, feedback: dict, decision_timestamp:
         "actionability": candidate.get("actionability"),
         "sniper_score": candidate.get("sniper_score"),
         "confidence": candidate.get("confidence"),
+        "actionability_diagnosis": candidate.get("actionability_diagnosis") or {},
         "trade_plan": candidate.get("trade_plan") or {},
         "price_context": candidate.get("price_context") or {},
         "market_regime": (candidate.get("market_regime") or {}).get("regime_primary"),
@@ -1531,6 +1766,7 @@ def live_position_for_paper_trade(db: Session, game: LiveForwardPaperGame, paper
 
 
 def serialize_paper_forward_trade(row: LiveForwardPaperTrade, *, compact: bool = False) -> dict:
+    diagnosis = actionability_diagnosis_from_trade(row)
     payload = {
         "trade_id": row.id,
         "trade_uid": row.trade_uid,
@@ -1569,6 +1805,11 @@ def serialize_paper_forward_trade(row: LiveForwardPaperTrade, *, compact: bool =
         "confidence": row.confidence,
         "sniper_score": row.sniper_score,
         "actionability_state": row.actionability_state,
+        "actionability_status": diagnosis.get("actionability_status"),
+        "rejection_reason": diagnosis.get("rejection_reason"),
+        "missing_fields": diagnosis.get("missing_fields") or [],
+        "risk_reward_ratio": diagnosis.get("risk_reward_ratio"),
+        "data_quality_score": diagnosis.get("data_quality_score"),
         "weights_used": row.weights_used,
         "feedback_loop_audit_id": row.feedback_loop_audit_id,
         "created_at": iso(row.created_at),
@@ -1588,6 +1829,7 @@ def serialize_paper_forward_trade(row: LiveForwardPaperTrade, *, compact: bool =
             "strategy_memory_used": row.strategy_memory_used,
             "research_priority_used": row.research_priority_used,
             "frozen_decision_payload": row.frozen_decision_payload,
+            "actionability_diagnosis": diagnosis,
             "entry_trigger": row.entry_trigger,
             "confirmation_condition": row.confirmation_condition,
             "opened_at": iso(row.opened_at),
@@ -1656,12 +1898,82 @@ def serialize_trade_lesson(row: TradeLearningEvidence) -> dict:
     }
 
 
+def actionability_diagnosis_from_trade(row: LiveForwardPaperTrade) -> dict:
+    payload = row.frozen_decision_payload or {}
+    diagnosis = payload.get("actionability_diagnosis") if isinstance(payload, dict) else None
+    if isinstance(diagnosis, dict) and diagnosis.get("actionability_status"):
+        return diagnosis
+    status = str(row.status or "").upper()
+    if status == "CANDIDATE":
+        actionability_status = "ACTIONABLE"
+        reason = "legacy_candidate_without_diagnosis"
+    elif status == "WAITING_FOR_TRIGGER":
+        actionability_status = "WAITING_FOR_TRIGGER"
+        reason = "legacy_waiting_candidate_without_diagnosis"
+    elif status == "DATA_BLOCKED":
+        actionability_status = "DATA_BLOCKED"
+        reason = "legacy_data_blocked_without_diagnosis"
+    elif status == "SKIPPED":
+        actionability_status = "SKIPPED_AVOID_SIGNAL" if str(row.actionability_state or "").lower() == "avoid" else "REJECTED_INSUFFICIENT_EVIDENCE"
+        reason = "legacy_skipped_without_diagnosis"
+    elif status == "ERROR":
+        actionability_status = "ERROR"
+        reason = row.close_reason or "legacy_error_without_diagnosis"
+    else:
+        actionability_status = status or "ERROR"
+        reason = "legacy_status_without_diagnosis"
+    return {
+        "actionability_status": actionability_status,
+        "rejection_reason": reason,
+        "is_actionable": actionability_status == "ACTIONABLE",
+        "should_wait": actionability_status == "WAITING_FOR_TRIGGER",
+        "missing_fields": [],
+        "confidence": row.confidence,
+        "risk_reward_ratio": row.expected_r_multiple,
+        "data_quality_score": None,
+        "policy_thresholds": ActionabilityPolicy().to_dict(),
+        "raw_actionability": row.actionability_state,
+    }
+
+
+def paper_forward_actionability_summary(rows: list[LiveForwardPaperTrade]) -> dict:
+    diagnoses = [(row, actionability_diagnosis_from_trade(row)) for row in rows]
+    status_counts = Counter(str(diagnosis.get("actionability_status") or "ERROR") for _, diagnosis in diagnoses)
+    reason_counts = Counter(str(diagnosis.get("rejection_reason") or "unknown") for _, diagnosis in diagnoses if str(diagnosis.get("actionability_status")) != "ACTIONABLE")
+    actionable_rows = [(row, diagnosis) for row, diagnosis in diagnoses if diagnosis.get("actionability_status") == "ACTIONABLE"]
+    waiting_rows = [(row, diagnosis) for row, diagnosis in diagnoses if diagnosis.get("actionability_status") == "WAITING_FOR_TRIGGER"]
+    skipped_rows = [
+        (row, diagnosis)
+        for row, diagnosis in diagnoses
+        if diagnosis.get("actionability_status") not in {"ACTIONABLE", "WAITING_FOR_TRIGGER", "DATA_BLOCKED"}
+    ]
+    blocked_rows = [(row, diagnosis) for row, diagnosis in diagnoses if diagnosis.get("actionability_status") == "DATA_BLOCKED"]
+    return {
+        "total_candidates": len(rows),
+        "actionable_count": len(actionable_rows),
+        "waiting_for_trigger_count": len(waiting_rows),
+        "skipped_count": len(skipped_rows),
+        "data_blocked_count": len(blocked_rows),
+        "error_count": status_counts.get("ERROR", 0),
+        "status_distribution": dict(status_counts),
+        "top_rejection_reasons": [{"reason": reason, "count": count} for reason, count in reason_counts.most_common(8)],
+        "latest_actionable_candidate": serialize_paper_forward_trade(actionable_rows[0][0], compact=True) if actionable_rows else None,
+        "latest_waiting_candidate": serialize_paper_forward_trade(waiting_rows[0][0], compact=True) if waiting_rows else None,
+        "latest_skipped_candidate": serialize_paper_forward_trade(skipped_rows[0][0], compact=True) if skipped_rows else None,
+        "latest_data_blocked_candidate": serialize_paper_forward_trade(blocked_rows[0][0], compact=True) if blocked_rows else None,
+    }
+
+
 def snapshot_blockers(candidate_rows: list[LiveForwardPaperTrade], open_rows: list[LiveForwardPaperTrade]) -> list[str]:
     blockers: list[str] = []
     if not open_rows:
         blockers.append("no_open_paper_forward_positions")
     if any(row.status == "DATA_BLOCKED" for row in candidate_rows):
         blockers.append("some_candidates_blocked_by_missing_market_data")
+    if any(actionability_diagnosis_from_trade(row).get("actionability_status") == "WAITING_FOR_TRIGGER" for row in candidate_rows):
+        blockers.append("actionable_candidates_waiting_for_entry_trigger")
+    if any(row.status == "SKIPPED" for row in candidate_rows):
+        blockers.append("some_candidates_rejected_by_actionability_policy")
     if len(candidate_rows) == 0 and len(open_rows) == 0:
         blockers.append("no_recent_candidates_in_snapshot")
     return blockers

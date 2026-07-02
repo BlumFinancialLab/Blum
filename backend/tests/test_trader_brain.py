@@ -182,7 +182,9 @@ def test_alpha_page_reports_insufficient_evidence_instead_of_claiming_alpha():
     assert payload["evidence_grade"] == "NO_DATA"
     assert "evidence_split" in payload
     assert payload["historical"]["status"] == "NO_DATA"
-    assert payload["paper_forward"]["evidence_reason"] == "No closed paper-forward trades exist yet."
+    assert payload["paper_forward_lifecycle_mode"] == "CANDIDATE_FREEZE_ONLY"
+    assert payload["paper_forward"]["evidence_reason"] == "Paper-forward lifecycle is currently disabled. BLUM is freezing decisions but not opening or closing trades."
+    assert any(item["code"] == "paper_forward_lifecycle_disabled" for item in payload["current_blockers"])
     assert payload["policy"].startswith("Alpha page reports benchmark-relative paper-forward evidence")
     assert payload["verdict"] == "No paper-forward evidence yet."
     assert payload["current_blockers"]
