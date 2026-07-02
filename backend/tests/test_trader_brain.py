@@ -204,13 +204,17 @@ def test_paper_trading_page_uses_single_snapshot_and_readiness_states():
     page = Path(__file__).resolve().parents[2] / "frontend" / "app" / "paper-trading" / "page.tsx"
     text = page.read_text()
 
-    assert "api.traderPaperTrading(40)" in text
-    assert "PaperTradingSnapshot" in text
+    assert "api.paperForwardSnapshot()" in text
+    assert "api.paperForwardTrades(50)" in text
+    assert "api.paperForwardTradeDetail(tradeId)" in text
+    assert "api.paperForwardEvents(tradeId)" in text
+    assert "Live-Forward Paper Trading" in text
     assert "NO_DECISIONS" in text
     assert "NO_ELIGIBLE_SETUPS" in text
     assert "NO_SNAPSHOTS" in text
-    assert "WORKER_FAILED" in text
+    assert "WORKER_DISABLED" in text
     assert "DATA_BLOCKED" in text
     assert "INSUFFICIENT_EVIDENCE" in text
     assert "No completed trades" not in text
-    assert "Trade Replay is intentionally lazy-rendered" in text
+    assert "No raw JSON" not in text
+    assert "Developer payload" in text

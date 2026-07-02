@@ -139,8 +139,10 @@ async function fetchBlum(path: string, options: RequestInit & { timeoutMs?: numb
 function reportFrontendTiming(path: string, method: string, duration_ms: number, status: string, force = false) {
   if (path.includes("/performance/frontend-widget") || path.includes("/api/performance/frontend-widget")) return;
   const onLearningPage = typeof location !== "undefined" && location.pathname.startsWith("/learning");
+  const onReadOnlyProductSurface = typeof location !== "undefined" && ["/paper-trading", "/copy-trading", "/brain", "/training-ground", "/alpha"].some((prefix) => location.pathname.startsWith(prefix));
   const route = typeof location !== "undefined" ? `${location.pathname}${location.search}` : "";
   const initialLearningWindow = onLearningPage && isWithinLearningInitialWindow();
+  if (!force && onReadOnlyProductSurface) return;
   if (!force && !onLearningPage && duration_ms < 400 && !path.includes("/learning")) return;
   fetch(`${API_BASE}/api/performance/frontend-widget`, {
     method: "POST",
@@ -205,6 +207,12 @@ export const api = {
   traderBrain: () => getJson<any>("/api/brain/snapshot"),
   traderTrainingGround: () => getJson<any>("/api/training/snapshot"),
   traderPaperTrading: (limit = 20) => getJson<any>(`/api/paper-trading/snapshot?limit=${limit}`),
+  paperForwardStatus: () => getJson<any>("/api/paper-forward/status"),
+  paperForwardSnapshot: () => getJson<any>("/api/paper-forward/snapshot"),
+  paperForwardTrades: (limit = 50, status?: string) =>
+    getJson<any>(`/api/paper-forward/trades?limit=${limit}${status ? `&status=${encodeURIComponent(status)}` : ""}`),
+  paperForwardTradeDetail: (tradeId: number) => getJson<any>(`/api/paper-forward/trades/${tradeId}`),
+  paperForwardEvents: (tradeId: number) => getJson<any>(`/api/paper-forward/events/${tradeId}`),
   traderAlpha: () => getJson<any>("/api/alpha/snapshot"),
   snapshotsHealth: () => getJson<any>("/snapshots/health"),
   produceSnapshots: (snapshotType?: string, maxItems = 8) =>

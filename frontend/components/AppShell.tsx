@@ -45,6 +45,32 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let mounted = true;
+    const onPaperTrading = pathname === "/paper-trading" || pathname === "/copy-trading" || pathname.startsWith("/paper-trading/") || pathname.startsWith("/copy-trading/");
+    if (onPaperTrading) {
+      api.paperForwardSnapshot().then((paper) => {
+        if (!mounted) return;
+        setSidebarStatus({
+          workerStatus: "snapshot",
+          modelStatus: "paper forward",
+          lastLearningCycle: "not queried",
+          paperForwardStatus: compactStatus(paper?.payload?.readiness ?? paper?.payload?.status ?? paper?.status),
+          alphaEvidenceGrade: "not queried",
+        });
+      }).catch(() => {
+        if (mounted) {
+          setSidebarStatus({
+            workerStatus: "snapshot",
+            modelStatus: "paper forward",
+            lastLearningCycle: "not queried",
+            paperForwardStatus: "unavailable",
+            alphaEvidenceGrade: "not queried",
+          });
+        }
+      });
+      return () => {
+        mounted = false;
+      };
+    }
     Promise.allSettled([
       api.systemStatus(),
       api.learningSummary(),
