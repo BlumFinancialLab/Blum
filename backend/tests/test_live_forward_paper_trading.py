@@ -1,4 +1,5 @@
 from datetime import date, timedelta
+from pathlib import Path
 
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
@@ -230,6 +231,25 @@ def test_paper_forward_snapshot_get_is_read_only_without_snapshot():
         assert before == after == 0
 
 
+def test_paper_forward_get_style_methods_are_read_only_and_report_blockers():
+    with setup_db() as db:
+        service = LiveForwardPaperTradingService()
+
+        before = db.scalar(select(func.count(PaperForwardTrade.id)))
+        status = service.status_readonly(db)
+        trades = service.paper_trades(db, limit=5)
+        detail = service.trade_detail(db, 999)
+        events = service.events(db, 999)
+        after = db.scalar(select(func.count(PaperForwardTrade.id)))
+
+        assert before == after == 0
+        assert status["readiness"] == "NO_SNAPSHOTS"
+        assert status["current_blockers"] == ["no_live_forward_paper_game"]
+        assert trades["rows"] == []
+        assert detail["status"] == "not_found"
+        assert events["events"] == []
+
+
 def test_paper_forward_run_once_freezes_candidates_without_opening_positions():
     with setup_db() as db:
         service = LiveForwardPaperTradingService()
@@ -244,3 +264,33 @@ def test_paper_forward_run_once_freezes_candidates_without_opening_positions():
         assert trade.status == "CANDIDATE"
         assert trade.ledger_trade_id is None
         assert any(event.event_type == "DECISION_CREATED" for event in events)
+
+
+def test_paper_forward_run_once_duplicate_does_not_overwrite_frozen_payload():
+    with setup_db() as db:
+        service = LiveForwardPaperTradingService()
+        service.scan_candidates = lambda _db, limit=30: [candidate()]  # type: ignore[method-assign]
+
+        first_report = service.run_once(db)
+        trade = db.scalar(select(PaperForwardTrade).where(PaperForwardTrade.ticker == "NVDA"))
+        frozen_before = dict(trade.decision_payload_frozen)
+
+        service.scan_candidates = lambda _db, limit=30: [candidate(price=100.0) | {"confidence": 12.0}]  # type: ignore[method-assign]
+        second_report = service.run_once(db)
+        refreshed = db.get(PaperForwardTrade, trade.id)
+
+        assert first_report["created"]
+        assert second_report["duplicates"]
+        assert db.scalar(select(func.count(PaperForwardTrade.id)).where(PaperForwardTrade.ticker == "NVDA")) == 1
+        assert refreshed.id == trade.id
+        assert refreshed.decision_payload_frozen == frozen_before
+        assert refreshed.decision_payload_frozen["confidence"] == 64.0
+
+
+def test_paper_forward_scheduler_uses_foundation_run_once_not_lifecycle_run_cycle():
+    source = (Path(__file__).resolve().parents[1] / "app" / "services" / "realtime.py").read_text()
+    start = source.index("def run_live_forward_paper_trading_job")
+    block = source[start : source.index("\n\ndef ", start + 1)]
+
+    assert ".run_once(db)" in block
+    assert ".run_cycle(db)" not in block

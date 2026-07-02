@@ -370,7 +370,13 @@ class LiveForwardPaperTradingService:
     def status_readonly(self, db: Session) -> dict:
         game = self.active_game(db)
         if not game:
-            return {"status": "NO_SNAPSHOTS", "readiness": "NO_SNAPSHOTS", "enabled": settings.live_trading_game_enabled, "policy": LAB_POLICY}
+            return {
+                "status": "NO_SNAPSHOTS",
+                "readiness": "NO_SNAPSHOTS",
+                "enabled": settings.live_trading_game_enabled,
+                "current_blockers": ["no_live_forward_paper_game"],
+                "policy": LAB_POLICY,
+            }
         return self.status_payload(db, game)
 
     def status_payload(self, db: Session, game: LiveForwardPaperGame) -> dict:

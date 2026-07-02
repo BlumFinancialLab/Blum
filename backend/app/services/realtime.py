@@ -261,7 +261,7 @@ def run_trading_game_job() -> None:
 
 
 def run_live_forward_paper_trading_job() -> None:
-    _run_job("live_forward_paper_trading", lambda db: LiveForwardPaperTradingService().run_cycle(db))
+    _run_job("live_forward_paper_trading", lambda db: LiveForwardPaperTradingService().run_once(db))
 
 
 def run_professional_learning_cycle_job() -> None:

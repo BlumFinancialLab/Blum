@@ -1,0 +1,15 @@
+[
+  "backend/tests/test_live_forward_paper_trading.py::test_live_forward_data_blocked_when_no_future_market_data",
+  "backend/tests/test_live_forward_paper_trading.py::test_live_forward_duplicate_prevention_by_decision_key",
+  "backend/tests/test_live_forward_paper_trading.py::test_live_forward_freezes_decision_without_future_prices",
+  "backend/tests/test_live_forward_paper_trading.py::test_live_forward_missing_entry_price_creates_data_blocked_decision",
+  "backend/tests/test_live_forward_paper_trading.py::test_live_forward_open_update_close_and_lesson_creation",
+  "backend/tests/test_live_forward_paper_trading.py::test_paper_forward_append_event_uses_event_log",
+  "backend/tests/test_live_forward_paper_trading.py::test_paper_forward_candidate_foundation_freezes_decision_and_event",
+  "backend/tests/test_live_forward_paper_trading.py::test_paper_forward_create_candidate_is_idempotent",
+  "backend/tests/test_live_forward_paper_trading.py::test_paper_forward_get_style_methods_are_read_only_and_report_blockers",
+  "backend/tests/test_live_forward_paper_trading.py::test_paper_forward_run_once_duplicate_does_not_overwrite_frozen_payload",
+  "backend/tests/test_live_forward_paper_trading.py::test_paper_forward_run_once_freezes_candidates_without_opening_positions",
+  "backend/tests/test_live_forward_paper_trading.py::test_paper_forward_scheduler_uses_foundation_run_once_not_lifecycle_run_cycle",
+  "backend/tests/test_live_forward_paper_trading.py::test_paper_forward_snapshot_get_is_read_only_without_snapshot"
+]
