@@ -184,7 +184,7 @@ def test_product_surface_is_reduced_to_four_primary_pages():
     text = root.read_text()
 
     assert 'label: "Brain"' in text
-    assert 'label: "Training"' in text
+    assert 'label: "Training Ground"' in text
     assert 'label: "Paper Trading"' in text
     assert 'label: "Alpha"' in text
     assert 'label: "Radar"' not in text

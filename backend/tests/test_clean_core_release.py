@@ -45,7 +45,7 @@ def test_primary_frontend_navigation_stays_reduced_to_four_product_surfaces():
     text = (ROOT.parents[1] / "frontend" / "components" / "AppShell.tsx").read_text()
 
     assert 'label: "Brain"' in text
-    assert 'label: "Training"' in text
+    assert 'label: "Training Ground"' in text
     assert 'label: "Paper Trading"' in text
     assert 'label: "Alpha"' in text
     assert 'label: "Performance"' not in text
