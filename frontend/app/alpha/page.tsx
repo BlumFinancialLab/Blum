@@ -141,10 +141,10 @@ export default function AlphaPage() {
 
       <BloombergPanel title="Evidence Split" value="separated" subtitle="Historical, walk-forward and paper-forward evidence are not blended into one fake score." dense>
         <div className="alpha-split-grid">
-          <EvidenceSplit title="Historical Replay" payload={data.historical} />
-          <EvidenceSplit title="Walk-Forward Validation" payload={data.walk_forward} />
-          <EvidenceSplit title="Paper-Forward Evidence" payload={data.paper_forward} />
-          <EvidenceSplit title="Live-Forward Evidence" payload={data.live_forward} />
+          <EvidenceSplit title="Historical Replay" payload={data.evidence_split?.historical_replay ?? data.historical} />
+          <EvidenceSplit title="Walk-Forward Validation" payload={data.evidence_split?.walk_forward_validation ?? data.walk_forward} />
+          <EvidenceSplit title="Paper-Forward Evidence" payload={data.evidence_split?.paper_forward ?? data.paper_forward} />
+          <EvidenceSplit title="Live-Forward Evidence" payload={data.evidence_split?.live_forward ?? data.live_forward} />
         </div>
       </BloombergPanel>
 
@@ -183,17 +183,26 @@ export default function AlphaPage() {
 
 function EvidenceSplit({ title, payload }: { title: string; payload: any }) {
   const grade = normalizeGrade(payload?.evidence_grade ?? payload?.status);
+  const sampleSize = payload?.sample_size ?? 0;
+  const reason = payload?.evidence_reason ?? "Evidence reason unavailable.";
   return (
     <div className={`alpha-split-card tone-${gradeTone(grade)}`}>
       <span>{title}</span>
       <strong>{grade}</strong>
-      <p>Sample {payload?.sample_size ?? 0}</p>
+      <p>{sampleSize ? `Sample ${sampleSize}` : reason}</p>
       <div>
         <b>Return</b><em>{formatPct(payload?.return ?? payload?.blum_return)}</em>
       </div>
       <div>
+        <b>Benchmark</b><em>{formatPct(payload?.benchmark_return)}</em>
+      </div>
+      <div>
+        <b>Alpha</b><em>{formatPct(payload?.alpha ?? payload?.benchmark_excess ?? payload?.average_excess_return)}</em>
+      </div>
+      <div>
         <b>Benchmark excess</b><em>{formatPct(payload?.benchmark_excess ?? payload?.average_excess_return)}</em>
       </div>
+      {sampleSize ? <small>{reason}</small> : null}
     </div>
   );
 }

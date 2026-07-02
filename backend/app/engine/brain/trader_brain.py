@@ -14,6 +14,9 @@ from app.models import (
     BlumTradingPowerScore,
     DashboardSnapshot,
     DecisionSuperiorityScore,
+    ExecutionSimulation,
+    FeedbackLoopAudit,
+    HistoricalPrediction,
     LearningBenchmarkComparison,
     LearningFocusPriority,
     LearningRun,
@@ -24,6 +27,7 @@ from app.models import (
     TradeLearningEvidence,
     LiveForwardPaperGame,
     LiveForwardPaperTrade,
+    PredictionOutcome,
     TradingCapitalCycle,
     TradingGame,
     TradingGameTrade,
@@ -233,18 +237,19 @@ class TraderBrainService:
         all_benchmark_rows = [row for row in closed_rows if row.benchmark_return_same_period is not None or row.excess_return_vs_benchmark is not None]
         paper_summary = paper_forward_alpha_summary(paper_rows, live_game)
         blocker_rows = alpha_blockers(paper_rows, closed_rows, benchmarks, paper_summary)
-        evidence_grade, evidence_reason = alpha_evidence_grade(
-            closed_count=len(closed_rows),
-            has_benchmark=bool(all_benchmark_rows or benchmarks),
-            alpha=paper_summary["alpha"],
-            expectancy=paper_summary["expectancy"],
-            max_drawdown=paper_summary["max_drawdown"],
-            profit_factor=paper_summary["profit_factor"],
-            setup_count=len({row.setup_type for row in closed_rows if row.setup_type}),
-            regime_count=len({(row.frozen_decision_payload or {}).get("market_regime") or "unknown" for row in closed_rows}),
-        )
-        verdict = alpha_verdict(evidence_grade, paper_summary, blocker_rows)
-        latest_update = latest_paper_forward_update(paper_rows, benchmarks)
+        historical_split = historical_replay_evidence_split(db, benchmarks)
+        walk_forward_split = walk_forward_evidence_split(db, benchmarks)
+        paper_split = paper_forward_evidence_split(paper_rows, live_game, label="Paper-Forward Evidence")
+        live_split = live_forward_evidence_split(paper_rows, live_game)
+        evidence_split = {
+            "historical_replay": historical_split,
+            "walk_forward_validation": walk_forward_split,
+            "paper_forward": paper_split,
+            "live_forward": live_split,
+        }
+        evidence_grade, evidence_reason = alpha_grade_from_splits(evidence_split)
+        verdict = alpha_verdict_from_splits(evidence_split, evidence_grade)
+        latest_update = latest_alpha_update_from_splits(evidence_split) or latest_paper_forward_update(paper_rows, benchmarks)
         return {
             "status": evidence_grade,
             "version": TRADER_BRAIN_VERSION,
@@ -277,9 +282,9 @@ class TraderBrainService:
             "realized_pnl": paper_summary["realized_pnl"],
             "unrealized_pnl": paper_summary["unrealized_pnl"],
             "paper_forward_alpha": paper_summary["alpha"],
-            "historical_alpha": evidence_slice(benchmarks, mode="historical_simulation").get("average_excess_return"),
-            "walk_forward_alpha": evidence_slice(benchmarks, mode="walk_forward_validation").get("average_excess_return"),
-            "live_forward_alpha": paper_summary["alpha"],
+            "historical_alpha": historical_split.get("benchmark_excess"),
+            "walk_forward_alpha": walk_forward_split.get("benchmark_excess"),
+            "live_forward_alpha": live_split.get("benchmark_excess"),
             "best_edge": edge_summary(paper_rows, "best"),
             "worst_edge": edge_summary(paper_rows, "worst"),
             "biggest_weakness": blocker_rows[0] if blocker_rows else None,
@@ -287,17 +292,18 @@ class TraderBrainService:
             "current_risk_warning": alpha_risk_warning(paper_summary, blocker_rows),
             "latest_lesson_affecting_alpha": latest_alpha_lesson(closed_rows, lesson_rows),
             "confidence_in_evidence": confidence_in_alpha_evidence(evidence_grade, len(closed_rows), bool(all_benchmark_rows or benchmarks)),
-            "historical": evidence_slice(benchmarks, mode="historical_simulation"),
-            "walk_forward": evidence_slice(benchmarks, mode="walk_forward_validation"),
-            "paper_forward": paper_forward_evidence_split(paper_rows, live_game, label="Paper-Forward Evidence"),
-            "live_forward": paper_forward_evidence_split(closed_rows, live_game, label="Live-Forward Closed Evidence"),
+            "evidence_split": evidence_split,
+            "historical": historical_split,
+            "walk_forward": walk_forward_split,
+            "paper_forward": paper_split,
+            "live_forward": live_split,
             "current_alpha_readiness": alpha_readiness,
             "edge_map": alpha_edge_map(paper_rows),
             "weakness_map": alpha_weakness_map(paper_rows, closed_rows, benchmarks, paper_summary),
             "current_blockers": blocker_rows,
             "latest_alpha_lessons": alpha_lessons(closed_rows, lesson_rows),
             "gates": gates,
-            "truth": alpha_truth_lines(verdict, blocker_rows, paper_summary),
+            "truth": alpha_truth_lines(verdict, blocker_rows, paper_summary, evidence_split),
             "policy": "Alpha page reports benchmark-relative paper-forward evidence. It never hides underperformance and never claims market beating without sufficient samples.",
         }
 
@@ -317,7 +323,7 @@ def latest_benchmarks(db: Session) -> list[LearningBenchmarkComparison]:
     rows = db.scalars(select(LearningBenchmarkComparison).order_by(desc(LearningBenchmarkComparison.calculated_at)).limit(60)).all()
     latest: dict[str, LearningBenchmarkComparison] = {}
     for row in rows:
-        latest.setdefault(row.benchmark_name, row)
+        latest.setdefault(f"{row.mode}:{row.benchmark_name}", row)
     return list(latest.values())
 
 
@@ -981,23 +987,68 @@ def best_benchmark_excess(rows: list[LearningBenchmarkComparison]) -> float | No
     return average_present(values)
 
 
-def evidence_slice(rows: list[LearningBenchmarkComparison], mode: str) -> dict:
-    selected = [row for row in rows if row.mode == mode]
+def empty_alpha_evidence_split(label: str, data_source: str, reason: str) -> dict:
+    return {
+        "label": label,
+        "status": "NO_DATA",
+        "sample_size": 0,
+        "closed_trade_count": 0,
+        "blum_return": None,
+        "return": None,
+        "benchmark_return": None,
+        "alpha": None,
+        "benchmark_excess": None,
+        "average_excess_return": None,
+        "expectancy": None,
+        "average_r": None,
+        "win_rate": None,
+        "profit_factor": None,
+        "max_drawdown": None,
+        "evidence_grade": "NO_DATA",
+        "evidence_reason": reason,
+        "data_source": data_source,
+        "last_updated_at": None,
+        "results": [],
+    }
+
+
+def benchmark_evidence_split(
+    rows: list[LearningBenchmarkComparison],
+    *,
+    modes: set[str],
+    label: str,
+    data_source: str,
+    no_data_reason: str,
+) -> dict:
+    selected = [row for row in rows if str(row.mode or "") in modes]
     if not selected:
-        return {"status": "NO_DATA", "sample_size": 0, "evidence_grade": "NO_DATA"}
+        return empty_alpha_evidence_split(label, data_source, no_data_reason)
     sample_size = sum(row.sample_size or 0 for row in selected)
     average_excess = average_present([row.excess_return for row in selected])
     blum_return = average_present([row.blum_return for row in selected])
     benchmark_return = average_present([row.benchmark_return for row in selected])
     grade = evidence_grade_from_benchmark_rows(selected)
+    reason = benchmark_evidence_reason(selected, grade, label)
     return {
-        "status": "ready",
+        "label": label,
+        "status": "ready" if sample_size > 0 else "NO_DATA",
         "sample_size": sample_size,
+        "closed_trade_count": sample_size,
+        "blum_return": blum_return,
         "return": blum_return,
         "benchmark_return": benchmark_return,
+        "alpha": average_excess,
         "benchmark_excess": average_excess,
         "average_excess_return": average_excess,
+        "expectancy": None,
+        "average_r": None,
+        "win_rate": average_present([row.hit_rate_vs_benchmark for row in selected if row.hit_rate_vs_benchmark is not None]),
+        "profit_factor": None,
+        "max_drawdown": average_present([row.blum_max_drawdown for row in selected if row.blum_max_drawdown is not None]),
         "evidence_grade": grade,
+        "evidence_reason": reason,
+        "data_source": data_source,
+        "last_updated_at": latest_iso([row.calculated_at for row in selected if row.calculated_at]),
         "results": [
             {
                 "benchmark": row.benchmark_name,
@@ -1013,8 +1064,408 @@ def evidence_slice(rows: list[LearningBenchmarkComparison], mode: str) -> dict:
     }
 
 
+def benchmark_evidence_reason(rows: list[LearningBenchmarkComparison], grade: str, label: str) -> str:
+    sample_size = sum(row.sample_size or 0 for row in rows)
+    if sample_size <= 0:
+        return f"{label} benchmark rows exist but contain no sample size."
+    labels = {str(row.result_label or "").lower() for row in rows}
+    if grade == "INSUFFICIENT_EVIDENCE":
+        return f"{label} has stored benchmark evidence, but only {sample_size} samples."
+    if "underperforming" in labels:
+        return f"{label} includes benchmark underperformance evidence."
+    if "outperforming" in labels:
+        return f"{label} includes stored benchmark-relative outperformance evidence."
+    return f"{label} benchmark evidence is stored, but the result is inconclusive."
+
+
+def evidence_slice(rows: list[LearningBenchmarkComparison], mode: str) -> dict:
+    return benchmark_evidence_split(
+        rows,
+        modes={mode},
+        label=mode.replace("_", " ").title(),
+        data_source="learning_benchmark_comparisons",
+        no_data_reason=f"No stored {mode.replace('_', ' ')} benchmark rows found.",
+    )
+
+
+def historical_replay_evidence_split(db: Session, benchmarks: list[LearningBenchmarkComparison]) -> dict:
+    rows = db.scalars(
+        select(TradingGameTrade)
+        .where(TradingGameTrade.mode.in_(["historical_simulation", "historical_replay"]))
+        .order_by(desc(TradingGameTrade.created_at))
+        .limit(500)
+    ).all()
+    evaluated = [row for row in rows if trading_game_trade_is_evaluated(row)]
+    if evaluated:
+        return trading_game_evidence_split(evaluated, label="Historical Replay", data_source="trading_game_trades")
+
+    simulations = db.scalars(
+        select(ExecutionSimulation)
+        .where(ExecutionSimulation.simulation_mode.in_(["historical_trigger", "historical_simulation"]))
+        .order_by(desc(ExecutionSimulation.created_at))
+        .limit(500)
+    ).all()
+    if simulations:
+        return execution_simulation_evidence_split(simulations)
+
+    return benchmark_evidence_split(
+        benchmarks,
+        modes={"historical_simulation", "historical_replay"},
+        label="Historical Replay",
+        data_source="learning_benchmark_comparisons",
+        no_data_reason="No stored historical replay trades found.",
+    )
+
+
+def trading_game_trade_is_evaluated(row: TradingGameTrade) -> bool:
+    return bool(
+        row.exit_date
+        or row.net_pnl_eur is not None
+        or row.realized_r_multiple is not None
+        or str(row.outcome_label or "").lower() not in {"", "inconclusive", "open"}
+    )
+
+
+def trading_game_evidence_split(rows: list[TradingGameTrade], *, label: str, data_source: str) -> dict:
+    pnl_values = [safe_float(row.net_pnl_eur, None) for row in rows if row.net_pnl_eur is not None]
+    r_values = [safe_float(row.realized_r_multiple, None) for row in rows if row.realized_r_multiple is not None]
+    return_values = [historical_trade_return(row) for row in rows]
+    benchmark_returns = [first_not_none(row.benchmark_return_same_period, row.benchmark_return) for row in rows]
+    excess_values = [safe_float(row.excess_return_vs_benchmark, None) for row in rows if row.excess_return_vs_benchmark is not None]
+    drawdown_values = [safe_float(row.max_adverse_excursion, None) for row in rows if row.max_adverse_excursion is not None]
+    wins = sum(1 for row in rows if trading_game_trade_won(row))
+    profit_factor = profit_factor_from_values(pnl_values if pnl_values else r_values)
+    alpha = average_present(excess_values)
+    grade, reason = split_evidence_grade(
+        label=label,
+        sample_size=len(rows),
+        has_benchmark=alpha is not None or average_present(benchmark_returns) is not None,
+        alpha=alpha,
+        expectancy=average_present(r_values),
+        max_drawdown=average_present(drawdown_values),
+        profit_factor=profit_factor,
+    )
+    return {
+        "label": label,
+        "status": "ready",
+        "sample_size": len(rows),
+        "closed_trade_count": len(rows),
+        "blum_return": average_present(return_values),
+        "return": average_present(return_values),
+        "benchmark_return": average_present(benchmark_returns),
+        "alpha": alpha,
+        "benchmark_excess": alpha,
+        "average_excess_return": alpha,
+        "expectancy": average_present(r_values),
+        "average_r": average_present(r_values),
+        "win_rate": round(wins / len(rows), 4) if rows else None,
+        "profit_factor": profit_factor,
+        "max_drawdown": average_present(drawdown_values),
+        "evidence_grade": grade,
+        "evidence_reason": reason,
+        "data_source": data_source,
+        "last_updated_at": latest_iso([row.created_at for row in rows if row.created_at]),
+        "results": [historical_trade_result(row) for row in rows[:6]],
+    }
+
+
+def historical_trade_return(row: TradingGameTrade) -> float | None:
+    if row.pnl_percent is not None:
+        return safe_float(row.pnl_percent, None)
+    if row.capital_before not in (None, 0) and row.net_pnl_eur is not None:
+        return round((float(row.net_pnl_eur) / float(row.capital_before)) * 100.0, 4)
+    return None
+
+
+def trading_game_trade_won(row: TradingGameTrade) -> bool:
+    outcome = str(row.outcome_label or "").lower()
+    if outcome in {"win", "target_hit", "partial_profit", "trailing_exit"}:
+        return True
+    return (safe_float(row.realized_r_multiple, 0.0) or 0.0) > 0 or (safe_float(row.net_pnl_eur, 0.0) or 0.0) > 0
+
+
+def historical_trade_result(row: TradingGameTrade) -> dict:
+    return {
+        "ticker": row.ticker,
+        "setup_type": row.setup_type,
+        "outcome": row.outcome_label,
+        "return": historical_trade_return(row),
+        "benchmark_return": first_not_none(row.benchmark_return_same_period, row.benchmark_return),
+        "excess_return": row.excess_return_vs_benchmark,
+        "r_multiple": row.realized_r_multiple,
+    }
+
+
+def execution_simulation_evidence_split(rows: list[ExecutionSimulation]) -> dict:
+    r_values = [safe_float(row.realized_r_multiple, None) for row in rows if row.realized_r_multiple is not None]
+    drawdown_values = [safe_float(row.max_adverse_excursion, None) for row in rows if row.max_adverse_excursion is not None]
+    wins = sum(1 for row in rows if row.target_hit or (safe_float(row.realized_r_multiple, 0.0) or 0.0) > 0)
+    profit_factor = profit_factor_from_values(r_values)
+    grade, reason = split_evidence_grade(
+        label="Historical Replay",
+        sample_size=len(rows),
+        has_benchmark=False,
+        alpha=None,
+        expectancy=average_present(r_values),
+        max_drawdown=average_present(drawdown_values),
+        profit_factor=profit_factor,
+    )
+    return {
+        "label": "Historical Replay",
+        "status": "ready",
+        "sample_size": len(rows),
+        "closed_trade_count": len(rows),
+        "blum_return": None,
+        "return": None,
+        "benchmark_return": None,
+        "alpha": None,
+        "benchmark_excess": None,
+        "average_excess_return": None,
+        "expectancy": average_present(r_values),
+        "average_r": average_present(r_values),
+        "win_rate": round(wins / len(rows), 4) if rows else None,
+        "profit_factor": profit_factor,
+        "max_drawdown": average_present(drawdown_values),
+        "evidence_grade": grade,
+        "evidence_reason": reason,
+        "data_source": "execution_simulations",
+        "last_updated_at": latest_iso([row.created_at for row in rows if row.created_at]),
+        "results": [
+            {
+                "ticker": row.ticker,
+                "setup_type": row.setup_type,
+                "r_multiple": row.realized_r_multiple,
+                "target_hit": row.target_hit,
+                "stop_hit": row.stop_hit,
+            }
+            for row in rows[:6]
+        ],
+    }
+
+
+def walk_forward_evidence_split(db: Session, benchmarks: list[LearningBenchmarkComparison]) -> dict:
+    benchmark_split = benchmark_evidence_split(
+        benchmarks,
+        modes={"walk_forward_validation", "walk_forward"},
+        label="Walk-Forward Validation",
+        data_source="learning_benchmark_comparisons",
+        no_data_reason="No walk-forward validation outcomes found.",
+    )
+    records = db.execute(
+        select(PredictionOutcome, HistoricalPrediction, LearningRun)
+        .join(HistoricalPrediction, PredictionOutcome.prediction_id == HistoricalPrediction.id)
+        .outerjoin(LearningRun, HistoricalPrediction.learning_run_id == LearningRun.id)
+        .order_by(desc(PredictionOutcome.created_at))
+        .limit(500)
+    ).all()
+    outcomes = [(outcome, prediction, run) for outcome, prediction, run in records if prediction_is_walk_forward(prediction, run)]
+    if not outcomes:
+        audits = walk_forward_audit_rows(db)
+        if audits:
+            return audit_evidence_split(audits, benchmark_split)
+        return benchmark_split
+
+    realized_returns = [safe_float(outcome.realized_return, None) for outcome, _, _ in outcomes if outcome.realized_return is not None]
+    drawdown_values = [safe_float(first_not_none(outcome.drawdown, outcome.max_adverse_excursion), None) for outcome, _, _ in outcomes]
+    direction_values = [outcome.direction_correct for outcome, _, _ in outcomes if outcome.direction_correct is not None]
+    benchmark_excess = benchmark_split.get("benchmark_excess")
+    benchmark_return = benchmark_split.get("benchmark_return")
+    blum_return = benchmark_split.get("blum_return") if benchmark_split.get("blum_return") is not None else average_present(realized_returns)
+    profit_factor = profit_factor_from_values(realized_returns)
+    grade, reason = split_evidence_grade(
+        label="Walk-Forward Validation",
+        sample_size=len(outcomes),
+        has_benchmark=benchmark_excess is not None or benchmark_return is not None,
+        alpha=benchmark_excess,
+        expectancy=average_present(realized_returns),
+        max_drawdown=average_present(drawdown_values),
+        profit_factor=profit_factor,
+    )
+    if benchmark_split.get("status") != "NO_DATA" and benchmark_split.get("evidence_grade") not in {"NO_DATA", None}:
+        grade = stronger_evidence_grade(grade, benchmark_split["evidence_grade"], sample_size=len(outcomes))
+        reason = f"{reason} Benchmark rows are also available."
+    return {
+        "label": "Walk-Forward Validation",
+        "status": "ready",
+        "sample_size": len(outcomes),
+        "closed_trade_count": len(outcomes),
+        "blum_return": blum_return,
+        "return": blum_return,
+        "benchmark_return": benchmark_return,
+        "alpha": benchmark_excess,
+        "benchmark_excess": benchmark_excess,
+        "average_excess_return": benchmark_excess,
+        "expectancy": average_present(realized_returns),
+        "average_r": None,
+        "win_rate": round(sum(1 for value in direction_values if value) / len(direction_values), 4) if direction_values else benchmark_split.get("win_rate"),
+        "profit_factor": profit_factor,
+        "max_drawdown": average_present(drawdown_values),
+        "evidence_grade": grade,
+        "evidence_reason": reason,
+        "data_source": "prediction_outcomes+learning_benchmark_comparisons",
+        "last_updated_at": latest_iso([outcome.created_at for outcome, _, _ in outcomes if outcome.created_at]),
+        "results": [
+            {
+                "ticker": prediction.ticker,
+                "timeframe": outcome.timeframe,
+                "realized_return": outcome.realized_return,
+                "direction_correct": outcome.direction_correct,
+                "outcome_label": outcome.outcome_label,
+            }
+            for outcome, prediction, _ in outcomes[:6]
+        ],
+    }
+
+
+def prediction_is_walk_forward(prediction: HistoricalPrediction, run: LearningRun | None) -> bool:
+    mode_payloads = [
+        prediction.prediction_payload or {},
+        prediction.point_in_time_context or {},
+        prediction.learning_memory_used or {},
+        prediction.strategy_memory_used or {},
+        prediction.research_priority_used or {},
+    ]
+    for payload in mode_payloads:
+        if metadata_mode_flag(payload, "training_replay"):
+            return False
+        if metadata_mode_flag(payload, "walk_forward_validation") or string_mode(payload) in {"walk_forward", "walk_forward_validation"}:
+            return True
+    if run and str(run.evaluation_mode or "") in {"walk_forward", "walk_forward_validation"}:
+        return True
+    return False
+
+
+def metadata_mode_flag(payload: dict, key: str) -> bool:
+    metadata = payload.get("learning_mode_metadata") if isinstance(payload, dict) else None
+    if isinstance(metadata, dict) and metadata.get(key) is True:
+        return True
+    return payload.get(key) is True if isinstance(payload, dict) else False
+
+
+def string_mode(payload: dict) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    metadata = payload.get("learning_mode_metadata")
+    if isinstance(metadata, dict):
+        return str(metadata.get("mode") or "")
+    return str(payload.get("mode") or "")
+
+
+def walk_forward_audit_rows(db: Session) -> list[FeedbackLoopAudit]:
+    rows = db.scalars(select(FeedbackLoopAudit).order_by(desc(FeedbackLoopAudit.created_at)).limit(200)).all()
+    return [row for row in rows if audit_is_walk_forward(row)]
+
+
+def audit_is_walk_forward(row: FeedbackLoopAudit) -> bool:
+    payloads = [row.learned_knowledge_json or {}, row.changes_applied_json or {}, row.future_decision_json or {}, row.outcome_json or {}]
+    return any(metadata_mode_flag(payload, "walk_forward_validation") or string_mode(payload) in {"walk_forward", "walk_forward_validation"} for payload in payloads)
+
+
+def audit_evidence_split(rows: list[FeedbackLoopAudit], benchmark_split: dict) -> dict:
+    improvements = [row.improvement_detected for row in rows]
+    grade, reason = split_evidence_grade(
+        label="Walk-Forward Validation",
+        sample_size=len(rows),
+        has_benchmark=benchmark_split.get("benchmark_excess") is not None,
+        alpha=benchmark_split.get("benchmark_excess"),
+        expectancy=None,
+        max_drawdown=None,
+        profit_factor=None,
+    )
+    return {
+        "label": "Walk-Forward Validation",
+        "status": "ready",
+        "sample_size": len(rows),
+        "closed_trade_count": len(rows),
+        "blum_return": benchmark_split.get("blum_return"),
+        "return": benchmark_split.get("blum_return"),
+        "benchmark_return": benchmark_split.get("benchmark_return"),
+        "alpha": benchmark_split.get("benchmark_excess"),
+        "benchmark_excess": benchmark_split.get("benchmark_excess"),
+        "average_excess_return": benchmark_split.get("benchmark_excess"),
+        "expectancy": None,
+        "average_r": None,
+        "win_rate": round(sum(1 for value in improvements if value) / len(improvements), 4) if improvements else None,
+        "profit_factor": None,
+        "max_drawdown": benchmark_split.get("max_drawdown"),
+        "evidence_grade": grade,
+        "evidence_reason": reason,
+        "data_source": "feedback_loop_audits+learning_benchmark_comparisons",
+        "last_updated_at": latest_iso([row.created_at for row in rows if row.created_at]),
+        "results": [
+            {
+                "ticker": row.ticker,
+                "improvement_detected": row.improvement_detected,
+                "evidence_grade": row.evidence_grade,
+                "summary": row.summary,
+            }
+            for row in rows[:6]
+        ],
+    }
+
+
+def profit_factor_from_values(values: list[float | None]) -> float | None:
+    present = [float(value) for value in values if value is not None]
+    if not present:
+        return None
+    gains = [value for value in present if value > 0]
+    losses = [abs(value) for value in present if value < 0]
+    if not losses:
+        return 999.0 if gains else None
+    return round(sum(gains) / sum(losses), 4)
+
+
+def split_evidence_grade(
+    *,
+    label: str,
+    sample_size: int,
+    has_benchmark: bool,
+    alpha: float | None,
+    expectancy: float | None,
+    max_drawdown: float | None,
+    profit_factor: float | None,
+) -> tuple[str, str]:
+    if sample_size <= 0:
+        return "NO_DATA", f"No stored {label.lower()} outcomes found."
+    if not has_benchmark:
+        return "INSUFFICIENT_EVIDENCE", f"{label} outcomes exist, but benchmark comparison is unavailable."
+    if sample_size < 30:
+        return "INSUFFICIENT_EVIDENCE", f"{label} has only {sample_size} evaluated samples; minimum required sample is 30."
+    if (alpha is not None and alpha < 0) or (expectancy is not None and expectancy < 0) or (profit_factor is not None and profit_factor < 1):
+        return "WEAK", f"{label} is weak versus stored benchmark or expectancy evidence."
+    if max_drawdown is not None and abs(max_drawdown) > 20:
+        return "WEAK", f"{label} drawdown is too high for the current evidence level."
+    if sample_size < 100:
+        return "PROMISING" if positive_alpha_expectancy(alpha, expectancy) else "MIXED", f"{label} evidence exists but is not yet large enough for a strong claim."
+    if positive_alpha_expectancy(alpha, expectancy):
+        return "STRONG", f"{label} has positive benchmark-relative and expectancy evidence with sufficient sample size."
+    return "MIXED", f"{label} has stored evidence, but alpha and expectancy are not both clearly positive."
+
+
+def stronger_evidence_grade(current: str, benchmark: str, *, sample_size: int) -> str:
+    if sample_size < 30:
+        return "INSUFFICIENT_EVIDENCE"
+    order = {"NO_DATA": 0, "INSUFFICIENT_EVIDENCE": 1, "WEAK": 2, "MIXED": 3, "PROMISING": 4, "STRONG": 5}
+    if order.get(benchmark, 0) > order.get(current, 0):
+        return benchmark
+    return current
+
+
+def latest_iso(values: list[Any]) -> str | None:
+    present = [value for value in values if value is not None]
+    if not present:
+        return None
+    latest = max(present)
+    return latest.isoformat() if hasattr(latest, "isoformat") else str(latest)
+
+
 def paper_forward_trade_is_closed(row: LiveForwardPaperTrade) -> bool:
-    return bool(row.closed_at or row.exit_price is not None or row.close_reason or str(row.status or "").upper() in {"CLOSED", "EXITED"})
+    return bool(
+        row.closed_at
+        or row.exit_price is not None
+        or row.close_reason
+        or str(row.status or "").upper() in {"CLOSED", "EXITED", "EXPIRED", "INVALIDATED"}
+    )
 
 
 def paper_forward_trade_is_open(row: LiveForwardPaperTrade) -> bool:
@@ -1132,6 +1583,62 @@ def alpha_verdict(grade: str, summary: dict, blockers: list[dict]) -> str:
     return blockers[0]["title"] if blockers else "Alpha evidence is inconclusive."
 
 
+def alpha_grade_from_splits(evidence_split: dict) -> tuple[str, str]:
+    paper = evidence_split.get("paper_forward") or {}
+    live = evidence_split.get("live_forward") or {}
+    walk = evidence_split.get("walk_forward_validation") or {}
+    historical = evidence_split.get("historical_replay") or {}
+    paper_grade = str(paper.get("evidence_grade") or "NO_DATA")
+    if paper_grade != "NO_DATA":
+        return paper_grade, str(paper.get("evidence_reason") or "Paper-forward evidence is available.")
+    if split_has_data(live):
+        live_grade = cap_non_forward_grade(str(live.get("evidence_grade") or "INSUFFICIENT_EVIDENCE"))
+        return live_grade, str(live.get("evidence_reason") or "Live-forward evidence exists, but paper-forward evidence remains limited.")
+    if split_has_data(walk):
+        return "INSUFFICIENT_EVIDENCE", "Walk-forward evidence exists, paper-forward still insufficient."
+    if split_has_data(historical):
+        return "INSUFFICIENT_EVIDENCE", "No paper-forward evidence yet. Historical evidence is available separately."
+    return "NO_DATA", "No stored alpha evidence found across historical replay, walk-forward, paper-forward or live-forward sources."
+
+
+def alpha_verdict_from_splits(evidence_split: dict, grade: str) -> str:
+    paper = evidence_split.get("paper_forward") or {}
+    walk = evidence_split.get("walk_forward_validation") or {}
+    historical = evidence_split.get("historical_replay") or {}
+    if not split_has_data(paper):
+        if split_has_data(walk):
+            return "Walk-forward evidence exists, paper-forward still insufficient."
+        if split_has_data(historical):
+            return "No paper-forward evidence yet. Historical evidence is available separately."
+        return "No paper-forward evidence yet."
+    if grade == "INSUFFICIENT_EVIDENCE":
+        return "Paper-forward evidence insufficient."
+    if grade == "WEAK":
+        return "Paper-forward alpha weak."
+    if grade in {"PROMISING", "STRONG"}:
+        return "Paper-forward alpha promising."
+    if grade == "MIXED":
+        return "Paper-forward evidence is mixed."
+    return "Paper-forward evidence is inconclusive."
+
+
+def split_has_data(split: dict) -> bool:
+    return str(split.get("status") or "") != "NO_DATA" and (safe_float(split.get("sample_size"), 0.0) or 0.0) > 0
+
+
+def cap_non_forward_grade(grade: str) -> str:
+    if grade == "STRONG":
+        return "PROMISING"
+    if grade == "NO_DATA":
+        return "INSUFFICIENT_EVIDENCE"
+    return grade
+
+
+def latest_alpha_update_from_splits(evidence_split: dict) -> str | None:
+    dates = [split.get("last_updated_at") for split in evidence_split.values() if isinstance(split, dict) and split.get("last_updated_at")]
+    return max(dates) if dates else None
+
+
 def alpha_blockers(
     rows: list[LiveForwardPaperTrade],
     closed_rows: list[LiveForwardPaperTrade],
@@ -1208,6 +1715,8 @@ def alpha_trade_summary(row: LiveForwardPaperTrade | None) -> dict | None:
 
 def paper_forward_evidence_split(rows: list[LiveForwardPaperTrade], game: LiveForwardPaperGame | None, *, label: str) -> dict:
     closed = [row for row in rows if paper_forward_trade_is_closed(row)]
+    if not closed:
+        return empty_alpha_evidence_split(label, "live_forward_paper_trades", "No closed paper-forward trades exist yet.")
     summary = paper_forward_alpha_summary(rows, game)
     has_benchmark = any(row.excess_return_vs_benchmark is not None or row.benchmark_return_same_period is not None for row in closed)
     grade, reason = alpha_evidence_grade(
@@ -1222,16 +1731,35 @@ def paper_forward_evidence_split(rows: list[LiveForwardPaperTrade], game: LiveFo
     )
     return {
         "label": label,
-        "status": "ready" if rows else "NO_DATA",
+        "status": "ready",
         "sample_size": len(closed),
+        "closed_trade_count": len(closed),
         "total_decisions": len(rows),
+        "blum_return": summary["blum_return"],
         "return": summary["blum_return"],
         "benchmark_return": summary["benchmark_return"],
+        "alpha": summary["benchmark_excess"],
         "benchmark_excess": summary["benchmark_excess"],
         "average_excess_return": summary["benchmark_excess"],
+        "expectancy": summary["expectancy"],
+        "average_r": summary["average_r"],
+        "win_rate": summary["win_rate"],
+        "profit_factor": summary["profit_factor"],
+        "max_drawdown": summary["max_drawdown"],
         "evidence_grade": grade,
         "evidence_reason": reason,
+        "data_source": "live_forward_paper_trades",
+        "last_updated_at": latest_iso([row.updated_at or row.created_at for row in rows if row.updated_at or row.created_at]),
     }
+
+
+def live_forward_evidence_split(rows: list[LiveForwardPaperTrade], game: LiveForwardPaperGame | None) -> dict:
+    closed = [row for row in rows if paper_forward_trade_is_closed(row)]
+    if not closed:
+        return empty_alpha_evidence_split("Live-Forward Evidence", "live_forward_paper_trades", "No live-forward evaluated paper trades found.")
+    split = paper_forward_evidence_split(rows, game, label="Live-Forward Evidence")
+    split["data_source"] = "live_forward_paper_trades"
+    return split
 
 
 def alpha_edge_map(rows: list[LiveForwardPaperTrade]) -> dict:
@@ -1375,7 +1903,7 @@ def alpha_lessons(closed_rows: list[LiveForwardPaperTrade], lesson_rows: list[Tr
     return lessons[:6]
 
 
-def alpha_truth_lines(verdict: str, blockers: list[dict], summary: dict) -> list[str]:
+def alpha_truth_lines(verdict: str, blockers: list[dict], summary: dict, evidence_split: dict | None = None) -> list[str]:
     lines = [verdict]
     if summary.get("alpha") is None:
         lines.append("Benchmark-relative paper-forward alpha is not available yet.")
@@ -1383,6 +1911,13 @@ def alpha_truth_lines(verdict: str, blockers: list[dict], summary: dict) -> list
         lines.append(f"Paper-forward alpha is negative ({summary['alpha']:.2f}%).")
     else:
         lines.append(f"Paper-forward alpha is {summary['alpha']:.2f}%, but sample quality still matters.")
+    split = evidence_split or {}
+    historical = split.get("historical_replay") or {}
+    walk_forward = split.get("walk_forward_validation") or {}
+    if split_has_data(historical) and summary.get("alpha") is None:
+        lines.append("Historical replay evidence exists and is shown separately from forward evidence.")
+    if split_has_data(walk_forward) and summary.get("alpha") is None:
+        lines.append("Walk-forward evidence exists and is shown separately from paper-forward evidence.")
     for item in blockers[:3]:
         lines.append(item["title"])
     return lines[:5]

@@ -6,11 +6,13 @@ from sqlalchemy.orm import Session
 
 from app.core.database import Base
 from app.models import (
+    HistoricalPrediction,
     LearningBenchmarkComparison,
     LearningFocusPriority,
     LearningRun,
     LiveForwardPaperGame,
     LiveForwardPaperTrade,
+    PredictionOutcome,
     SelfImprovementAction,
     TradeLearningEvidence,
     TradingGame,
@@ -178,10 +180,109 @@ def test_alpha_page_reports_insufficient_evidence_instead_of_claiming_alpha():
 
     assert payload["status"] == "NO_DATA"
     assert payload["evidence_grade"] == "NO_DATA"
+    assert "evidence_split" in payload
     assert payload["historical"]["status"] == "NO_DATA"
+    assert payload["paper_forward"]["evidence_reason"] == "No closed paper-forward trades exist yet."
     assert payload["policy"].startswith("Alpha page reports benchmark-relative paper-forward evidence")
-    assert payload["verdict"] == "No alpha evidence yet."
+    assert payload["verdict"] == "No paper-forward evidence yet."
     assert payload["current_blockers"]
+
+
+def test_alpha_snapshot_shows_historical_evidence_when_paper_forward_has_no_closed_trades():
+    with setup_db() as db:
+        game = TradingGame(game_id="hist-alpha", current_capital=126.0, starting_capital=100.0)
+        db.add(game)
+        db.flush()
+        db.add(
+            TradingGameTrade(
+                game_id=game.id,
+                mode="historical_simulation",
+                ticker="MSFT",
+                setup_type="trend_continuation",
+                exit_date=date(2026, 1, 20),
+                net_pnl_eur=6.0,
+                pnl_percent=6.0,
+                realized_r_multiple=1.5,
+                benchmark_return_same_period=2.0,
+                excess_return_vs_benchmark=4.0,
+                outcome_label="target_hit",
+            )
+        )
+        db.commit()
+
+        payload = TraderBrainService().alpha(db)
+
+    split = payload["evidence_split"]
+    assert payload["paper_forward"]["status"] == "NO_DATA"
+    assert split["historical_replay"]["status"] == "ready"
+    assert split["historical_replay"]["sample_size"] == 1
+    assert split["historical_replay"]["benchmark_excess"] == 4.0
+    assert payload["evidence_grade"] == "INSUFFICIENT_EVIDENCE"
+    assert payload["verdict"] == "No paper-forward evidence yet. Historical evidence is available separately."
+    assert payload["historical_alpha"] == 4.0
+
+
+def test_alpha_snapshot_separates_walk_forward_validation_from_historical_benchmark_rows():
+    with setup_db() as db:
+        run = LearningRun(run_id="wf-run", status="completed", evaluation_mode="walk_forward_validation")
+        db.add(run)
+        db.flush()
+        prediction = HistoricalPrediction(
+            learning_run_id=run.id,
+            ticker="NVDA",
+            analysis_date=date(2026, 1, 2),
+            expected_direction="bullish",
+            confidence=0.64,
+            prediction_payload={"learning_mode_metadata": {"mode": "walk_forward_validation", "walk_forward_validation": True}},
+        )
+        db.add(prediction)
+        db.flush()
+        db.add(
+            PredictionOutcome(
+                prediction_id=prediction.id,
+                ticker="NVDA",
+                timeframe="mid",
+                horizon_days=30,
+                realized_return=9.0,
+                direction_correct=True,
+                outcome_label="direction_correct",
+            )
+        )
+        db.add(
+            LearningBenchmarkComparison(
+                mode="historical_simulation",
+                benchmark_name="SPY",
+                blum_return=20.0,
+                benchmark_return=10.0,
+                excess_return=10.0,
+                sample_size=60,
+                result_label="outperforming",
+                calculated_at=datetime(2026, 1, 1, 10, 0, 0),
+            )
+        )
+        db.add(
+            LearningBenchmarkComparison(
+                mode="walk_forward_validation",
+                benchmark_name="SPY",
+                blum_return=8.0,
+                benchmark_return=3.0,
+                excess_return=5.0,
+                sample_size=40,
+                result_label="outperforming",
+                calculated_at=datetime(2026, 1, 2, 10, 0, 0),
+            )
+        )
+        db.commit()
+
+        payload = TraderBrainService().alpha(db)
+
+    split = payload["evidence_split"]
+    assert split["walk_forward_validation"]["status"] == "ready"
+    assert split["walk_forward_validation"]["sample_size"] == 1
+    assert split["walk_forward_validation"]["benchmark_excess"] == 5.0
+    assert split["historical_replay"]["benchmark_excess"] == 10.0
+    assert payload["walk_forward_alpha"] == 5.0
+    assert payload["verdict"] == "Walk-forward evidence exists, paper-forward still insufficient."
 
 
 def test_alpha_snapshot_uses_closed_paper_forward_evidence_without_blending_historical():
