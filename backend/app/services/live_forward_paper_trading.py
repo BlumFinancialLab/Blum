@@ -175,6 +175,34 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
         self.append_event(
             db,
             trade.id,
+            "OPPORTUNITY_SCANNED",
+            "Opportunity scanned by the global paper-forward scanner.",
+            payload={
+                "classification": decision_payload_with_diagnosis["paper_forward_classification"],
+                "scanner": scanner_block,
+                "candidate": compact_candidate(decision_payload_with_diagnosis),
+            },
+            price_used=price if price > 0 else None,
+        )
+        if scanner_block.get("rank") is not None:
+            self.append_event(
+                db,
+                trade.id,
+                "CROSS_MARKET_RANKED",
+                "Candidate ranked inside the cross-market paper-forward scan.",
+                payload={
+                    "rank": scanner_block.get("rank"),
+                    "score": scanner_block.get("score"),
+                    "market": scanner_block.get("market"),
+                    "asset_class": scanner_block.get("asset_class"),
+                    "benchmark_asset": scanner_block.get("benchmark_asset"),
+                    "classification": decision_payload_with_diagnosis["paper_forward_classification"],
+                },
+                price_used=price if price > 0 else None,
+            )
+        self.append_event(
+            db,
+            trade.id,
             "ACTIONABILITY_CLASSIFIED",
             decision_payload_with_diagnosis.get("classification_reason") or block_reason or "Paper-forward candidate classified.",
             payload={

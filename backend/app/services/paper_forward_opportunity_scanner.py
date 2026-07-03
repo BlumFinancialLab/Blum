@@ -107,6 +107,50 @@ class PaperForwardOpportunityScanner:
                 },
             )
         )
+        db.add(
+            LearningEvent(
+                event_type="OPPORTUNITY_SCANNED",
+                severity="Info",
+                title="Paper-forward opportunities scanned",
+                description=summary["reason_if_no_trade_candidates"] or "Paper-forward scanner classified current stored market opportunities.",
+                payload={
+                    "scanner": summary["scanner"],
+                    "scanned_count": summary["scanned_count"],
+                    "trade_candidate_count": summary["trade_candidate_count"],
+                    "watchlist_candidate_count": summary["watchlist_candidate_count"],
+                    "blocked_candidate_count": summary["blocked_candidate_count"],
+                    "data_blocked_candidate_count": summary["data_blocked_candidate_count"],
+                    "top_blockers": summary["top_blockers"],
+                    "markets_scanned": summary["markets_scanned"],
+                    "asset_classes_scanned": summary["asset_classes_scanned"],
+                    "thresholds": summary["thresholds"],
+                },
+            )
+        )
+        if summary.get("best_cross_market_candidate"):
+            db.add(
+                LearningEvent(
+                    event_type="CROSS_MARKET_RANKED",
+                    severity="Info",
+                    title="Paper-forward cross-market ranking completed",
+                    description="Best current paper-forward candidate selected from the cross-market scan.",
+                    payload={
+                        "best_cross_market_candidate": summary["best_cross_market_candidate"],
+                        "markets_scanned": summary["markets_scanned"],
+                        "asset_classes_scanned": summary["asset_classes_scanned"],
+                    },
+                )
+            )
+        for skipped_market in summary.get("skipped_markets", []) or []:
+            db.add(
+                LearningEvent(
+                    event_type="MARKET_SKIPPED",
+                    severity="Warning",
+                    title=f"{skipped_market.get('market', 'unknown')} market skipped",
+                    description=skipped_market.get("reason") or "Market skipped during paper-forward opportunity scan.",
+                    payload=skipped_market,
+                )
+            )
         return summary
 
     def raw_candidates(self, db: Session, limit: int) -> list[dict]:
@@ -227,6 +271,7 @@ class PaperForwardOpportunityScanner:
         else:
             classification = BLOCKED_CANDIDATE
 
+        score = score_for(candidate, diagnosis, classification)
         candidate_payload = {
             **candidate,
             "paper_forward_classification": classification,
@@ -243,6 +288,7 @@ class PaperForwardOpportunityScanner:
             "opportunity_scanner": {
                 "classification": classification,
                 "rank": rank,
+                "score": score,
                 "thresholds": self.thresholds.to_dict(),
                 "diagnosis": diagnosis.to_dict(),
                 "market": asset.get("market"),
@@ -259,7 +305,7 @@ class PaperForwardOpportunityScanner:
             "market": asset.get("market") or "unknown",
             "asset_class": asset.get("asset_class") or "unknown",
             "asset_type": asset.get("asset_type") or "Unknown",
-            "score": score_for(candidate_payload, diagnosis, classification),
+            "score": score,
             "blocker": blocker_for(classification, diagnosis, candidate_payload),
         }
 
@@ -315,7 +361,7 @@ class PaperForwardOpportunityScanner:
 
 
 def scanner_event(event_type: str, title: str, description: str, payload: dict) -> LearningEvent:
-    return LearningEvent(event_type=f"paper_forward_{event_type.lower()}", severity="Warning", title=title, description=description, payload=payload)
+    return LearningEvent(event_type=event_type, severity="Warning", title=title, description=description, payload=payload)
 
 
 def dedupe_candidates(rows: list[dict]) -> list[dict]:
