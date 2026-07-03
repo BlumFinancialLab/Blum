@@ -38,6 +38,13 @@ from app.services.trading_intelligence_lab import (
     serialize_paper_forward_trade,
     serialize_trade_lesson,
 )
+from app.services.paper_forward_opportunity_scanner import (
+    BLOCKED_CANDIDATE,
+    DATA_BLOCKED_CANDIDATE,
+    TRADE_CANDIDATE,
+    WATCHLIST_CANDIDATE,
+    PaperForwardOpportunityScanner,
+)
 
 
 settings = get_settings()
@@ -77,18 +84,33 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
         if existing:
             return existing
 
+        scanner_block = decision_payload.get("opportunity_scanner") if isinstance(decision_payload.get("opportunity_scanner"), dict) else {}
+        classification = decision_payload.get("paper_forward_classification") or scanner_block.get("classification")
         diagnosis = diagnose_candidate_actionability(decision_payload, strict=True)
-        decision_payload_with_diagnosis = {**decision_payload, "actionability_diagnosis": diagnosis.to_dict()}
+        diagnosis_payload = diagnosis.to_dict()
+        if classification == WATCHLIST_CANDIDATE and diagnosis.actionability_status != "DATA_BLOCKED":
+            diagnosis_payload = {
+                **diagnosis_payload,
+                "actionability_status": "WAITING_FOR_TRIGGER",
+                "rejection_reason": decision_payload.get("classification_reason") or diagnosis.rejection_reason,
+                "should_wait": True,
+                "scanner_original_status": diagnosis.actionability_status,
+            }
+        decision_payload_with_diagnosis = {
+            **decision_payload,
+            "paper_forward_classification": classification or classification_from_diagnosis(diagnosis.actionability_status),
+            "actionability_diagnosis": diagnosis_payload,
+        }
         price = safe_float((decision_payload.get("price_context") or {}).get("latest_price"))
-        if diagnosis.actionability_status == "DATA_BLOCKED":
+        if classification == DATA_BLOCKED_CANDIDATE or diagnosis_payload["actionability_status"] == "DATA_BLOCKED":
             status = "DATA_BLOCKED"
-            block_reason = diagnosis.rejection_reason
-        elif diagnosis.actionability_status == "WAITING_FOR_TRIGGER":
+            block_reason = diagnosis_payload["rejection_reason"]
+        elif classification == WATCHLIST_CANDIDATE or diagnosis_payload["actionability_status"] == "WAITING_FOR_TRIGGER":
             status = "WAITING_FOR_TRIGGER"
-            block_reason = diagnosis.rejection_reason
-        elif diagnosis.actionability_status != "ACTIONABLE":
+            block_reason = diagnosis_payload["rejection_reason"]
+        elif classification == BLOCKED_CANDIDATE or diagnosis_payload["actionability_status"] != "ACTIONABLE":
             status = "SKIPPED"
-            block_reason = diagnosis.rejection_reason
+            block_reason = diagnosis_payload["rejection_reason"]
         else:
             status = "CANDIDATE"
             block_reason = ""
@@ -147,13 +169,44 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
             trade.id,
             "DECISION_CREATED",
             "Decision frozen from current BLUM evidence.",
-            payload={"candidate": compact_candidate(decision_payload), "feedback": feedback, "actionability_diagnosis": diagnosis.to_dict()},
+            payload={"candidate": compact_candidate(decision_payload), "feedback": feedback, "actionability_diagnosis": diagnosis_payload},
             price_used=price if price > 0 else None,
         )
+        self.append_event(
+            db,
+            trade.id,
+            "ACTIONABILITY_CLASSIFIED",
+            decision_payload_with_diagnosis.get("classification_reason") or block_reason or "Paper-forward candidate classified.",
+            payload={
+                "classification": decision_payload_with_diagnosis["paper_forward_classification"],
+                "asset": decision_payload_with_diagnosis.get("asset") or {},
+                "market": ((decision_payload_with_diagnosis.get("asset") or {}).get("market")),
+                "asset_type": ((decision_payload_with_diagnosis.get("asset") or {}).get("asset_type")),
+                "rank": scanner_block.get("rank"),
+                "score": scanner_block.get("score"),
+                "actionability_diagnosis": diagnosis_payload,
+            },
+            price_used=price if price > 0 else None,
+        )
+        classification_event = {
+            TRADE_CANDIDATE: "TRADE_CANDIDATE_CREATED",
+            WATCHLIST_CANDIDATE: "WATCHLIST_CANDIDATE_CREATED",
+            BLOCKED_CANDIDATE: "CANDIDATE_BLOCKED",
+            DATA_BLOCKED_CANDIDATE: "DATA_BLOCKED",
+        }.get(decision_payload_with_diagnosis["paper_forward_classification"])
+        if classification_event and classification_event != "DATA_BLOCKED":
+            self.append_event(
+                db,
+                trade.id,
+                classification_event,
+                decision_payload_with_diagnosis.get("classification_reason") or block_reason or classification_event,
+                payload={"classification": decision_payload_with_diagnosis["paper_forward_classification"], "scanner": scanner_block},
+                price_used=price if price > 0 else None,
+            )
         if status == "DATA_BLOCKED":
-            self.append_event(db, trade.id, "DATA_BLOCKED", block_reason, payload={"price_context": decision_payload.get("price_context"), "actionability_diagnosis": diagnosis.to_dict()})
+            self.append_event(db, trade.id, "DATA_BLOCKED", block_reason, payload={"price_context": decision_payload.get("price_context"), "actionability_diagnosis": diagnosis_payload})
         elif status in {"SKIPPED", "WAITING_FOR_TRIGGER"}:
-            self.append_event(db, trade.id, "ACTIONABILITY_REJECTED", block_reason, payload=actionability_event_payload(decision_payload, diagnosis, feedback), price_used=price if price > 0 else None)
+            self.append_event(db, trade.id, "ACTIONABILITY_REJECTED", block_reason, payload={**actionability_event_payload(decision_payload, diagnosis, feedback), "classification": decision_payload_with_diagnosis["paper_forward_classification"]}, price_used=price if price > 0 else None)
         return trade
 
     def append_event(
@@ -268,12 +321,17 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
         if not settings.live_trading_game_enabled:
             return {"status": "disabled", "created": [], "duplicates": [], "current_blockers": ["live_forward_paper_disabled"], "policy": LAB_POLICY}
         try:
-            candidates = self.scan_candidates(db)
+            scanner_report = PaperForwardOpportunityScanner(candidate_provider=lambda session, max_items: self.scan_candidates(session, limit=max_items)).scan(db)
+            candidates = scanner_report.get("candidate_payloads_for_persistence") or []
         except Exception as exc:
             db.rollback()
             return {"status": "error", "created": [], "duplicates": [], "current_blockers": [str(exc)], "policy": LAB_POLICY}
 
         created: list[dict] = []
+        created_trade_candidates: list[dict] = []
+        created_watchlist_candidates: list[dict] = []
+        created_blocked_candidates: list[dict] = []
+        created_data_blocked_candidates: list[dict] = []
         duplicates: list[dict] = []
         blocked: list[dict] = []
         skipped: list[dict] = []
@@ -282,20 +340,34 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
             before_id = existing_candidate_id(db, self, candidate)
             trade = self.create_candidate(db, candidate)
             serialized = serialize_paper_forward_trade(trade, compact=True)
+            classification = candidate.get("paper_forward_classification")
             if before_id == trade.id:
                 duplicates.append(serialized)
             elif trade.status == "DATA_BLOCKED":
                 blocked.append(serialized)
+                created_data_blocked_candidates.append(serialized)
             elif trade.status == "SKIPPED":
                 skipped.append(serialized)
+                created_blocked_candidates.append(serialized)
             elif trade.status == "WAITING_FOR_TRIGGER":
                 waiting.append(serialized)
+                created_watchlist_candidates.append(serialized)
             else:
                 created.append(serialized)
+                if classification == TRADE_CANDIDATE:
+                    created_trade_candidates.append(serialized)
 
         db.commit()
         snapshot = self.publish_snapshot(db)
         actionability_summary = snapshot.get("payload", {}).get("actionability_summary") if isinstance(snapshot, dict) else None
+        scanner_report = {
+            **scanner_report,
+            "created_trade_candidates": created_trade_candidates,
+            "created_watchlist_candidates": created_watchlist_candidates,
+            "created_blocked_candidates": created_blocked_candidates,
+            "created_data_blocked_candidates": created_data_blocked_candidates,
+            "duplicates": duplicates,
+        }
         return {
             "status": "ok",
             "mode": "foundation_candidate_freeze",
@@ -305,6 +377,12 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
             "waiting_for_trigger": waiting,
             "skipped": skipped,
             "data_blocked": blocked,
+            "scanner_summary": scanner_report,
+            "markets_scanned": scanner_report.get("markets_scanned"),
+            "asset_classes_scanned": scanner_report.get("asset_classes_scanned"),
+            "skipped_markets": scanner_report.get("skipped_markets"),
+            "best_cross_market_candidate": scanner_report.get("best_cross_market_candidate"),
+            "reason_if_no_trade_candidates": scanner_report.get("reason_if_no_trade_candidates"),
             "actionability_summary": actionability_summary,
             "snapshot_status": snapshot.get("status"),
             "current_blockers": self.paper_forward_blockers_from_counts(actionability_summary) if actionability_summary else ([] if created or duplicates else ["no_candidate_decisions_available"]),
@@ -690,7 +768,14 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
             "error_count": int(db.scalar(select(func.count(LiveForwardPaperTrade.id)).where(LiveForwardPaperTrade.game_id == game.id, LiveForwardPaperTrade.status == "ERROR")) or 0),
         }
         latest_events = db.scalars(select(LiveForwardPaperTradeEvent).order_by(desc(LiveForwardPaperTradeEvent.event_timestamp)).limit(20)).all()
+        scanner_rows = db.scalars(
+            select(LiveForwardPaperTrade)
+            .where(LiveForwardPaperTrade.game_id == game.id, LiveForwardPaperTrade.status.in_(["CANDIDATE", "WAITING_FOR_TRIGGER", "SKIPPED", "DATA_BLOCKED", "ERROR"]))
+            .order_by(desc(LiveForwardPaperTrade.created_at))
+            .limit(250)
+        ).all()
         actionability_summary = self.actionability_summary(db, game)
+        scanner_summary = paper_forward_scanner_snapshot_summary(scanner_rows)
         lifecycle_mode = self.lifecycle_mode(actionability_summary)
         payload.update(
             {
@@ -719,6 +804,7 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
                 "latest_lesson": payload.get("last_lesson"),
                 "current_blockers": sorted(set([*(payload.get("blockers", []) or []), *self.paper_forward_blockers_from_counts(actionability_summary)])),
                 "lifecycle_message": lifecycle_message(lifecycle_mode),
+                **scanner_summary,
             }
         )
         payload["counts"] = {**(payload.get("counts") or {}), **total_counts}
@@ -1060,13 +1146,119 @@ def broad_ohlcv_universe(db: Session, *, limit: int = 90, min_rows: int = 120) -
     rows = db.execute(
         select(Asset, row_count.label("row_count"), latest_date.label("latest_price_date"))
         .join(PriceHistory, PriceHistory.asset_id == Asset.id)
-            .where(Asset.is_active.is_(True), func.lower(Asset.asset_type).in_(["stock", "etf"]))
+        .where(Asset.is_active.is_(True))
         .group_by(Asset.id)
         .having(row_count >= max(30, int(min_rows)))
         .order_by(desc(latest_date), desc(row_count), Asset.ticker)
         .limit(max(1, int(limit)))
     ).all()
     return [asset for asset, _, _ in rows]
+
+
+def classification_from_diagnosis(actionability_status: str) -> str:
+    if actionability_status == "ACTIONABLE":
+        return TRADE_CANDIDATE
+    if actionability_status == "WAITING_FOR_TRIGGER":
+        return WATCHLIST_CANDIDATE
+    if actionability_status == "DATA_BLOCKED":
+        return DATA_BLOCKED_CANDIDATE
+    return BLOCKED_CANDIDATE
+
+
+def paper_forward_scanner_snapshot_summary(rows: list[LiveForwardPaperTrade]) -> dict:
+    classifications = [classification_from_trade(row) for row in rows]
+    counts = {name: classifications.count(name) for name in [TRADE_CANDIDATE, WATCHLIST_CANDIDATE, BLOCKED_CANDIDATE, DATA_BLOCKED_CANDIDATE]}
+    latest_run_at = max((row.created_at for row in rows if row.created_at), default=None)
+    by_market: dict[str, dict[str, int]] = {}
+    by_asset_class: set[str] = set()
+    assets_by_market: dict[str, int] = {}
+    for row in rows:
+        payload = row.frozen_decision_payload or {}
+        asset = payload.get("asset") if isinstance(payload, dict) else {}
+        market = str((asset or {}).get("market") or "unknown")
+        asset_class = str((asset or {}).get("asset_class") or row.asset_type or "unknown")
+        classification = classification_from_trade(row)
+        by_asset_class.add(asset_class)
+        assets_by_market[market] = assets_by_market.get(market, 0) + 1
+        by_market.setdefault(market, {TRADE_CANDIDATE: 0, WATCHLIST_CANDIDATE: 0, BLOCKED_CANDIDATE: 0, DATA_BLOCKED_CANDIDATE: 0})
+        by_market[market][classification] += 1
+
+    trade_rows = [row for row in rows if classification_from_trade(row) == TRADE_CANDIDATE]
+    watch_rows = [row for row in rows if classification_from_trade(row) == WATCHLIST_CANDIDATE]
+    blocked_rows = [row for row in rows if classification_from_trade(row) == BLOCKED_CANDIDATE]
+    data_blocked_rows = [row for row in rows if classification_from_trade(row) == DATA_BLOCKED_CANDIDATE]
+    skipped_markets = skipped_market_summary(rows)
+    top_blockers = actionability_summary_blockers(rows)
+    return {
+        "scanner_last_run_at": latest_run_at.isoformat() if latest_run_at else None,
+        "scanned_count": len(rows),
+        "trade_candidate_count": counts[TRADE_CANDIDATE],
+        "watchlist_candidate_count": counts[WATCHLIST_CANDIDATE],
+        "blocked_candidate_count": counts[BLOCKED_CANDIDATE],
+        "data_blocked_candidate_count": counts[DATA_BLOCKED_CANDIDATE],
+        "latest_trade_candidates": [serialize_paper_forward_trade(row, compact=True) for row in trade_rows[:8]],
+        "latest_watchlist_candidates": [serialize_paper_forward_trade(row, compact=True) for row in watch_rows[:8]],
+        "latest_blocked_candidates": [serialize_paper_forward_trade(row, compact=True) for row in blocked_rows[:8]],
+        "latest_data_blocked_candidates": [serialize_paper_forward_trade(row, compact=True) for row in data_blocked_rows[:8]],
+        "blocker_breakdown": top_blockers,
+        "best_trade_candidate": serialize_paper_forward_trade(trade_rows[0], compact=True) if trade_rows else None,
+        "best_watchlist_candidate": serialize_paper_forward_trade(watch_rows[0], compact=True) if watch_rows else None,
+        "best_cross_market_candidate": serialize_paper_forward_trade(rows[0], compact=True) if rows else None,
+        "reason_if_no_trade_candidates": "" if trade_rows else no_trade_candidates_reason(top_blockers),
+        "markets_scanned": sorted(assets_by_market),
+        "asset_classes_scanned": sorted(by_asset_class),
+        "assets_scanned_by_market": assets_by_market,
+        "trade_candidates_by_market": {market: counts[TRADE_CANDIDATE] for market, counts in by_market.items() if counts[TRADE_CANDIDATE]},
+        "watchlist_candidates_by_market": {market: counts[WATCHLIST_CANDIDATE] for market, counts in by_market.items() if counts[WATCHLIST_CANDIDATE]},
+        "blocked_candidates_by_market": {market: counts[BLOCKED_CANDIDATE] for market, counts in by_market.items() if counts[BLOCKED_CANDIDATE]},
+        "data_blocked_candidates_by_market": {market: counts[DATA_BLOCKED_CANDIDATE] for market, counts in by_market.items() if counts[DATA_BLOCKED_CANDIDATE]},
+        "skipped_markets": skipped_markets,
+        "reason_if_markets_were_skipped": "; ".join(f"{item['market']}: {item['reason']}" for item in skipped_markets),
+        "next_possible_action": "Wait for entry triggers or enable lifecycle only after forward evidence is sufficient." if watch_rows else "Hydrate more market data or review scanner blockers.",
+    }
+
+
+def classification_from_trade(row: LiveForwardPaperTrade) -> str:
+    payload = row.frozen_decision_payload or {}
+    classification = payload.get("paper_forward_classification") if isinstance(payload, dict) else None
+    if classification in {TRADE_CANDIDATE, WATCHLIST_CANDIDATE, BLOCKED_CANDIDATE, DATA_BLOCKED_CANDIDATE}:
+        return classification
+    if row.status == "CANDIDATE":
+        return TRADE_CANDIDATE
+    if row.status == "WAITING_FOR_TRIGGER":
+        return WATCHLIST_CANDIDATE
+    if row.status == "DATA_BLOCKED":
+        return DATA_BLOCKED_CANDIDATE
+    return BLOCKED_CANDIDATE
+
+
+def skipped_market_summary(rows: list[LiveForwardPaperTrade]) -> list[dict]:
+    scanned = set()
+    for row in rows:
+        payload = row.frozen_decision_payload or {}
+        asset = payload.get("asset") if isinstance(payload, dict) else {}
+        scanned.add(str((asset or {}).get("market") or "unknown"))
+    enabled = [item.strip().lower() for item in str(settings.paper_forward_enabled_markets).split(",") if item.strip()]
+    return [{"market": market, "reason": "MARKET_DATA_UNAVAILABLE"} for market in enabled if market not in scanned]
+
+
+def actionability_summary_blockers(rows: list[LiveForwardPaperTrade]) -> list[dict]:
+    from app.services.trading_intelligence_lab import actionability_diagnosis_from_trade
+
+    counts = {}
+    for row in rows:
+        diagnosis = actionability_diagnosis_from_trade(row)
+        reason = diagnosis.get("rejection_reason") or "unknown"
+        if diagnosis.get("actionability_status") == "ACTIONABLE":
+            continue
+        counts[reason] = counts.get(reason, 0) + 1
+    return [{"reason": reason, "count": count} for reason, count in sorted(counts.items(), key=lambda item: item[1], reverse=True)[:8]]
+
+
+def no_trade_candidates_reason(blockers: list[dict]) -> str:
+    if not blockers:
+        return "No trade candidates created because no scannable opportunity rows are stored yet."
+    return "No trade candidates created because " + ", ".join(f"{item['count']} {item['reason']}" for item in blockers[:5]) + "."
 
 
 def normalize_text(value: Any) -> str:

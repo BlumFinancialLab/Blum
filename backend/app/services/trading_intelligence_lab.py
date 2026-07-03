@@ -60,9 +60,9 @@ class ActionabilityPolicy:
     require_actionable_setup: bool = settings.live_trading_game_require_actionable_setup
     actionable_states: tuple[str, ...] = ("active_setup", "actionable_if_confirmed")
     waiting_states: tuple[str, ...] = ("wait_for_trigger", "actionable_if_confirmed")
-    minimum_data_quality: float = 50.0
-    minimum_confidence: float = 50.0
-    minimum_reward_to_risk: float = 1.0
+    minimum_data_quality: float = settings.paper_forward_min_data_quality
+    minimum_confidence: float = settings.paper_forward_min_confidence
+    minimum_reward_to_risk: float = settings.paper_forward_min_risk_reward
     require_entry: bool = True
     require_stop: bool = True
     require_target: bool = True
@@ -1603,11 +1603,17 @@ def compact_candidate(candidate: dict) -> dict:
     return {
         "ticker": candidate.get("ticker"),
         "actionability": candidate.get("actionability"),
+        "paper_forward_classification": candidate.get("paper_forward_classification"),
+        "classification_reason": candidate.get("classification_reason"),
         "sniper_score": candidate.get("sniper_score"),
         "confidence": candidate.get("confidence"),
         "setup": candidate.get("setup"),
         "trade_plan": candidate.get("trade_plan"),
         "price_context": candidate.get("price_context"),
+        "asset": candidate.get("asset"),
+        "benchmark_asset": candidate.get("benchmark_asset"),
+        "data_quality_status": candidate.get("data_quality_status"),
+        "tradability_status": candidate.get("tradability_status"),
     }
 
 
@@ -1631,11 +1637,16 @@ def freeze_decision_payload(candidate: dict, feedback: dict, decision_timestamp:
         "asset": candidate.get("asset") or {},
         "setup": candidate.get("setup") or {},
         "actionability": candidate.get("actionability"),
+        "paper_forward_classification": candidate.get("paper_forward_classification"),
+        "classification_reason": candidate.get("classification_reason"),
         "sniper_score": candidate.get("sniper_score"),
         "confidence": candidate.get("confidence"),
         "actionability_diagnosis": candidate.get("actionability_diagnosis") or {},
         "trade_plan": candidate.get("trade_plan") or {},
         "price_context": candidate.get("price_context") or {},
+        "data_quality_status": candidate.get("data_quality_status"),
+        "tradability_status": candidate.get("tradability_status"),
+        "opportunity_scanner": candidate.get("opportunity_scanner") or {},
         "market_regime": (candidate.get("market_regime") or {}).get("regime_primary"),
         "feedback_loop": feedback,
         "no_future_data_policy": "Frozen payload contains only data available at decision timestamp. Future prices are appended as events only.",
@@ -1767,12 +1778,23 @@ def live_position_for_paper_trade(db: Session, game: LiveForwardPaperGame, paper
 
 def serialize_paper_forward_trade(row: LiveForwardPaperTrade, *, compact: bool = False) -> dict:
     diagnosis = actionability_diagnosis_from_trade(row)
+    frozen_payload = row.frozen_decision_payload or {}
+    frozen_asset = frozen_payload.get("asset") if isinstance(frozen_payload, dict) else {}
+    scanner_payload = frozen_payload.get("opportunity_scanner") if isinstance(frozen_payload, dict) else {}
     payload = {
         "trade_id": row.id,
         "trade_uid": row.trade_uid,
         "game_id": row.game_id,
         "ledger_trade_id": row.ledger_trade_id,
         "ticker": row.ticker,
+        "asset_type": row.asset_type,
+        "market": frozen_asset.get("market") if isinstance(frozen_asset, dict) else None,
+        "exchange": frozen_asset.get("exchange") if isinstance(frozen_asset, dict) else None,
+        "currency": frozen_asset.get("currency") if isinstance(frozen_asset, dict) else None,
+        "benchmark_asset": (frozen_asset.get("benchmark_asset") if isinstance(frozen_asset, dict) else None) or row.benchmark_ticker,
+        "paper_forward_classification": frozen_payload.get("paper_forward_classification") if isinstance(frozen_payload, dict) else None,
+        "classification_reason": frozen_payload.get("classification_reason") if isinstance(frozen_payload, dict) else None,
+        "scanner_rank": scanner_payload.get("rank") if isinstance(scanner_payload, dict) else None,
         "setup_type": row.setup_type,
         "status": row.status,
         "close_reason": row.close_reason,
@@ -1810,6 +1832,8 @@ def serialize_paper_forward_trade(row: LiveForwardPaperTrade, *, compact: bool =
         "missing_fields": diagnosis.get("missing_fields") or [],
         "risk_reward_ratio": diagnosis.get("risk_reward_ratio"),
         "data_quality_score": diagnosis.get("data_quality_score"),
+        "data_quality_status": frozen_payload.get("data_quality_status") if isinstance(frozen_payload, dict) else None,
+        "tradability_status": frozen_payload.get("tradability_status") if isinstance(frozen_payload, dict) else None,
         "weights_used": row.weights_used,
         "feedback_loop_audit_id": row.feedback_loop_audit_id,
         "created_at": iso(row.created_at),

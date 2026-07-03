@@ -100,6 +100,22 @@ class Settings(BaseSettings):
     live_trading_game_allow_fractional_shares: bool = Field(default=True, alias="LIVE_TRADING_GAME_ALLOW_FRACTIONAL_SHARES")
     live_trading_game_benchmark: str = Field(default="SPY", alias="LIVE_TRADING_GAME_BENCHMARK")
     paper_forward_lifecycle_enabled: bool = Field(default=False, alias="PAPER_FORWARD_LIFECYCLE_ENABLED")
+    paper_forward_min_confidence: float = Field(default=50.0, alias="PAPER_FORWARD_MIN_CONFIDENCE")
+    paper_forward_min_risk_reward: float = Field(default=1.0, alias="PAPER_FORWARD_MIN_RISK_REWARD")
+    paper_forward_min_data_quality: float = Field(default=50.0, alias="PAPER_FORWARD_MIN_DATA_QUALITY")
+    paper_forward_max_candidates_per_run: int = Field(default=80, alias="PAPER_FORWARD_MAX_CANDIDATES_PER_RUN")
+    paper_forward_allow_watchlist_candidates: bool = Field(default=True, alias="PAPER_FORWARD_ALLOW_WATCHLIST_CANDIDATES")
+    paper_forward_allow_trade_candidates: bool = Field(default=True, alias="PAPER_FORWARD_ALLOW_TRADE_CANDIDATES")
+    paper_forward_enabled_markets: str = Field(
+        default="us_equities,european_equities,global_equities,etfs,indexes,commodities,forex,crypto,bonds,volatility",
+        alias="PAPER_FORWARD_ENABLED_MARKETS",
+    )
+    paper_forward_enabled_asset_classes: str = Field(
+        default="equities,etfs,indexes,commodities,forex,crypto,bonds,volatility",
+        alias="PAPER_FORWARD_ENABLED_ASSET_CLASSES",
+    )
+    paper_forward_require_benchmark: bool = Field(default=False, alias="PAPER_FORWARD_REQUIRE_BENCHMARK")
+    paper_forward_min_liquidity_score: float = Field(default=0.0, alias="PAPER_FORWARD_MIN_LIQUIDITY_SCORE")
     self_improvement_enabled: bool = Field(default=True, alias="SELF_IMPROVEMENT_ENABLED")
     self_improvement_auto_apply: bool = Field(default=False, alias="SELF_IMPROVEMENT_AUTO_APPLY")
     self_improvement_auto_apply_low_risk: bool = Field(default=True, alias="SELF_IMPROVEMENT_AUTO_APPLY_LOW_RISK")

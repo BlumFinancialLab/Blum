@@ -17,6 +17,13 @@ from app.models import (
 )
 from app.services.learning_loop import BASE_SIGNAL_WEIGHTS
 from app.services.live_forward_paper_trading import LiveForwardPaperTradingService
+from app.services.paper_forward_opportunity_scanner import (
+    BLOCKED_CANDIDATE,
+    DATA_BLOCKED_CANDIDATE,
+    TRADE_CANDIDATE,
+    WATCHLIST_CANDIDATE,
+    PaperForwardOpportunityScanner,
+)
 
 
 def setup_db() -> Session:
@@ -368,6 +375,66 @@ def test_paper_forward_run_once_reports_actionability_summary():
         assert snapshot["actionability_summary"]["skipped_count"] == 1
         assert snapshot["actionability_summary"]["data_blocked_count"] == 1
         assert snapshot["paper_forward_lifecycle_mode"] == "CANDIDATE_FREEZE_ONLY"
+
+
+def test_paper_forward_opportunity_scanner_classifies_trade_watchlist_blocked_and_data_blocked():
+    with setup_db() as db:
+        seed_asset(db, "NVDA")
+        seed_asset(db, "AMD")
+        seed_asset(db, "MSFT")
+        scanner = PaperForwardOpportunityScanner(
+            candidate_provider=lambda _db, _limit: [
+                candidate(ticker="NVDA", confidence=72.0, target_1=112.0, invalidation_level=96.0),
+                candidate(ticker="AMD", actionability="wait_for_trigger", confidence=66.0, target_1=110.0, invalidation_level=96.0),
+                candidate(ticker="MSFT", actionability="active_setup", confidence=20.0, target_1=102.0, invalidation_level=96.0),
+                candidate(ticker="TSLA", price=None),
+            ]
+        )
+
+        report = scanner.scan(db, limit=4)
+
+        assert report["scanned_count"] == 4
+        assert report["trade_candidate_count"] == 1
+        assert report["watchlist_candidate_count"] == 1
+        assert report["blocked_candidate_count"] == 1
+        assert report["data_blocked_candidate_count"] == 1
+        assert report["best_trade_candidate"]["classification"] == TRADE_CANDIDATE
+        assert report["best_watchlist_candidate"]["classification"] == WATCHLIST_CANDIDATE
+        assert any(item["paper_forward_classification"] == BLOCKED_CANDIDATE for item in report["candidate_payloads_for_persistence"])
+        assert any(item["paper_forward_classification"] == DATA_BLOCKED_CANDIDATE for item in report["candidate_payloads_for_persistence"])
+        assert report["markets_scanned"]
+        assert report["asset_classes_scanned"]
+        assert report["skipped_markets"]
+
+
+def test_paper_forward_run_once_returns_scanner_summary_and_persists_classifications():
+    with setup_db() as db:
+        service = LiveForwardPaperTradingService()
+        service.scan_candidates = lambda _db, limit=30: [
+            candidate(ticker="NVDA", confidence=72.0, target_1=112.0, invalidation_level=96.0),
+            candidate(ticker="AMD", actionability="wait_for_trigger", confidence=66.0, target_1=110.0, invalidation_level=96.0),
+            candidate(ticker="TSLA", price=None),
+        ]  # type: ignore[method-assign]
+
+        report = service.run_once(db)
+        rows = db.scalars(select(PaperForwardTrade).order_by(PaperForwardTrade.ticker)).all()
+        snapshot = service.snapshot(db)["payload"]
+
+        assert report["scanner_summary"]["scanned_count"] == 3
+        assert report["scanner_summary"]["trade_candidate_count"] == 1
+        assert report["scanner_summary"]["watchlist_candidate_count"] == 1
+        assert report["scanner_summary"]["data_blocked_candidate_count"] == 1
+        assert report["markets_scanned"]
+        assert report["skipped_markets"]
+        assert {row.frozen_decision_payload["paper_forward_classification"] for row in rows} == {
+            TRADE_CANDIDATE,
+            WATCHLIST_CANDIDATE,
+            DATA_BLOCKED_CANDIDATE,
+        }
+        assert snapshot["scanned_count"] == 3
+        assert snapshot["trade_candidate_count"] == 1
+        assert snapshot["watchlist_candidate_count"] == 1
+        assert snapshot["data_blocked_candidate_count"] == 1
 
 
 def test_paper_forward_scouting_falls_back_to_real_ohlcv_universe(monkeypatch):
