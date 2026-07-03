@@ -169,6 +169,7 @@ class TraderBrainService:
         latest_trade = latest_row(db, TradingGameTrade)
         paper_rows = db.scalars(select(LiveForwardPaperTrade).order_by(desc(LiveForwardPaperTrade.created_at)).limit(250)).all()
         paper_actionability = paper_forward_actionability_summary(paper_rows)
+        validation = validation_summary(db, latest_run)
         return {
             "status": "ready",
             "version": TRADER_BRAIN_VERSION,
@@ -176,7 +177,8 @@ class TraderBrainService:
             "current_experiment": experiment_from_focus(focus[0] if focus else None, latest_run),
             "current_hypothesis": hypothesis_from_focus(focus[0] if focus else None),
             "research_planner": research_planner,
-            "current_validation": validation_summary(db, latest_run),
+            "current_validation": validation,
+            "budget_guard": validation.get("budget_guard"),
             "trades_being_analyzed": trade_analysis_payload(db),
             "patterns_discovered": [lesson_payload(row) for row in lessons if row.lesson_type not in ["setup_failed", "entry_timing_bad"]][:8],
             "patterns_rejected": [lesson_payload(row) for row in lessons if row.lesson_type in ["setup_failed", "entry_timing_bad"]][:8],
@@ -880,8 +882,16 @@ def validation_summary(db: Session, latest_run: LearningRun | None) -> dict:
     totals_24h = learning_run_totals(db, since=since)
     latest_payload = validation_from_run(latest_run)
     productive_payload = validation_from_run(latest_productive)
+    visible_payload = (
+        productive_payload
+        if latest_run
+        and latest_run.status in {"budget_wait", "skipped"}
+        and latest_productive is not None
+        else latest_payload
+    )
     return {
-        **latest_payload,
+        **visible_payload,
+        "latest_scheduler_status": latest_payload.get("status"),
         "latest_run": run_payload(latest_run),
         "latest_productive_run": run_payload(latest_productive),
         "budget_guard": budget_guard_payload(latest_run),

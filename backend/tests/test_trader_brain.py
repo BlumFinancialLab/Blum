@@ -106,13 +106,17 @@ def test_training_ground_does_not_look_empty_when_latest_run_is_budget_wait():
         payload = TraderBrainService().training_ground(db)
 
     validation = payload["current_validation"]
-    assert validation["status"] == "budget_wait"
+    assert validation["status"] == "completed"
+    assert validation["latest_scheduler_status"] == "budget_wait"
     assert validation["display_status"] == "waiting_budget_using_latest_evidence"
+    assert validation["predictions_generated"] == 8
+    assert validation["outcomes_evaluated"] == 6
     assert validation["evidence_total"]["predictions_generated"] == 8
     assert validation["evidence_total"]["outcomes_evaluated"] == 6
     assert validation["latest_productive_run"]["predictions_generated"] == 8
     assert "stored evidence exists" in validation["summary"]
     assert validation["budget_guard"]["status"] == "budget_wait"
+    assert payload["budget_guard"]["status"] == "budget_wait"
     assert all(row["predictions_generated"] > 0 for row in payload["learning_timeline"])
     assert len(payload["patterns_rejected"]) == 1
 
