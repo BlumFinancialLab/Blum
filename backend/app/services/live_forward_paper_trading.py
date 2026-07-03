@@ -396,6 +396,11 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
             "created_data_blocked_candidates": created_data_blocked_candidates,
             "duplicates": duplicates,
         }
+        response_scanner_report = {
+            key: value
+            for key, value in scanner_report.items()
+            if key != "candidate_payloads_for_persistence"
+        }
         return {
             "status": "ok",
             "mode": "foundation_candidate_freeze",
@@ -405,7 +410,7 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
             "waiting_for_trigger": waiting,
             "skipped": skipped,
             "data_blocked": blocked,
-            "scanner_summary": scanner_report,
+            "scanner_summary": response_scanner_report,
             "markets_scanned": scanner_report.get("markets_scanned"),
             "asset_classes_scanned": scanner_report.get("asset_classes_scanned"),
             "skipped_markets": scanner_report.get("skipped_markets"),

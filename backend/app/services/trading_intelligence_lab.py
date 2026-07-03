@@ -4,6 +4,7 @@ from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta
 import hashlib
+import math
 from statistics import mean, median
 from uuid import uuid4
 
@@ -46,6 +47,32 @@ LAB_POLICY = (
     "Trading Intelligence Lab is paper research only. Historical simulation and live forward paper data are "
     "evidence streams, not financial advice and not proof of future outperformance."
 )
+
+
+def json_safe(value):
+    """Return a JSON-compatible copy for frozen paper-forward audit payloads."""
+
+    if value is None or isinstance(value, (str, int, bool)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(key): json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [json_safe(item) for item in value]
+    if hasattr(value, "item"):
+        try:
+            return json_safe(value.item())
+        except Exception:
+            pass
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:
+            pass
+    return str(value)
 
 
 @dataclass(frozen=True)
@@ -1600,7 +1627,8 @@ def serialize_live_position(row: LiveForwardPaperPosition) -> dict:
 
 
 def compact_candidate(candidate: dict) -> dict:
-    return {
+    return json_safe(
+        {
         "ticker": candidate.get("ticker"),
         "actionability": candidate.get("actionability"),
         "paper_forward_classification": candidate.get("paper_forward_classification"),
@@ -1614,7 +1642,8 @@ def compact_candidate(candidate: dict) -> dict:
         "benchmark_asset": candidate.get("benchmark_asset"),
         "data_quality_status": candidate.get("data_quality_status"),
         "tradability_status": candidate.get("tradability_status"),
-    }
+        }
+    )
 
 
 def live_forward_duplicate_key(*, ticker: str | None, decision_date: date, model_version: str, setup_type: str, entry_trigger: str) -> str:
@@ -1631,7 +1660,8 @@ def live_forward_duplicate_key(*, ticker: str | None, decision_date: date, model
 
 
 def freeze_decision_payload(candidate: dict, feedback: dict, decision_timestamp: datetime) -> dict:
-    return {
+    return json_safe(
+        {
         "decision_timestamp": decision_timestamp.isoformat(),
         "ticker": candidate.get("ticker"),
         "asset": candidate.get("asset") or {},
@@ -1650,7 +1680,8 @@ def freeze_decision_payload(candidate: dict, feedback: dict, decision_timestamp:
         "market_regime": (candidate.get("market_regime") or {}).get("regime_primary"),
         "feedback_loop": feedback,
         "no_future_data_policy": "Frozen payload contains only data available at decision timestamp. Future prices are appended as events only.",
-    }
+        }
+    )
 
 
 def latest_market_price_after(db: Session, ticker: str, timestamp: datetime) -> tuple[date, float] | None:
