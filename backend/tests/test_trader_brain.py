@@ -112,6 +112,8 @@ def test_training_ground_does_not_look_empty_when_latest_run_is_budget_wait():
     assert validation["evidence_total"]["outcomes_evaluated"] == 6
     assert validation["latest_productive_run"]["predictions_generated"] == 8
     assert "stored evidence exists" in validation["summary"]
+    assert validation["budget_guard"]["status"] == "budget_wait"
+    assert all(row["predictions_generated"] > 0 for row in payload["learning_timeline"])
     assert len(payload["patterns_rejected"]) == 1
 
 
@@ -222,6 +224,8 @@ def test_alpha_snapshot_shows_historical_evidence_when_paper_forward_has_no_clos
     assert payload["evidence_grade"] == "INSUFFICIENT_EVIDENCE"
     assert payload["verdict"] == "No paper-forward evidence yet. Historical evidence is available separately."
     assert payload["historical_alpha"] == 4.0
+    assert payload["primary_evidence"]["source"] == "historical_replay"
+    assert payload["total_evidence_sample_size"] == 1
 
 
 def test_alpha_snapshot_separates_walk_forward_validation_from_historical_benchmark_rows():

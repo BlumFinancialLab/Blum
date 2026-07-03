@@ -259,6 +259,8 @@ class TraderBrainService:
         evidence_grade, evidence_reason = alpha_grade_from_splits(evidence_split)
         verdict = alpha_verdict_from_splits(evidence_split, evidence_grade)
         latest_update = latest_alpha_update_from_splits(evidence_split) or latest_paper_forward_update(paper_rows, benchmarks)
+        primary_evidence = primary_alpha_evidence(evidence_split)
+        total_evidence_sample = sum(int(split.get("sample_size") or 0) for split in evidence_split.values() if isinstance(split, dict))
         return {
             "status": evidence_grade,
             "version": TRADER_BRAIN_VERSION,
@@ -270,6 +272,9 @@ class TraderBrainService:
             "verdict": verdict,
             "last_updated_at": latest_update,
             "sample_size": len(closed_rows),
+            "forward_sample_size": len(closed_rows),
+            "total_evidence_sample_size": total_evidence_sample,
+            "primary_evidence": primary_evidence,
             "closed_trade_count": len(closed_rows),
             "open_trade_count": len(open_rows),
             "paper_forward_lifecycle_mode": lifecycle_mode,
@@ -879,6 +884,7 @@ def validation_summary(db: Session, latest_run: LearningRun | None) -> dict:
         **latest_payload,
         "latest_run": run_payload(latest_run),
         "latest_productive_run": run_payload(latest_productive),
+        "budget_guard": budget_guard_payload(latest_run),
         "display_status": display_training_status(latest_run, latest_productive),
         "evidence_total": totals,
         "evidence_24h": totals_24h,
@@ -936,6 +942,21 @@ def training_validation_summary(latest: dict, productive: dict, totals: dict, to
         f"Stored evidence: {totals['runs']} runs, {totals['predictions_generated']} predictions, "
         f"{totals['outcomes_evaluated']} outcomes and {totals['memory_updates']} memory updates."
     )
+
+
+def budget_guard_payload(latest_run: LearningRun | None) -> dict | None:
+    if latest_run is None or latest_run.status not in {"budget_wait", "skipped"}:
+        return None
+    summary = latest_run.summary if isinstance(latest_run.summary, dict) else {}
+    guard = summary.get("daily_guard") if isinstance(summary.get("daily_guard"), dict) else {}
+    return {
+        "status": latest_run.status,
+        "started_at": latest_run.started_at.isoformat() if latest_run.started_at else None,
+        "reason": summary.get("reason") or guard.get("reason") or "Learning guard paused this scheduler tick.",
+        "today_predictions": guard.get("today_predictions"),
+        "max_daily_runs": guard.get("max_daily_runs"),
+        "policy": "Budget guard rows are not treated as completed training experiments.",
+    }
 
 
 def paper_forward_learning_blocker(summary: dict) -> dict:
@@ -1024,8 +1045,28 @@ def latest_confidence_update(db: Session) -> dict | None:
 
 
 def learning_timeline(db: Session) -> list[dict]:
-    runs = db.scalars(select(LearningRun).order_by(desc(LearningRun.started_at)).limit(12)).all()
-    return [run_payload(row) for row in runs if row is not None]
+    runs = db.scalars(
+        select(LearningRun)
+        .where(
+            (LearningRun.predictions_created > 0)
+            | (LearningRun.outcomes_evaluated > 0)
+            | (LearningRun.mistakes_found > 0)
+            | (LearningRun.memory_updates > 0)
+        )
+        .order_by(desc(LearningRun.started_at))
+        .limit(12)
+    ).all()
+    output = []
+    for row in runs:
+        payload = run_payload(row)
+        if payload:
+            payload["productive"] = True
+            payload["display_detail"] = (
+                f"predictions {payload['predictions_generated']} | "
+                f"outcomes {payload['outcomes_evaluated']} | memory {payload['memory_updates']}"
+            )
+            output.append(payload)
+    return output
 
 
 def return_percent(game: TradingGame | None, cycle: TradingCapitalCycle | None) -> float | None:
@@ -1679,6 +1720,32 @@ def alpha_verdict_from_splits(evidence_split: dict, grade: str) -> str:
     if grade == "MIXED":
         return "Paper-forward evidence is mixed."
     return "Paper-forward evidence is inconclusive."
+
+
+def primary_alpha_evidence(evidence_split: dict) -> dict:
+    for key in ("paper_forward", "live_forward", "walk_forward_validation", "historical_replay"):
+        split = evidence_split.get(key) or {}
+        if split_has_data(split):
+            return {
+                "source": key,
+                "label": split.get("label"),
+                "sample_size": split.get("sample_size"),
+                "evidence_grade": split.get("evidence_grade"),
+                "blum_return": split.get("blum_return"),
+                "benchmark_return": split.get("benchmark_return"),
+                "alpha": split.get("alpha") if split.get("alpha") is not None else split.get("benchmark_excess"),
+                "benchmark_excess": split.get("benchmark_excess"),
+                "evidence_reason": split.get("evidence_reason"),
+                "data_source": split.get("data_source"),
+                "last_updated_at": split.get("last_updated_at"),
+            }
+    return {
+        "source": "none",
+        "label": "No stored evidence",
+        "sample_size": 0,
+        "evidence_grade": "NO_DATA",
+        "evidence_reason": "No stored alpha evidence found across evidence streams.",
+    }
 
 
 def paper_forward_lifecycle_mode(actionability_summary: dict | None = None) -> str:

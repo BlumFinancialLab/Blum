@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     enable_learning_loop: bool = Field(default=True, validation_alias=AliasChoices("LEARNING_LOOP_ENABLED", "BLUM_ENABLE_LEARNING_LOOP"))
     learning_loop_minutes: int = Field(default=360, validation_alias=AliasChoices("LEARNING_LOOP_MINUTES", "BLUM_LEARNING_LOOP_MINUTES"))
     learning_batch_size: int = Field(default=100, alias="LEARNING_BATCH_SIZE")
-    learning_max_daily_runs: int = Field(default=1000, alias="LEARNING_MAX_DAILY_RUNS")
+    learning_max_daily_runs: int = Field(default=5000, alias="LEARNING_MAX_DAILY_RUNS")
     learning_random_seed: str = Field(default="", alias="LEARNING_RANDOM_SEED")
     learning_min_history_years: int = Field(default=3, alias="LEARNING_MIN_HISTORY_YEARS")
     learning_asset_universe: str = Field(default="stocks,etfs", alias="LEARNING_ASSET_UNIVERSE")

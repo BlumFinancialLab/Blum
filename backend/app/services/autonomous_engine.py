@@ -89,7 +89,8 @@ class AutonomousResearchEngine:
         stage("research_planner", lambda: AutonomousResearchPlanner().generate(db, persist=True))
         if settings.enable_learning_loop:
             stage("blum_financial_model", lambda: run_model_learning_cycle(db, limit=settings.blum_model_cycle_limit))
-            stage("blum_learning_loop", lambda: LearningLoopService().run_batch(db, batch_size=settings.learning_batch_size, trigger="autonomous_engine"))
+            autonomous_learning_batch = max(1, min(settings.professional_learning_batch_size, settings.learning_batch_size, settings.blum_autonomous_max_items_per_job))
+            stage("blum_learning_loop", lambda: LearningLoopService().run_batch(db, batch_size=autonomous_learning_batch, trigger="autonomous_engine", sniper_simulation_limit=0))
         stage("market_sniper_engine", lambda: MarketSniperEngine().evaluate(db, limit=min(settings.max_update_assets, 48)))
         if settings.trading_game_enabled:
             stage("trading_game_pl_learning", lambda: TradingGameSimulator().run(db, batch_size=settings.trading_game_batch_size))

@@ -44,10 +44,16 @@ export default function AlphaPage() {
   if (!data) return <LoadingState label="Loading Alpha Evidence" />;
 
   const grade = normalizeGrade(data.evidence_grade);
-  const alphaTone = metricTone(data.alpha);
   const verdictTone = gradeTone(grade);
   const blockers = data.current_blockers ?? [];
   const lessons = data.latest_alpha_lessons ?? [];
+  const primaryEvidence = data.primary_evidence ?? {};
+  const displayedSampleSize = data.total_evidence_sample_size ?? data.sample_size ?? 0;
+  const primaryReturn = primaryEvidence.blum_return ?? data.blum_return;
+  const primaryBenchmark = primaryEvidence.benchmark_return ?? data.benchmark_return;
+  const primaryAlpha = primaryEvidence.alpha ?? primaryEvidence.benchmark_excess ?? data.alpha;
+  const primaryLabel = primaryEvidence.label ?? "Paper-Forward Evidence";
+  const alphaTone = metricTone(primaryAlpha);
 
   return (
     <>
@@ -57,7 +63,7 @@ export default function AlphaPage() {
         subtitle="One question only: is BLUM generating benchmark-relative paper-forward alpha?"
         statusItems={[
           { label: "Verdict", value: grade.replaceAll("_", " "), tone: verdictTone },
-          { label: "Sample", value: String(data.sample_size ?? 0), tone: Number(data.sample_size ?? 0) >= Number(data.min_required_sample_size ?? 30) ? "positive" : "attention" },
+          { label: "Sample", value: String(displayedSampleSize), tone: Number(displayedSampleSize) >= Number(data.min_required_sample_size ?? 30) ? "positive" : "attention" },
           { label: "Updated", value: compactDate(data.last_updated_at ?? data.generated_at), tone: "info" },
           { label: "Policy", value: "read only", tone: "info" },
         ]}
@@ -76,10 +82,10 @@ export default function AlphaPage() {
       </section>
 
       <section className="terminal-command-grid">
-        <MetricCard label="BLUM Return" value={formatPct(data.blum_return)} subvalue="paper-forward evidence" icon={<TrendingUp size={15} />} tone={metricTone(data.blum_return)} />
-        <MetricCard label="Benchmark Return" value={formatPct(data.benchmark_return)} subvalue="same holding period where available" icon={<BarChart3 size={15} />} tone={data.benchmark_return === null || data.benchmark_return === undefined ? "attention" : "info"} />
-        <MetricCard label="Alpha" value={formatPct(data.alpha)} subvalue="paper-forward benchmark excess" icon={Number(data.alpha) >= 0 ? <TrendingUp size={15} /> : <TrendingDown size={15} />} tone={alphaTone} />
-        <MetricCard label="Sample Size" value={String(data.sample_size ?? 0)} subvalue={`minimum ${data.min_required_sample_size ?? 30}`} icon={<Gauge size={15} />} tone={Number(data.sample_size ?? 0) >= Number(data.min_required_sample_size ?? 30) ? "positive" : "attention"} />
+        <MetricCard label="BLUM Return" value={formatPct(primaryReturn)} subvalue={primaryLabel} icon={<TrendingUp size={15} />} tone={metricTone(primaryReturn)} />
+        <MetricCard label="Benchmark Return" value={formatPct(primaryBenchmark)} subvalue="same evidence stream where available" icon={<BarChart3 size={15} />} tone={primaryBenchmark === null || primaryBenchmark === undefined ? "attention" : "info"} />
+        <MetricCard label="Alpha" value={formatPct(primaryAlpha)} subvalue={`${primaryLabel} benchmark excess`} icon={Number(primaryAlpha) >= 0 ? <TrendingUp size={15} /> : <TrendingDown size={15} />} tone={metricTone(primaryAlpha)} />
+        <MetricCard label="Sample Size" value={String(displayedSampleSize)} subvalue={`${data.forward_sample_size ?? data.sample_size ?? 0} paper-forward closed`} icon={<Gauge size={15} />} tone={Number(displayedSampleSize) >= Number(data.min_required_sample_size ?? 30) ? "positive" : "attention"} />
         <MetricCard label="Realized P/L" value={formatMoney(data.realized_pnl)} subvalue={`unrealized ${formatMoney(data.unrealized_pnl)}`} icon={<CheckCircle2 size={15} />} tone={metricTone(data.realized_pnl)} />
         <MetricCard label="Benchmark Excess" value={formatPct(data.benchmark_excess)} subvalue={data.benchmark_excess === null || data.benchmark_excess === undefined ? "Benchmark comparison unavailable." : "closed paper-forward trades"} icon={<BarChart3 size={15} />} tone={metricTone(data.benchmark_excess)} />
       </section>
@@ -100,12 +106,13 @@ export default function AlphaPage() {
           </div>
         </BloombergPanel>
 
-        <BloombergPanel title="Performance vs Benchmark" value={formatPct(data.alpha)} subtitle="No benchmark means no alpha claim.">
+        <BloombergPanel title="Performance vs Benchmark" value={formatPct(primaryAlpha)} subtitle="No benchmark means no alpha claim.">
           <MiniSparkline values={spark as number[]} tone={alphaTone} />
           <div className="brain-list dense" style={{ marginTop: 10 }}>
-            <Fact label="BLUM return" value={formatPct(data.blum_return)} />
-            <Fact label="Benchmark return" value={formatPct(data.benchmark_return)} />
-            <Fact label="Alpha" value={formatPct(data.alpha)} detail={data.benchmark_return === null || data.benchmark_return === undefined ? "Benchmark comparison unavailable." : "Measured against stored benchmark evidence."} />
+            <Fact label="Evidence stream" value={primaryLabel} />
+            <Fact label="BLUM return" value={formatPct(primaryReturn)} />
+            <Fact label="Benchmark return" value={formatPct(primaryBenchmark)} />
+            <Fact label="Alpha" value={formatPct(primaryAlpha)} detail={primaryBenchmark === null || primaryBenchmark === undefined ? "Benchmark comparison unavailable." : "Measured against stored benchmark evidence."} />
           </div>
         </BloombergPanel>
       </section>

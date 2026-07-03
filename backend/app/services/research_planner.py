@@ -480,7 +480,7 @@ def dedupe_candidates(rows: list[dict]) -> list[dict]:
 
 def completed_experiments(evidence: dict) -> list[dict]:
     output = []
-    for row in evidence["runs"][:5]:
+    for row in productive_learning_runs(evidence["runs"])[:5]:
         output.append({
             "type": "learning_run",
             "id": row.id,
@@ -511,8 +511,9 @@ def experiment_result(evidence: dict) -> dict:
             "confidence": row.confidence,
             "sample_size": row.sample_size,
         }
-    if evidence["runs"]:
-        row = evidence["runs"][0]
+    runs = productive_learning_runs(evidence["runs"])
+    if runs:
+        row = runs[0]
         return {
             "status": row.status,
             "target": row.trigger,
@@ -520,6 +521,17 @@ def experiment_result(evidence: dict) -> dict:
             "sample_size": row.outcomes_evaluated,
         }
     return {"status": "insufficient_evidence", "summary": "No completed experiment result is stored yet."}
+
+
+def productive_learning_runs(rows: list[LearningRun]) -> list[LearningRun]:
+    return [
+        row
+        for row in rows
+        if (row.predictions_created or 0) > 0
+        or (row.outcomes_evaluated or 0) > 0
+        or (row.mistakes_found or 0) > 0
+        or (row.memory_updates or 0) > 0
+    ]
 
 
 def next_hypothesis(selected: dict) -> str:

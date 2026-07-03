@@ -9,11 +9,13 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.models import (
+    Asset,
     LearningEvent,
     LiveForwardPaperGame,
     LiveForwardPaperPosition,
     LiveForwardPaperTrade,
     LiveForwardPaperTradeEvent,
+    PriceHistory,
     TradeLearningEvidence,
     TradingGameTrade,
 )
@@ -197,6 +199,68 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
             }
         )
         return payload
+
+    def scan_candidates(self, db: Session, limit: int = 30) -> list[dict]:
+        """Scan current stored market evidence without fabricating candidates.
+
+        Primary candidates still come from Market Sniper. If that surface is too
+        narrow, broaden scouting to active assets with stored OHLCV so the
+        forward paper journal can freeze more real decisions and learn from the
+        rejection/trigger evidence.
+        """
+
+        from app.services.market_sniper import MarketSniperEngine
+
+        desired = max(1, min(int(limit or 30), 80))
+        engine = MarketSniperEngine()
+        candidates: list[dict] = []
+        seen: set[str] = set()
+
+        def add_candidate(item: dict, source: str) -> None:
+            ticker = normalize_text(item.get("ticker")).upper()
+            if not ticker or ticker in seen:
+                return
+            payload = dict(item)
+            payload["scouting_source"] = source
+            payload["scouting_policy"] = "real_stored_ohlcv_only_no_synthetic_candidates"
+            seen.add(ticker)
+            candidates.append(payload)
+
+        try:
+            payload = engine.candidates(db, limit=desired, persist=False)
+            for item in payload.get("candidates", []) or []:
+                add_candidate(item, "market_sniper_ranked_signals")
+        except Exception as exc:
+            db.add(
+                LearningEvent(
+                    event_type="paper_forward_scouting_degraded",
+                    severity="Warning",
+                    title="Paper-forward primary scouting failed",
+                    description=f"{type(exc).__name__}: {exc}",
+                    payload={"source": "market_sniper_ranked_signals"},
+                )
+            )
+
+        if len(candidates) < desired:
+            for asset in broad_ohlcv_universe(db, limit=desired * 3):
+                if asset.ticker in seen:
+                    continue
+                try:
+                    add_candidate(engine.evaluate_asset(db, asset, persist=False), "broad_ohlcv_universe")
+                except Exception as exc:
+                    db.add(
+                        LearningEvent(
+                            event_type="paper_forward_asset_scouting_skipped",
+                            severity="Warning",
+                            title=f"{asset.ticker} paper-forward scouting skipped",
+                            description=f"{type(exc).__name__}: {exc}",
+                            payload={"ticker": asset.ticker, "source": "broad_ohlcv_universe"},
+                        )
+                    )
+                if len(candidates) >= desired:
+                    break
+
+        return candidates[:desired]
 
     def run_once(self, db: Session) -> dict:
         """Run one foundation scan without opening/closing positions."""
@@ -988,6 +1052,21 @@ def existing_candidate_id(db: Session, service: LiveForwardPaperTradingService, 
         entry_trigger=entry_trigger,
     )
     return db.scalar(select(LiveForwardPaperTrade.id).where(LiveForwardPaperTrade.duplicate_key == duplicate_key).limit(1))
+
+
+def broad_ohlcv_universe(db: Session, *, limit: int = 90, min_rows: int = 120) -> list[Asset]:
+    row_count = func.count(PriceHistory.id)
+    latest_date = func.max(PriceHistory.date)
+    rows = db.execute(
+        select(Asset, row_count.label("row_count"), latest_date.label("latest_price_date"))
+        .join(PriceHistory, PriceHistory.asset_id == Asset.id)
+            .where(Asset.is_active.is_(True), func.lower(Asset.asset_type).in_(["stock", "etf"]))
+        .group_by(Asset.id)
+        .having(row_count >= max(30, int(min_rows)))
+        .order_by(desc(latest_date), desc(row_count), Asset.ticker)
+        .limit(max(1, int(limit)))
+    ).all()
+    return [asset for asset, _, _ in rows]
 
 
 def normalize_text(value: Any) -> str:

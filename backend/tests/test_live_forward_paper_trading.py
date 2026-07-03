@@ -71,6 +71,23 @@ def add_price(db: Session, asset: Asset, day_offset: int, close: float) -> None:
     db.commit()
 
 
+def add_price_history(db: Session, asset: Asset, rows: int = 130, start_close: float = 100.0) -> None:
+    for offset in range(1, rows + 1):
+        db.add(
+            PriceHistory(
+                asset_id=asset.id,
+                date=date.today() - timedelta(days=rows + 1 - offset),
+                open=start_close + offset * 0.05 - 1,
+                high=start_close + offset * 0.05 + 1,
+                low=start_close + offset * 0.05 - 2,
+                close=start_close + offset * 0.05,
+                volume=1_000_000 + offset,
+                provider="test",
+            )
+        )
+    db.commit()
+
+
 def run_lifecycle(service: LiveForwardPaperTradingService, db: Session) -> dict:
     return service.run_lifecycle(db, override=True)
 
@@ -351,6 +368,29 @@ def test_paper_forward_run_once_reports_actionability_summary():
         assert snapshot["actionability_summary"]["skipped_count"] == 1
         assert snapshot["actionability_summary"]["data_blocked_count"] == 1
         assert snapshot["paper_forward_lifecycle_mode"] == "CANDIDATE_FREEZE_ONLY"
+
+
+def test_paper_forward_scouting_falls_back_to_real_ohlcv_universe(monkeypatch):
+    with setup_db() as db:
+        nvda = seed_asset(db, "NVDA")
+        amd = seed_asset(db, "AMD")
+        add_price_history(db, nvda)
+        add_price_history(db, amd)
+
+        monkeypatch.setattr(
+            "app.services.market_sniper.MarketSniperEngine.candidates",
+            lambda self, _db, limit=30, persist=False: {"candidates": []},
+        )
+        monkeypatch.setattr(
+            "app.services.market_sniper.MarketSniperEngine.evaluate_asset",
+            lambda self, _db, asset, persist=False: candidate(ticker=asset.ticker),
+        )
+
+        rows = LiveForwardPaperTradingService().scan_candidates(db, limit=2)
+
+        assert {row["ticker"] for row in rows} == {"AMD", "NVDA"}
+        assert all(row["scouting_source"] == "broad_ohlcv_universe" for row in rows)
+        assert all(row["scouting_policy"] == "real_stored_ohlcv_only_no_synthetic_candidates" for row in rows)
 
 
 def test_paper_forward_run_lifecycle_refuses_when_disabled_without_override():

@@ -6,7 +6,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from app.core.database import Base
-from app.models import BackgroundJobState, BrainRuntimeEvent, DashboardSnapshot, LearningRun
+from app.models import BackgroundJobState, BrainRuntimeEvent, DashboardSnapshot, LearningEvent, LearningRun
 from app.services.central_brain_runtime import (
     BackgroundJobStateService,
     BrainEventBus,
@@ -234,6 +234,28 @@ def test_learning_daily_guard_reports_budget_wait_without_skip(monkeypatch):
         assert guard["allowed"] is False
         assert guard["effective_batch"] == 0
         assert "daily learning budget exhausted" in guard["reason"]
+
+
+def test_learning_budget_wait_is_event_not_zero_training_experiment(monkeypatch):
+    with setup_db() as db:
+        db.add(
+            LearningRun(
+                run_id="full-budget",
+                trigger="test",
+                status="ok",
+                predictions_created=10,
+            )
+        )
+        db.commit()
+        monkeypatch.setattr("app.services.learning_loop.settings.learning_max_daily_runs", 10)
+
+        report = LearningLoopService().run_batch(db, batch_size=5, trigger="test")
+
+        assert report["status"] == "budget_wait"
+        assert db.scalar(select(LearningRun).where(LearningRun.status == "budget_wait").limit(1)) is None
+        event = db.scalar(select(LearningEvent).where(LearningEvent.event_type == "blum_learning_loop_budget_wait").limit(1))
+        assert event is not None
+        assert event.payload["policy"].startswith("Budget guards are events")
 
 
 def test_realtime_scheduler_has_professional_learning_lane_and_staggering():

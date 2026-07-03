@@ -107,6 +107,20 @@ class LearningLoopService:
         daily_guard = self.daily_guard(db, configured_batch)
         batch = max(1, int(daily_guard.get("effective_batch", configured_batch) or configured_batch))
         run_id = f"learn-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:8]}"
+
+        if not daily_guard["allowed"]:
+            db.add(
+                LearningEvent(
+                    event_type="blum_learning_loop_budget_wait",
+                    severity="Warning",
+                    title="BLUM Learning Loop waiting for daily budget",
+                    description=daily_guard["reason"],
+                    payload={"run_id": run_id, "guard": daily_guard, "policy": "Budget guards are events, not zero-output training experiments."},
+                )
+            )
+            db.commit()
+            return {"status": "budget_wait", "run_id": run_id, "guard": daily_guard}
+
         run = LearningRun(
             run_id=run_id,
             trigger=trigger,
@@ -118,21 +132,6 @@ class LearningLoopService:
         )
         db.add(run)
         db.flush()
-
-        if not daily_guard["allowed"]:
-            run.status = "budget_wait"
-            run.completed_at = datetime.utcnow()
-            run.summary = {"reason": daily_guard["reason"], "requested_batch_size": requested_batch, "daily_guard": daily_guard}
-            event = LearningEvent(
-                event_type="blum_learning_loop_budget_wait",
-                severity="Warning",
-                title="BLUM Learning Loop waiting for daily budget",
-                description=daily_guard["reason"],
-                payload={"run_id": run_id, "guard": daily_guard},
-            )
-            db.add(event)
-            db.commit()
-            return {"status": "budget_wait", "run_id": run_id, "guard": daily_guard}
 
         reports: list[dict] = []
         errors: list[dict] = []

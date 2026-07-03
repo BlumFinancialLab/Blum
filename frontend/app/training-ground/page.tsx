@@ -29,6 +29,7 @@ export default function TrainingGroundPage() {
   const evidenceTotal = validation.evidence_total ?? {};
   const evidence24h = validation.evidence_24h ?? {};
   const latestProductiveRun = validation.latest_productive_run ?? null;
+  const budgetGuard = validation.budget_guard ?? null;
   const analyzed = data.trades_being_analyzed ?? {};
   const displayStatus = validation.display_status ?? validation.status ?? "unknown";
   const readableStatus = humanStatus(displayStatus);
@@ -64,6 +65,7 @@ export default function TrainingGroundPage() {
             <Fact label="Target" value={data.current_experiment?.target ?? "broad coverage"} />
             <Fact label="Hypothesis" value={data.current_hypothesis} />
             <Fact label="Training evidence" value={readableStatus} detail={validation.summary ?? "No training summary available."} />
+            {budgetGuard && <Fact label="Budget guard" value={budgetGuard.status} detail={budgetGuard.reason} />}
             <Fact label="Paper-forward blocker" value={paperForwardBlocker.status ?? "not available"} detail={paperForwardBlocker.summary ?? "No paper-forward blocker stored in snapshot."} />
             <Fact label="Expected learning value" value={formatNumber(data.current_experiment?.expected_learning_value)} />
           </div>
@@ -97,9 +99,9 @@ export default function TrainingGroundPage() {
         <BloombergPanel title="Learning Timeline" value={<History size={16} />} subtitle="Latest autonomous cycles">
           <div className="brain-list dense">
             {(data.learning_timeline ?? []).slice(0, 6).map((row: any) => (
-              <Fact key={row.id ?? row.started_at} label={row.status ?? "run"} value={formatDate(row.started_at)} detail={`predictions ${row.predictions_generated ?? 0} | outcomes ${row.outcomes_evaluated ?? 0} | memory ${row.memory_updates ?? 0}`} />
+              <Fact key={row.id ?? row.started_at} label={row.status ?? "run"} value={formatDate(row.started_at)} detail={row.display_detail ?? `predictions ${row.predictions_generated ?? 0} | outcomes ${row.outcomes_evaluated ?? 0} | memory ${row.memory_updates ?? 0}`} />
             ))}
-            {!(data.learning_timeline ?? []).length && <Fact label="No timeline" value="No LearningRun rows are stored yet." />}
+            {!(data.learning_timeline ?? []).length && <Fact label="No productive timeline" value="No productive LearningRun rows are stored yet." detail={budgetGuard?.reason} />}
           </div>
         </BloombergPanel>
       </section>
