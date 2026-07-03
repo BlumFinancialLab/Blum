@@ -103,7 +103,7 @@ class Settings(BaseSettings):
     paper_forward_min_confidence: float = Field(default=50.0, alias="PAPER_FORWARD_MIN_CONFIDENCE")
     paper_forward_min_risk_reward: float = Field(default=1.0, alias="PAPER_FORWARD_MIN_RISK_REWARD")
     paper_forward_min_data_quality: float = Field(default=50.0, alias="PAPER_FORWARD_MIN_DATA_QUALITY")
-    paper_forward_max_candidates_per_run: int = Field(default=80, alias="PAPER_FORWARD_MAX_CANDIDATES_PER_RUN")
+    paper_forward_max_candidates_per_run: int = Field(default=30, alias="PAPER_FORWARD_MAX_CANDIDATES_PER_RUN")
     paper_forward_allow_watchlist_candidates: bool = Field(default=True, alias="PAPER_FORWARD_ALLOW_WATCHLIST_CANDIDATES")
     paper_forward_allow_trade_candidates: bool = Field(default=True, alias="PAPER_FORWARD_ALLOW_TRADE_CANDIDATES")
     paper_forward_enabled_markets: str = Field(

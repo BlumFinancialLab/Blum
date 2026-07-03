@@ -16,7 +16,9 @@ from app.models import (
     LiveForwardPaperTrade,
     LiveForwardPaperTradeEvent,
     PriceHistory,
+    SniperScore,
     TradeLearningEvidence,
+    TradePlan,
     TradingGameTrade,
 )
 from app.services.trading_intelligence_lab import (
@@ -292,10 +294,14 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
 
         from app.services.market_sniper import MarketSniperEngine
 
-        desired = max(1, min(int(limit or 30), 80))
+        desired = max(1, min(int(limit or 30), settings.paper_forward_max_candidates_per_run, 40))
         engine = MarketSniperEngine()
-        candidates: list[dict] = []
+        candidates: list[dict] = stored_sniper_candidates(db, limit=desired)
         seen: set[str] = set()
+        for item in candidates:
+            ticker = normalize_text(item.get("ticker")).upper()
+            if ticker:
+                seen.add(ticker)
 
         def add_candidate(item: dict, source: str) -> None:
             ticker = normalize_text(item.get("ticker")).upper()
@@ -307,23 +313,26 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
             seen.add(ticker)
             candidates.append(payload)
 
-        try:
-            payload = engine.candidates(db, limit=desired, persist=False)
-            for item in payload.get("candidates", []) or []:
-                add_candidate(item, "market_sniper_ranked_signals")
-        except Exception as exc:
-            db.add(
-                LearningEvent(
-                    event_type="paper_forward_scouting_degraded",
-                    severity="Warning",
-                    title="Paper-forward primary scouting failed",
-                    description=f"{type(exc).__name__}: {exc}",
-                    payload={"source": "market_sniper_ranked_signals"},
+        remaining = max(0, desired - len(candidates))
+        if remaining:
+            fallback_limit = min(remaining, 6)
+            try:
+                payload = engine.candidates(db, limit=fallback_limit, persist=False)
+                for item in payload.get("candidates", []) or []:
+                    add_candidate(item, "market_sniper_live_fallback_limited")
+            except Exception as exc:
+                db.add(
+                    LearningEvent(
+                        event_type="paper_forward_scouting_degraded",
+                        severity="Warning",
+                        title="Paper-forward limited live fallback failed",
+                        description=f"{type(exc).__name__}: {exc}",
+                        payload={"source": "market_sniper_live_fallback_limited", "fallback_limit": fallback_limit},
+                    )
                 )
-            )
 
         if len(candidates) < desired:
-            for asset in broad_ohlcv_universe(db, limit=desired * 3):
+            for asset in broad_ohlcv_universe(db, limit=min(12, desired * 2)):
                 if asset.ticker in seen:
                     continue
                 try:
@@ -1171,6 +1180,84 @@ def existing_candidate_id(db: Session, service: LiveForwardPaperTradingService, 
         entry_trigger=entry_trigger,
     )
     return db.scalar(select(LiveForwardPaperTrade.id).where(LiveForwardPaperTrade.duplicate_key == duplicate_key).limit(1))
+
+
+def stored_sniper_candidates(db: Session, *, limit: int) -> list[dict]:
+    rows = db.execute(
+        select(SniperScore, TradePlan, Asset)
+        .join(TradePlan, TradePlan.sniper_score_id == SniperScore.id)
+        .join(Asset, Asset.id == SniperScore.asset_id)
+        .where(Asset.is_active.is_(True))
+        .order_by(desc(SniperScore.created_at), desc(SniperScore.sniper_score), desc(TradePlan.confidence))
+        .limit(max(1, int(limit)) * 4)
+    ).all()
+    seen: set[str] = set()
+    output: list[dict] = []
+    for score, plan, asset in rows:
+        ticker = normalize_text(score.ticker or plan.ticker or asset.ticker).upper()
+        if not ticker or ticker in seen:
+            continue
+        seen.add(ticker)
+        output.append(
+            {
+                "ticker": ticker,
+                "asset": {
+                    "ticker": ticker,
+                    "name": asset.name,
+                    "asset_type": asset.asset_type,
+                    "sector": asset.sector,
+                    "industry": asset.industry,
+                    "country": asset.country,
+                    "exchange": asset.exchange,
+                    "currency": asset.currency,
+                },
+                "setup": {
+                    "setup_type": score.setup_type or plan.setup_type or "unknown_setup",
+                    "historical_reliability": plan.historical_setup_reliability,
+                },
+                "actionability": score.actionability or plan.actionability,
+                "sniper_score": safe_float(score.sniper_score),
+                "confidence": safe_float(plan.confidence or score.confidence),
+                "trade_plan": {
+                    "entry_zone": plan.entry_zone,
+                    "entry_trigger": plan.entry_trigger,
+                    "confirmation_condition": plan.confirmation_condition,
+                    "invalidation_level": plan.invalidation_level,
+                    "stop_logic": plan.stop_logic,
+                    "target_1": plan.target_1,
+                    "target_2": plan.target_2,
+                    "trailing_exit_logic": plan.trailing_exit_logic,
+                    "partial_exit_logic": plan.partial_exit_logic,
+                    "no_trade_conditions": plan.no_trade_conditions,
+                    "expected_holding_period": plan.expected_holding_period,
+                    "risk_reward_estimate": plan.risk_reward_estimate,
+                    "confidence": plan.confidence,
+                    "historical_setup_reliability": plan.historical_setup_reliability,
+                    "timeframe": plan.timeframe,
+                },
+                "price_context": latest_price_context_for_asset(db, asset, data_quality_score=score.data_quality_score),
+                "score_components": score.components,
+                "explanation": score.explanation or "Stored Market Sniper evidence from prior background evaluation.",
+                "scouting_source": "stored_sniper_trade_plan",
+                "scouting_policy": "stored_evidence_first_no_page_render_recalculation",
+                "persisted_ids": {"sniper_score_id": score.id, "trade_plan_id": plan.id},
+            }
+        )
+        if len(output) >= limit:
+            break
+    return output
+
+
+def latest_price_context_for_asset(db: Session, asset: Asset, *, data_quality_score: float | None = None) -> dict:
+    latest = db.scalar(select(PriceHistory).where(PriceHistory.asset_id == asset.id).order_by(desc(PriceHistory.date)).limit(1))
+    rows = int(db.scalar(select(func.count(PriceHistory.id)).where(PriceHistory.asset_id == asset.id)) or 0)
+    return {
+        "latest_price": safe_float(latest.close, None) if latest else None,
+        "latest_date": latest.date.isoformat() if latest and latest.date else None,
+        "latest_volume": safe_float(latest.volume, None) if latest else None,
+        "rows": rows,
+        "data_quality_score": safe_float(data_quality_score, 0.0),
+    }
 
 
 def broad_ohlcv_universe(db: Session, *, limit: int = 90, min_rows: int = 120) -> list[Asset]:
