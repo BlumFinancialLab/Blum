@@ -818,6 +818,7 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
         ).all()
         actionability_summary = self.actionability_summary(db, game)
         scanner_summary = paper_forward_scanner_snapshot_summary(scanner_rows)
+        scanner_summary = {**scanner_summary, **latest_scanner_event_summary(db, scanner_summary)}
         lifecycle_mode = self.lifecycle_mode(actionability_summary)
         payload.update(
             {
@@ -1335,6 +1336,39 @@ def paper_forward_scanner_snapshot_summary(rows: list[LiveForwardPaperTrade]) ->
         "skipped_markets": skipped_markets,
         "reason_if_markets_were_skipped": "; ".join(f"{item['market']}: {item['reason']}" for item in skipped_markets),
         "next_possible_action": "Wait for entry triggers or enable lifecycle only after forward evidence is sufficient." if watch_rows else "Hydrate more market data or review scanner blockers.",
+    }
+
+
+def latest_scanner_event_summary(db: Session, fallback_summary: dict) -> dict:
+    row = db.scalar(select(LearningEvent).where(LearningEvent.event_type == "OPPORTUNITY_SCANNED").order_by(desc(LearningEvent.created_at)).limit(1))
+    if row is None or not isinstance(row.payload, dict):
+        return {}
+    fallback_timestamp = fallback_summary.get("scanner_last_run_at")
+    if fallback_timestamp and row.created_at and row.created_at.isoformat() <= str(fallback_timestamp):
+        return {}
+    payload = row.payload
+    return {
+        "scanner_last_run_at": row.created_at.isoformat() if row.created_at else payload.get("generated_at"),
+        "scanned_count": payload.get("scanned_count", fallback_summary.get("scanned_count")),
+        "trade_candidate_count": payload.get("trade_candidate_count", fallback_summary.get("trade_candidate_count")),
+        "watchlist_candidate_count": payload.get("watchlist_candidate_count", fallback_summary.get("watchlist_candidate_count")),
+        "blocked_candidate_count": payload.get("blocked_candidate_count", fallback_summary.get("blocked_candidate_count")),
+        "data_blocked_candidate_count": payload.get("data_blocked_candidate_count", fallback_summary.get("data_blocked_candidate_count")),
+        "blocker_breakdown": payload.get("top_blockers", fallback_summary.get("blocker_breakdown")),
+        "best_trade_candidate": payload.get("best_trade_candidate", fallback_summary.get("best_trade_candidate")),
+        "best_watchlist_candidate": payload.get("best_watchlist_candidate", fallback_summary.get("best_watchlist_candidate")),
+        "best_cross_market_candidate": payload.get("best_cross_market_candidate", fallback_summary.get("best_cross_market_candidate")),
+        "reason_if_no_trade_candidates": payload.get("reason_if_no_trade_candidates", fallback_summary.get("reason_if_no_trade_candidates")),
+        "markets_scanned": payload.get("markets_scanned", fallback_summary.get("markets_scanned")),
+        "asset_classes_scanned": payload.get("asset_classes_scanned", fallback_summary.get("asset_classes_scanned")),
+        "assets_scanned_by_market": payload.get("assets_scanned_by_market", fallback_summary.get("assets_scanned_by_market")),
+        "trade_candidates_by_market": payload.get("trade_candidates_by_market", fallback_summary.get("trade_candidates_by_market")),
+        "watchlist_candidates_by_market": payload.get("watchlist_candidates_by_market", fallback_summary.get("watchlist_candidates_by_market")),
+        "blocked_candidates_by_market": payload.get("blocked_candidates_by_market", fallback_summary.get("blocked_candidates_by_market")),
+        "data_blocked_candidates_by_market": payload.get("data_blocked_candidates_by_market", fallback_summary.get("data_blocked_candidates_by_market")),
+        "skipped_markets": payload.get("skipped_markets", fallback_summary.get("skipped_markets")),
+        "reason_if_markets_were_skipped": payload.get("reason_if_markets_were_skipped", fallback_summary.get("reason_if_markets_were_skipped")),
+        "next_possible_action": payload.get("next_possible_action", fallback_summary.get("next_possible_action")),
     }
 
 
