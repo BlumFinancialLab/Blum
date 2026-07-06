@@ -14,6 +14,7 @@ from app.models import (
     ModelVersion,
     PriceHistory,
     TradeLearningEvidence,
+    LearningEvent,
 )
 from app.services.learning_loop import BASE_SIGNAL_WEIGHTS
 from app.services.live_forward_paper_trading import LiveForwardPaperTradingService
@@ -443,7 +444,7 @@ def test_paper_forward_run_once_reports_actionability_summary(monkeypatch):
         ], db)
 
         report = service.run_once(db)
-        snapshot = service.snapshot(db)["payload"]
+        snapshot = service.snapshot_payload(db)
 
         assert report["actionability_summary"]["total_candidates"] == 3
         assert snapshot["actionability_summary"]["actionable_count"] == 1
@@ -493,7 +494,7 @@ def test_paper_forward_run_once_returns_scanner_summary_and_persists_classificat
 
         report = service.run_once(db)
         rows = db.scalars(select(PaperForwardTrade).order_by(PaperForwardTrade.ticker)).all()
-        snapshot = service.snapshot(db)["payload"]
+        snapshot = service.snapshot_payload(db)
 
         assert report["scanner_summary"]["scanned_count"] == 3
         assert report["scanner_summary"]["trade_candidate_count"] == 1
@@ -510,6 +511,72 @@ def test_paper_forward_run_once_returns_scanner_summary_and_persists_classificat
         assert snapshot["trade_candidate_count"] == 1
         assert snapshot["watchlist_candidate_count"] == 1
         assert snapshot["data_blocked_candidate_count"] == 1
+
+
+def test_paper_forward_snapshot_exposes_scanner_acceleration_and_count_reasons():
+    with setup_db() as db:
+        service = LiveForwardPaperTradingService()
+        payload = candidate("NVDA")
+        payload["asset"] = {
+            **payload.get("asset", {}),
+            "market": "us_equities",
+            "asset_class": "equities",
+            "benchmark_asset": "SPY",
+        }
+        payload["benchmark_context"] = {"benchmark_asset": "SPY", "benchmark_available": True}
+        payload["paper_forward_classification"] = TRADE_CANDIDATE
+        payload["opportunity_scanner"] = {
+            "classification": TRADE_CANDIDATE,
+            "rank": 1,
+            "score": 92.0,
+            "market": "us_equities",
+            "asset_class": "equities",
+            "benchmark_asset": "SPY",
+        }
+
+        service.create_candidate(db, payload)
+        db.add(
+            LearningEvent(
+                event_type="OPPORTUNITY_SCANNED",
+                severity="Info",
+                title="Paper-forward scanner completed",
+                description="Scanner found candidates and learning priorities.",
+                payload={
+                    "generated_at": datetime.utcnow().isoformat(),
+                    "scanned_count": 48,
+                    "trade_candidate_count": 4,
+                    "watchlist_candidate_count": 9,
+                    "blocked_candidate_count": 21,
+                    "data_blocked_candidate_count": 14,
+                    "best_cross_market_candidate": {"ticker": "NVDA", "score": 92.0},
+                    "markets_scanned": ["us_equities", "europe_equities"],
+                    "asset_classes_scanned": ["equities", "etfs"],
+                    "learning_acceleration": {
+                        "status": "ready",
+                        "priority_markets": ["us_equities"],
+                        "priority_setups": ["momentum_breakout"],
+                        "repeated_blockers": ["BENCHMARK_STALE"],
+                        "missed_opportunity_targets": ["NVDA"],
+                    },
+                },
+            )
+        )
+        db.commit()
+
+        snapshot = service.snapshot_payload(db)
+
+        assert snapshot["scanner_last_run_at"] is not None
+        assert snapshot["scanned_count"] == 48
+        assert snapshot["trade_candidate_count"] == 4
+        assert snapshot["best_cross_market_candidate"]["ticker"] == "NVDA"
+        assert snapshot["markets_scanned"] == ["us_equities", "europe_equities"]
+        assert snapshot["learning_acceleration_status"] == "ready"
+        assert snapshot["priority_markets"] == ["us_equities"]
+        assert snapshot["priority_setups"] == ["momentum_breakout"]
+        assert snapshot["repeated_blockers"] == ["BENCHMARK_STALE"]
+        assert snapshot["missed_opportunity_targets"] == ["NVDA"]
+        assert "No paper-forward trades have opened yet" in snapshot["open_count_reason"]
+        assert "No paper-forward trades have closed yet" in snapshot["closed_count_reason"]
 
 
 def test_paper_forward_scouting_falls_back_to_real_ohlcv_universe(monkeypatch):

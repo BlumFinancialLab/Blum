@@ -848,7 +848,14 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
                 "waiting_for_trigger_count": total_counts["waiting_for_trigger_count"],
                 "skipped_count": total_counts["skipped_count"],
                 "open_count": total_counts["open_count"],
+                "open_count_reason": paper_forward_open_count_reason(total_counts["open_count"], total_counts["candidate_count"], total_counts["waiting_for_trigger_count"]),
                 "closed_count": total_counts["closed_count"],
+                "closed_count_reason": paper_forward_closed_count_reason(
+                    total_counts["closed_count"],
+                    total_counts["open_count"],
+                    total_counts["candidate_count"],
+                    total_counts["waiting_for_trigger_count"],
+                ),
                 "expired_count": total_counts["expired_count"],
                 "invalidated_count": total_counts["invalidated_count"],
                 "data_blocked_count": total_counts["data_blocked_count"],
@@ -1353,6 +1360,11 @@ def paper_forward_scanner_snapshot_summary(rows: list[LiveForwardPaperTrade]) ->
         "skipped_markets": skipped_markets,
         "reason_if_markets_were_skipped": "; ".join(f"{item['market']}: {item['reason']}" for item in skipped_markets),
         "next_possible_action": "Wait for entry triggers or enable lifecycle only after forward evidence is sufficient." if watch_rows else "Hydrate more market data or review scanner blockers.",
+        "learning_acceleration_status": "no_recent_acceleration",
+        "priority_markets": [],
+        "priority_setups": [],
+        "repeated_blockers": [],
+        "missed_opportunity_targets": [],
     }
 
 
@@ -1364,6 +1376,7 @@ def latest_scanner_event_summary(db: Session, fallback_summary: dict) -> dict:
     if fallback_timestamp and row.created_at and row.created_at.isoformat() <= str(fallback_timestamp):
         return {}
     payload = row.payload
+    acceleration = payload.get("learning_acceleration") if isinstance(payload.get("learning_acceleration"), dict) else {}
     return {
         "scanner_last_run_at": row.created_at.isoformat() if row.created_at else payload.get("generated_at"),
         "scanned_count": payload.get("scanned_count", fallback_summary.get("scanned_count")),
@@ -1386,7 +1399,32 @@ def latest_scanner_event_summary(db: Session, fallback_summary: dict) -> dict:
         "skipped_markets": payload.get("skipped_markets", fallback_summary.get("skipped_markets")),
         "reason_if_markets_were_skipped": payload.get("reason_if_markets_were_skipped", fallback_summary.get("reason_if_markets_were_skipped")),
         "next_possible_action": payload.get("next_possible_action", fallback_summary.get("next_possible_action")),
+        "learning_acceleration_status": acceleration.get("status") or fallback_summary.get("learning_acceleration_status") or "no_recent_acceleration",
+        "priority_markets": acceleration.get("priority_markets") or fallback_summary.get("priority_markets") or [],
+        "priority_setups": acceleration.get("priority_setups") or fallback_summary.get("priority_setups") or [],
+        "repeated_blockers": acceleration.get("repeated_blockers") or fallback_summary.get("repeated_blockers") or [],
+        "missed_opportunity_targets": acceleration.get("missed_opportunity_targets") or fallback_summary.get("missed_opportunity_targets") or [],
     }
+
+
+def paper_forward_open_count_reason(open_count: int, candidate_count: int, waiting_for_trigger_count: int) -> str:
+    if open_count > 0:
+        return "Paper-forward has open positions currently being tracked."
+    if waiting_for_trigger_count > 0:
+        return "No paper-forward trades have opened yet because candidates are waiting for explicit entry triggers."
+    if candidate_count > 0:
+        return "No paper-forward trades have opened yet; candidates are frozen and lifecycle execution is not active unless explicitly enabled."
+    return "No paper-forward trades have opened yet because no eligible candidates are stored."
+
+
+def paper_forward_closed_count_reason(closed_count: int, open_count: int, candidate_count: int, waiting_for_trigger_count: int) -> str:
+    if closed_count > 0:
+        return "Closed paper-forward trades are available and can feed forward alpha evidence."
+    if open_count > 0:
+        return "No paper-forward trades have closed yet because open positions are still being monitored."
+    if candidate_count > 0 or waiting_for_trigger_count > 0:
+        return "No paper-forward trades have closed yet; candidates must first open and then reach stop, target, invalidation, or expiry."
+    return "No paper-forward trades have closed yet because no paper-forward candidates have matured into positions."
 
 
 def classification_from_trade(row: LiveForwardPaperTrade) -> str:

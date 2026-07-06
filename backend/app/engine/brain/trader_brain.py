@@ -19,6 +19,7 @@ from app.models import (
     FeedbackLoopAudit,
     HistoricalPrediction,
     LearningBenchmarkComparison,
+    LearningEvent,
     LearningFocusPriority,
     LearningRun,
     LearningStrengthWeaknessMap,
@@ -170,6 +171,7 @@ class TraderBrainService:
         paper_rows = db.scalars(select(LiveForwardPaperTrade).order_by(desc(LiveForwardPaperTrade.created_at)).limit(250)).all()
         paper_actionability = paper_forward_actionability_summary(paper_rows)
         validation = validation_summary(db, latest_run)
+        training_continuity = training_continuity_payload(db, latest_run)
         return {
             "status": "ready",
             "version": TRADER_BRAIN_VERSION,
@@ -179,6 +181,8 @@ class TraderBrainService:
             "research_planner": research_planner,
             "current_validation": validation,
             "budget_guard": validation.get("budget_guard"),
+            "training_continuity": training_continuity,
+            "learning_acceleration": latest_learning_acceleration_payload(db),
             "trades_being_analyzed": trade_analysis_payload(db),
             "patterns_discovered": [lesson_payload(row) for row in lessons if row.lesson_type not in ["setup_failed", "entry_timing_bad"]][:8],
             "patterns_rejected": [lesson_payload(row) for row in lessons if row.lesson_type in ["setup_failed", "entry_timing_bad"]][:8],
@@ -302,6 +306,12 @@ class TraderBrainService:
             "paper_forward_alpha": paper_summary["alpha"],
             "historical_alpha": historical_split.get("benchmark_excess"),
             "walk_forward_alpha": walk_forward_split.get("benchmark_excess"),
+            "walk_forward_benchmark_status": alpha_benchmark_gap_payload(
+                int(walk_forward_split.get("sample_size") or 0),
+                walk_forward_split.get("blum_return"),
+                walk_forward_split.get("benchmark_return"),
+                walk_forward_split.get("benchmark_excess"),
+            ),
             "live_forward_alpha": live_split.get("benchmark_excess"),
             "best_edge": edge_summary(paper_rows, "best"),
             "worst_edge": edge_summary(paper_rows, "worst"),
@@ -919,6 +929,105 @@ def learning_run_totals(db: Session, since: datetime | None = None) -> dict:
         "outcomes_evaluated": int(outcomes or 0),
         "mistakes_analyzed": int(mistakes or 0),
         "memory_updates": int(memory or 0),
+    }
+
+
+def training_continuity_payload(db: Session, latest_run: LearningRun | None) -> dict:
+    productive = db.scalar(
+        select(LearningRun)
+        .where(
+            (LearningRun.predictions_created > 0)
+            | (LearningRun.outcomes_evaluated > 0)
+            | (LearningRun.memory_updates > 0)
+        )
+        .order_by(desc(LearningRun.completed_at), desc(LearningRun.started_at))
+        .limit(1)
+    )
+    latest_status = getattr(latest_run, "status", None)
+    is_budget_wait = latest_status in {"budget_wait", "skipped"}
+    if latest_run is None:
+        status = "UNKNOWN"
+    elif is_budget_wait and productive is not None:
+        status = "THROTTLED"
+    elif latest_status in {"failed", "error"}:
+        status = "BROKEN"
+    elif productive is None:
+        status = "STALLED"
+    else:
+        status = "ACTIVE"
+    summary = latest_run.summary if latest_run and isinstance(latest_run.summary, dict) else {}
+    guard = summary.get("daily_guard") if isinstance(summary.get("daily_guard"), dict) else {}
+    return {
+        "status": status,
+        "latest_run_status": latest_status,
+        "latest_run_at": latest_run.started_at.isoformat() if latest_run and latest_run.started_at else None,
+        "last_productive_learning_run_at": (
+            productive.completed_at.isoformat()
+            if productive and productive.completed_at
+            else productive.started_at.isoformat()
+            if productive and productive.started_at
+            else None
+        ),
+        "last_productive_predictions": int(productive.predictions_created or 0) if productive else 0,
+        "last_productive_outcomes": int(productive.outcomes_evaluated or 0) if productive else 0,
+        "last_productive_memory_updates": int(productive.memory_updates or 0) if productive else 0,
+        "latest_budget_wait_reason": summary.get("budget_wait_reason") or summary.get("reason") or guard.get("reason") if is_budget_wait else None,
+        "learning_throttle_active": status == "THROTTLED",
+        "is_learning_stalled": status == "STALLED",
+        "next_learning_allowed_at": summary.get("next_allowed_at") or guard.get("next_allowed_at"),
+        "policy": "Budget-wait and skipped scheduler rows do not erase the last productive learning evidence.",
+    }
+
+
+def latest_learning_acceleration_payload(db: Session) -> dict:
+    event = db.scalar(
+        select(LearningEvent)
+        .where(LearningEvent.event_type == "OPPORTUNITY_SCANNED")
+        .order_by(desc(LearningEvent.created_at))
+        .limit(1)
+    )
+    payload = event.payload if event and isinstance(event.payload, dict) else {}
+    acceleration = payload.get("learning_acceleration") if isinstance(payload.get("learning_acceleration"), dict) else None
+    if acceleration:
+        return acceleration
+    return {
+        "enabled": settings.blum_learning_acceleration_enabled,
+        "status": "no_recent_acceleration",
+        "batches_scheduled": 0,
+        "batches_completed": 0,
+        "priority_markets": [],
+        "priority_asset_classes": [],
+        "priority_setups": [],
+        "uncertainty_targets": [],
+        "missed_opportunity_targets": [],
+        "repeated_blockers": [],
+        "estimated_learning_gain": 0,
+        "safety_limits_applied": {
+            "max_batches_per_run": settings.blum_learning_acceleration_max_batches_per_run,
+            "max_runtime_seconds": settings.blum_learning_acceleration_max_runtime_seconds,
+        },
+        "next_acceleration_action": "Run backend scanner or manual training acceleration.",
+    }
+
+
+def alpha_benchmark_gap_payload(
+    sample_size: int,
+    blum_return: float | None,
+    benchmark_return: float | None,
+    benchmark_excess: float | None,
+) -> dict:
+    available = benchmark_return is not None or benchmark_excess is not None
+    return {
+        "walk_forward_sample_size": sample_size,
+        "walk_forward_blum_return": blum_return,
+        "walk_forward_benchmark_return": benchmark_return,
+        "walk_forward_benchmark_excess": benchmark_excess,
+        "benchmark_available": available,
+        "benchmark_blocker": None if available else "WALK_FORWARD_BENCHMARK_MISSING",
+        "why_benchmark_return_is_unavailable": None
+        if available
+        else "No stored same-period benchmark comparison is available for walk-forward outcomes.",
+        "benchmark_comparison_real": available,
     }
 
 

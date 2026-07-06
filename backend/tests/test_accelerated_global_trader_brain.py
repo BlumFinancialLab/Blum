@@ -4,7 +4,8 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session
 
 from app.core.database import Base
-from app.models import Asset, PriceHistory
+from app.engine.brain.trader_brain import alpha_benchmark_gap_payload, training_continuity_payload
+from app.models import Asset, LearningRun, PriceHistory
 from app.services.paper_forward_opportunity_scanner import (
     BLOCKED_CANDIDATE,
     DATA_BLOCKED_CANDIDATE,
@@ -585,3 +586,52 @@ def test_learning_acceleration_report_is_bounded():
     assert report["safety_limits_applied"]["max_runtime_seconds"] > 0
     assert "priority_setups" in report
     assert "repeated_blockers" in report
+
+
+def test_budget_wait_with_recent_productive_run_is_throttled():
+    with setup_db() as db:
+        productive = LearningRun(
+            run_id="productive-run",
+            trigger="scheduled",
+            status="completed",
+            predictions_created=5,
+            outcomes_evaluated=5,
+            memory_updates=2,
+            started_at=datetime.utcnow() - timedelta(hours=2),
+            completed_at=datetime.utcnow() - timedelta(hours=2),
+        )
+        latest = LearningRun(
+            run_id="budget-wait-run",
+            trigger="scheduled",
+            status="budget_wait",
+            predictions_created=0,
+            outcomes_evaluated=0,
+            memory_updates=0,
+            started_at=datetime.utcnow(),
+            completed_at=datetime.utcnow(),
+            summary={"budget_wait_reason": "daily budget reached", "next_allowed_at": "2026-07-04T00:00:00"},
+        )
+        db.add_all([productive, latest])
+        db.flush()
+
+        payload = training_continuity_payload(db, latest)
+
+    assert payload["status"] == "THROTTLED"
+    assert payload["last_productive_predictions"] == 5
+    assert payload["last_productive_outcomes"] == 5
+    assert payload["latest_budget_wait_reason"] == "daily budget reached"
+    assert payload["learning_throttle_active"] is True
+
+
+def test_alpha_benchmark_gap_reports_missing_not_zero():
+    payload = alpha_benchmark_gap_payload(
+        sample_size=12,
+        blum_return=0.15,
+        benchmark_return=None,
+        benchmark_excess=None,
+    )
+
+    assert payload["benchmark_available"] is False
+    assert payload["walk_forward_benchmark_return"] is None
+    assert payload["benchmark_blocker"] == "WALK_FORWARD_BENCHMARK_MISSING"
+    assert payload["benchmark_comparison_real"] is False
