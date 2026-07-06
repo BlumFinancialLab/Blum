@@ -130,9 +130,21 @@ def candidate(
         "confidence": confidence,
         "setup": {"setup_type": "momentum_breakout"},
         "trade_plan": plan,
-        "price_context": {"latest_price": price, "data_quality_score": data_quality_score},
+        "price_context": {"latest_price": price, "data_quality_score": data_quality_score, "rows": 120},
         "market_regime": {"regime_primary": "risk_on"},
     }
+
+
+def install_scanner_payloads(monkeypatch, payloads: list[dict], db: Session | None = None) -> None:
+    if db is not None:
+        for payload in payloads:
+            ticker = str(payload.get("ticker") or "").upper()
+            if ticker and db.scalar(select(Asset).where(Asset.ticker == ticker)) is None:
+                seed_asset(db, ticker, close=payload.get("price_context", {}).get("latest_price") or 100.0)
+    monkeypatch.setattr(
+        "app.services.live_forward_paper_trading.PaperForwardOpportunityScanner",
+        lambda: PaperForwardOpportunityScanner(candidate_provider=lambda _db, _limit: payloads),
+    )
 
 
 def test_live_forward_duplicate_prevention_by_decision_key():
@@ -235,6 +247,52 @@ def test_paper_forward_candidate_foundation_freezes_decision_and_event():
         assert event is not None
         assert event.event_type == "DECISION_CREATED"
         assert event.trade_id == trade.id
+
+
+def test_create_candidate_preserves_scanner_metadata_and_benchmark_event():
+    with setup_db() as db:
+        service = LiveForwardPaperTradingService()
+        payload = candidate("AAPL")
+        payload["asset"] = {
+            **payload.get("asset", {}),
+            "market": "us_equities",
+            "asset_class": "equities",
+            "benchmark_asset": "SPY",
+            "benchmark_available": True,
+            "data_quality_status": "OK",
+            "tradability_status": "TRADABLE_FOR_PAPER",
+        }
+        payload["benchmark_context"] = {
+            "benchmark_asset": "SPY",
+            "benchmark_available": True,
+            "benchmark_reason": "us_equities/Stock mapped to SPY",
+        }
+        payload["paper_forward_classification"] = TRADE_CANDIDATE
+        payload["opportunity_scanner"] = {
+            "classification": TRADE_CANDIDATE,
+            "rank": 1,
+            "score": 88.5,
+            "market": "us_equities",
+            "asset_class": "equities",
+            "benchmark_asset": "SPY",
+        }
+
+        trade = service.create_candidate(db, payload)
+        db.commit()
+
+        frozen = trade.frozen_decision_payload
+        benchmark_event = db.scalar(
+            select(PaperForwardTradeEvent).where(
+                PaperForwardTradeEvent.paper_trade_id == trade.id,
+                PaperForwardTradeEvent.event_type == "BENCHMARK_MAPPED",
+            )
+        )
+        assert frozen["paper_forward_classification"] == TRADE_CANDIDATE
+        assert frozen["opportunity_scanner"]["market"] == "us_equities"
+        assert frozen["asset"]["asset_class"] == "equities"
+        assert frozen["asset"]["benchmark_asset"] == "SPY"
+        assert benchmark_event is not None
+        assert benchmark_event.payload["benchmark_asset"] == "SPY"
 
 
 def test_paper_forward_create_candidate_is_idempotent():
@@ -342,10 +400,10 @@ def test_paper_forward_get_style_methods_are_read_only_and_report_blockers():
         assert events["events"] == []
 
 
-def test_paper_forward_run_once_freezes_candidates_without_opening_positions():
+def test_paper_forward_run_once_freezes_candidates_without_opening_positions(monkeypatch):
     with setup_db() as db:
         service = LiveForwardPaperTradingService()
-        service.scan_candidates = lambda _db, limit=30: [candidate()]  # type: ignore[method-assign]
+        install_scanner_payloads(monkeypatch, [candidate()], db)
 
         report = service.run_once(db)
         trade = db.scalar(select(PaperForwardTrade).where(PaperForwardTrade.ticker == "NVDA"))
@@ -358,14 +416,31 @@ def test_paper_forward_run_once_freezes_candidates_without_opening_positions():
         assert any(event.event_type == "DECISION_CREATED" for event in events)
 
 
-def test_paper_forward_run_once_reports_actionability_summary():
+def test_live_trading_run_cycle_delegates_to_scanner_owned_foundation(monkeypatch):
+    calls = {"run_once": 0}
+
+    def fake_run_once(self, db):
+        calls["run_once"] += 1
+        return {"status": "ok", "mode": "foundation_candidate_freeze", "scanner_summary": {"scanned_count": 0}}
+
+    monkeypatch.setattr("app.services.live_forward_paper_trading.settings.paper_forward_lifecycle_enabled", False)
+    monkeypatch.setattr(LiveForwardPaperTradingService, "run_once", fake_run_once)
+
+    with setup_db() as db:
+        report = LiveForwardPaperTradingService().run_cycle(db)
+
+    assert calls["run_once"] == 1
+    assert report["mode"] == "foundation_candidate_freeze"
+
+
+def test_paper_forward_run_once_reports_actionability_summary(monkeypatch):
     with setup_db() as db:
         service = LiveForwardPaperTradingService()
-        service.scan_candidates = lambda _db, limit=30: [
+        install_scanner_payloads(monkeypatch, [
             candidate(),
             candidate(ticker="AMD", actionability="avoid", target_1=101.0),
             candidate(ticker="MSFT", price=None),
-        ]  # type: ignore[method-assign]
+        ], db)
 
         report = service.run_once(db)
         snapshot = service.snapshot(db)["payload"]
@@ -407,14 +482,14 @@ def test_paper_forward_opportunity_scanner_classifies_trade_watchlist_blocked_an
         assert report["skipped_markets"]
 
 
-def test_paper_forward_run_once_returns_scanner_summary_and_persists_classifications():
+def test_paper_forward_run_once_returns_scanner_summary_and_persists_classifications(monkeypatch):
     with setup_db() as db:
         service = LiveForwardPaperTradingService()
-        service.scan_candidates = lambda _db, limit=30: [
+        install_scanner_payloads(monkeypatch, [
             candidate(ticker="NVDA", confidence=72.0, target_1=112.0, invalidation_level=96.0),
             candidate(ticker="AMD", actionability="wait_for_trigger", confidence=66.0, target_1=110.0, invalidation_level=96.0),
             candidate(ticker="TSLA", price=None),
-        ]  # type: ignore[method-assign]
+        ], db)
 
         report = service.run_once(db)
         rows = db.scalars(select(PaperForwardTrade).order_by(PaperForwardTrade.ticker)).all()
@@ -476,16 +551,16 @@ def test_paper_forward_run_lifecycle_refuses_when_disabled_without_override():
         assert stored.ledger_trade_id is None
 
 
-def test_paper_forward_run_once_duplicate_does_not_overwrite_frozen_payload():
+def test_paper_forward_run_once_duplicate_does_not_overwrite_frozen_payload(monkeypatch):
     with setup_db() as db:
         service = LiveForwardPaperTradingService()
-        service.scan_candidates = lambda _db, limit=30: [candidate()]  # type: ignore[method-assign]
+        install_scanner_payloads(monkeypatch, [candidate()], db)
 
         first_report = service.run_once(db)
         trade = db.scalar(select(PaperForwardTrade).where(PaperForwardTrade.ticker == "NVDA"))
         frozen_before = dict(trade.decision_payload_frozen)
 
-        service.scan_candidates = lambda _db, limit=30: [candidate(price=100.0) | {"confidence": 12.0}]  # type: ignore[method-assign]
+        install_scanner_payloads(monkeypatch, [candidate(price=100.0) | {"confidence": 12.0}], db)
         second_report = service.run_once(db)
         refreshed = db.get(PaperForwardTrade, trade.id)
 

@@ -1,1 +1,0 @@
-self.__REACT_LOADABLE_MANIFEST='{"components/PlotPanel.tsx -> react-plotly.js":{"id":3506,"files":["static/chunks/51e374df.e869da9a92d22819.js","static/chunks/54.5c9e84e15db88a9c.js"]}}';

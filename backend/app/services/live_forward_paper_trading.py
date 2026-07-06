@@ -202,6 +202,16 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
                 },
                 price_used=price if price > 0 else None,
             )
+        benchmark_context = decision_payload_with_diagnosis.get("benchmark_context") if isinstance(decision_payload_with_diagnosis.get("benchmark_context"), dict) else {}
+        if benchmark_context:
+            self.append_event(
+                db,
+                trade.id,
+                "BENCHMARK_MAPPED" if benchmark_context.get("benchmark_available") else "BENCHMARK_MISSING",
+                benchmark_context.get("benchmark_reason") or benchmark_context.get("benchmark_blocker") or "Benchmark context stored.",
+                payload=benchmark_context,
+                price_used=price if price > 0 else None,
+            )
         self.append_event(
             db,
             trade.id,
@@ -358,7 +368,7 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
         if not settings.live_trading_game_enabled:
             return {"status": "disabled", "created": [], "duplicates": [], "current_blockers": ["live_forward_paper_disabled"], "policy": LAB_POLICY}
         try:
-            scanner_report = PaperForwardOpportunityScanner(candidate_provider=lambda session, max_items: self.scan_candidates(session, limit=max_items)).scan(db)
+            scanner_report = PaperForwardOpportunityScanner().scan(db)
             candidates = scanner_report.get("candidate_payloads_for_persistence") or []
         except Exception as exc:
             db.rollback()
@@ -430,6 +440,13 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
             "current_blockers": self.paper_forward_blockers_from_counts(actionability_summary) if actionability_summary else ([] if created or duplicates else ["no_candidate_decisions_available"]),
             "policy": LAB_POLICY,
         }
+
+    def run_cycle(self, db: Session) -> dict:
+        """Backward-compatible entrypoint without the legacy raw scan bypass."""
+
+        if settings.paper_forward_lifecycle_enabled:
+            return self.run_lifecycle(db)
+        return self.run_once(db)
 
     def run_lifecycle(self, db: Session, *, override: bool = False) -> dict:
         """Advance frozen paper-forward candidates through the paper lifecycle.

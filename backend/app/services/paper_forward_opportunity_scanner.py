@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Callable
 
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.models import Asset, LearningEvent, PriceHistory
+from app.models import Asset, LearningEvent, LearningFocusPriority, PriceHistory
 from app.services.trading_intelligence_lab import ActionabilityPolicy, diagnose_candidate_actionability, risk_reward_ratio_from_plan, safe_float
 
 
@@ -21,6 +21,26 @@ WATCHLIST_CANDIDATE = "WATCHLIST_CANDIDATE"
 BLOCKED_CANDIDATE = "BLOCKED_CANDIDATE"
 DATA_BLOCKED_CANDIDATE = "DATA_BLOCKED_CANDIDATE"
 SUPPORTED_CLASSIFICATIONS = {TRADE_CANDIDATE, WATCHLIST_CANDIDATE, BLOCKED_CANDIDATE, DATA_BLOCKED_CANDIDATE}
+DATA_BLOCKING_QUALITY_STATUSES = {
+    "MARKET_DATA_UNAVAILABLE",
+    "OHLCV_MISSING",
+    "LOW_DATA_QUALITY",
+    "STALE_PRICE_DATA",
+    "MARKET_NOT_ENABLED",
+    "ASSET_CLASS_NOT_ENABLED",
+    "MAX_ASSETS_PER_MARKET_REACHED",
+    "NO_ELIGIBLE_STORED_PRICE_HISTORY",
+    "NO_ASSETS_CONFIGURED",
+    "BENCHMARK_UNAVAILABLE",
+    "BENCHMARK_STALE",
+    "BENCHMARK_PRICE_MISSING",
+    "BENCHMARK_MISSING",
+    "PROVIDER_UNAVAILABLE",
+    "UNSUPPORTED_MARKET_DATA",
+}
+DATA_BLOCKING_TRADABILITY_STATUSES = {"NOT_TRADABLE_NO_PRICE"}
+BLOCKING_TRADABILITY_STATUSES = {"LIQUIDITY_UNKNOWN"}
+PASSING_TRADABILITY_STATUSES = {"", "TRADABLE_FOR_PAPER", "PAPER_ONLY_ASSET_CLASS"}
 
 
 CandidateProvider = Callable[[Session, int], list[dict]]
@@ -38,6 +58,9 @@ class ScannerThresholds:
     enabled_asset_classes: tuple[str, ...]
     require_benchmark: bool
     min_liquidity_score: float
+    max_assets_per_market: int
+    scan_stale_data_max_age_hours: float
+    cross_market_ranking_enabled: bool
 
     def to_dict(self) -> dict:
         return {
@@ -51,6 +74,199 @@ class ScannerThresholds:
             "paper_forward_enabled_asset_classes": list(self.enabled_asset_classes),
             "paper_forward_require_benchmark": self.require_benchmark,
             "paper_forward_min_liquidity_score": self.min_liquidity_score,
+            "paper_forward_max_assets_per_market": self.max_assets_per_market,
+            "paper_forward_scan_stale_data_max_age_hours": self.scan_stale_data_max_age_hours,
+            "paper_forward_cross_market_ranking_enabled": self.cross_market_ranking_enabled,
+        }
+
+
+class BlumBenchmarkAgent:
+    """Resolve benchmark context for a paper-forward candidate."""
+
+    def assess(self, candidate: dict, asset: Asset | None, benchmarks: dict[str, bool | dict]) -> dict:
+        ticker = normalize_ticker(candidate.get("ticker"))
+        asset_payload = candidate.get("asset") if isinstance(candidate.get("asset"), dict) else {}
+        asset_type = asset_payload.get("asset_type") or getattr(asset, "asset_type", None) or "Unknown"
+        market = market_key(asset or asset_payload)
+        asset_class = asset_class_key(asset or asset_payload)
+        benchmark = benchmark_for(asset_type=asset_type, market=market, sector=asset_payload.get("sector") or getattr(asset, "sector", ""))
+        benchmark_status = benchmarks.get(normalize_ticker(benchmark))
+        if isinstance(benchmark_status, dict):
+            benchmark_available = bool(benchmark_status.get("benchmark_available"))
+            benchmark_blocker = str(benchmark_status.get("benchmark_blocker") or "")
+            latest_benchmark_date = benchmark_status.get("latest_benchmark_date")
+        else:
+            benchmark_available = bool(benchmark_status)
+            benchmark_blocker = "" if benchmark_available else "BENCHMARK_UNAVAILABLE"
+            latest_benchmark_date = None
+        return {
+            "ticker": ticker,
+            "asset_type": asset_type,
+            "market": market,
+            "asset_class": asset_class,
+            "benchmark_asset": benchmark,
+            "benchmark_available": benchmark_available,
+            "benchmark_blocker": benchmark_blocker,
+            "latest_benchmark_date": latest_benchmark_date,
+        }
+
+
+class BlumDataAvailabilityAgent:
+    """Assess stored market data quality and paper tradability."""
+
+    def __init__(self, thresholds: ScannerThresholds):
+        self.thresholds = thresholds
+
+    def assess(self, candidate: dict, benchmark_context: dict) -> dict:
+        price_context = candidate.get("price_context") if isinstance(candidate.get("price_context"), dict) else {}
+        latest_price = safe_float(price_context.get("latest_price"), None)
+        latest_volume = safe_float(price_context.get("latest_volume"), None)
+        liquidity_score = liquidity_score_for(price_context, latest_price, latest_volume)
+        upstream_status = str(candidate.get("data_quality_status") or price_context.get("data_quality_status") or "").strip().upper()
+        if data_quality_blocker({"data_quality_status": upstream_status}):
+            data_quality_status = upstream_status
+        else:
+            data_quality_status = data_quality_status_for(
+                price_context,
+                bool(benchmark_context.get("benchmark_available")),
+                self.thresholds.require_benchmark,
+                min_data_quality=self.thresholds.min_data_quality,
+                max_stale_hours=self.thresholds.scan_stale_data_max_age_hours,
+            )
+        benchmark_blocker = str(benchmark_context.get("benchmark_blocker") or "").strip().upper()
+        if self.thresholds.require_benchmark and benchmark_blocker in DATA_BLOCKING_QUALITY_STATUSES:
+            data_quality_status = benchmark_blocker
+        tradability_status = tradability_status_for(
+            str(benchmark_context.get("asset_type") or "Unknown"),
+            latest_price,
+            liquidity_score,
+            self.thresholds.min_liquidity_score,
+        )
+        return {
+            "latest_price": latest_price,
+            "latest_volume": latest_volume,
+            "liquidity_context": {"liquidity_score": liquidity_score, "latest_volume": latest_volume},
+            "data_quality_status": data_quality_status,
+            "tradability_status": tradability_status,
+        }
+
+
+class BlumRiskRewardAgent:
+    """Compute risk/reward context using the lab's canonical trade-plan rules."""
+
+    def assess(self, candidate: dict, latest_price: float | None) -> dict:
+        plan = candidate.get("trade_plan") if isinstance(candidate.get("trade_plan"), dict) else {}
+        risk_reward = risk_reward_ratio_from_plan(plan, latest_price)
+        return {
+            "risk_reward_ratio": risk_reward,
+            "entry_trigger": plan.get("entry_trigger") or plan.get("confirmation_condition"),
+            "stop_price": plan.get("invalidation_level") or plan.get("stop_price") or plan.get("stop_loss"),
+            "target_1": plan.get("target_1"),
+            "target_2": plan.get("target_2"),
+        }
+
+
+class BlumActionabilityAgent:
+    """Diagnose actionability without creating scanner or settings coupling."""
+
+    def __init__(self, thresholds: ScannerThresholds):
+        self.thresholds = thresholds
+
+    def diagnose(self, candidate: dict):
+        policy = ActionabilityPolicy(
+            minimum_data_quality=self.thresholds.min_data_quality,
+            minimum_confidence=self.thresholds.min_confidence,
+            minimum_reward_to_risk=self.thresholds.min_risk_reward,
+        )
+        return diagnose_candidate_actionability(candidate, strict=True, policy=policy)
+
+
+class BlumCrossMarketRankerAgent:
+    """Order classified opportunities without hiding the scanner input order when disabled."""
+
+    def __init__(self, thresholds: ScannerThresholds):
+        self.thresholds = thresholds
+
+    def rank(self, classified: list[dict]) -> list[dict]:
+        if not self.thresholds.cross_market_ranking_enabled:
+            return list(classified)
+        return sorted(classified, key=lambda item: item["score"], reverse=True)
+
+
+class BlumLearningAccelerationAgent:
+    """Create bounded learning-focus metadata from stored evidence only."""
+
+    def accelerate(self, db: Session, *, scanner_summary: dict) -> dict:
+        if not settings.blum_learning_acceleration_enabled:
+            return {"enabled": False, "status": "disabled", "batches_scheduled": 0, "batches_completed": 0}
+
+        max_batches = max(1, int(settings.blum_learning_acceleration_max_batches_per_run))
+        top_blockers = scanner_summary.get("top_blockers") or []
+        repeated_blockers = [row for row in top_blockers if int(row.get("count") or 0) >= 2][:max_batches]
+        focus_rows = db.scalars(
+            select(LearningFocusPriority)
+            .where(LearningFocusPriority.status.in_(["active", "proposed"]))
+            .order_by(desc(LearningFocusPriority.expected_learning_value), desc(LearningFocusPriority.created_at))
+            .limit(max_batches)
+        ).all()
+
+        priority_setups = [str(row.target) for row in focus_rows if row.target][:max_batches]
+        batches = min(max_batches, len(focus_rows) + len(repeated_blockers))
+        return {
+            "enabled": True,
+            "last_run_at": datetime.utcnow().isoformat(),
+            "status": "ready" if batches else "no_evidence",
+            "learning_acceleration_mode": "bounded_replay_planning",
+            "additional_replay_batches_scheduled": batches,
+            "additional_walk_forward_batches_scheduled": min(len(focus_rows), max_batches),
+            "batches_scheduled": batches,
+            "batches_completed": 0,
+            "priority_markets": scanner_summary.get("markets_scanned") or [],
+            "priority_asset_classes": scanner_summary.get("asset_classes_scanned") or [],
+            "priority_setups": priority_setups,
+            "uncertainty_targets": [row.target for row in focus_rows if row.priority_type in {"weak_promising_setup", "weakness_replay"}],
+            "missed_opportunity_targets": [row.target for row in focus_rows if "missed" in str(row.priority_type or "")],
+            "repeated_blockers": repeated_blockers,
+            "estimated_learning_gain": round(sum(float(row.expected_learning_value or 0.0) for row in focus_rows), 4),
+            "safety_limits_applied": {
+                "max_batches_per_run": max_batches,
+                "max_assets_per_run": settings.blum_learning_acceleration_max_assets_per_run,
+                "max_runtime_seconds": settings.blum_learning_acceleration_max_runtime_seconds,
+                "budget_guard_enabled": settings.blum_learning_acceleration_budget_guard_enabled,
+            },
+            "next_acceleration_action": "Run bounded replay or walk-forward validation from backend scheduler/manual endpoint.",
+        }
+
+
+class BlumExperimentManagerAgent:
+    """Propose reversible experiments from acceleration metadata."""
+
+    def propose(self, db: Session, *, acceleration_report: dict) -> dict:
+        if not settings.blum_experiment_manager_enabled:
+            return {"enabled": False, "status": "disabled", "active_experiments": [], "completed_experiments": []}
+
+        priorities = acceleration_report.get("priority_setups") or []
+        experiments = [
+            {
+                "experiment_id": f"exp-{normalize_ticker(target) or 'UNKNOWN'}",
+                "hypothesis": f"Replay {target} and compare entry trigger quality versus benchmark-relative outcome.",
+                "setup_type": target,
+                "training_window": "stored_historical_replay",
+                "validation_window": "walk_forward_when_available",
+                "benchmark": settings.default_benchmark,
+                "status": "proposed",
+            }
+            for target in priorities[: max(1, int(settings.blum_experiment_max_active_experiments))]
+        ]
+        return {
+            "enabled": True,
+            "status": "proposed" if experiments else "no_priority",
+            "active_experiments": experiments,
+            "completed_experiments": [],
+            "best_experiment": experiments[0] if experiments else None,
+            "rejected_experiments": [],
+            "promoted_rules": [],
+            "blocked_promotions_reason": "Experiments require out-of-sample evidence before rule promotion.",
         }
 
 
@@ -63,6 +279,9 @@ class PaperForwardOpportunityScanner:
 
     def __init__(self, *, candidate_provider: CandidateProvider | None = None):
         self.candidate_provider = candidate_provider
+        self.last_universe_report: dict | None = None
+        self.learning_acceleration_agent = BlumLearningAccelerationAgent()
+        self.experiment_manager_agent = BlumExperimentManagerAgent()
         self.thresholds = ScannerThresholds(
             min_confidence=float(settings.paper_forward_min_confidence),
             min_risk_reward=float(settings.paper_forward_min_risk_reward),
@@ -74,13 +293,20 @@ class PaperForwardOpportunityScanner:
             enabled_asset_classes=parse_csv(settings.paper_forward_enabled_asset_classes),
             require_benchmark=bool(settings.paper_forward_require_benchmark),
             min_liquidity_score=float(settings.paper_forward_min_liquidity_score),
+            max_assets_per_market=max(1, int(settings.paper_forward_max_assets_per_market)),
+            scan_stale_data_max_age_hours=max(0.0, float(settings.paper_forward_scan_stale_data_max_age_hours)),
+            cross_market_ranking_enabled=bool(settings.paper_forward_cross_market_ranking_enabled),
         )
 
     def scan(self, db: Session, *, limit: int | None = None) -> dict:
         max_items = max(1, min(int(limit or self.thresholds.max_candidates_per_run), self.thresholds.max_candidates_per_run))
         raw_candidates = self.raw_candidates(db, max_items)
         assets_by_ticker = assets_for_candidates(db, raw_candidates)
-        benchmark_availability = benchmark_availability_map(db)
+        benchmark_availability = benchmark_availability_details_map(
+            db,
+            required_benchmark_tickers(raw_candidates, assets_by_ticker),
+            max_stale_hours=self.thresholds.scan_stale_data_max_age_hours,
+        )
 
         classified: list[dict] = []
         for rank, candidate in enumerate(raw_candidates, start=1):
@@ -88,6 +314,8 @@ class PaperForwardOpportunityScanner:
             classified.append(self.classify_candidate(enriched, rank))
 
         summary = self.summary(db, classified)
+        summary["learning_acceleration"] = self.learning_acceleration_agent.accelerate(db, scanner_summary=summary)
+        summary["experiment_manager"] = self.experiment_manager_agent.propose(db, acceleration_report=summary["learning_acceleration"])
         db.add(
             LearningEvent(
                 event_type="paper_forward_opportunity_scan_completed",
@@ -104,6 +332,8 @@ class PaperForwardOpportunityScanner:
                     "asset_classes_scanned": summary["asset_classes_scanned"],
                     "skipped_markets": summary["skipped_markets"],
                     "thresholds": summary["thresholds"],
+                    "learning_acceleration": summary["learning_acceleration"],
+                    "experiment_manager": summary["experiment_manager"],
                 },
             )
         )
@@ -137,6 +367,8 @@ class PaperForwardOpportunityScanner:
                     "reason_if_markets_were_skipped": summary["reason_if_markets_were_skipped"],
                     "next_possible_action": summary["next_possible_action"],
                     "thresholds": summary["thresholds"],
+                    "learning_acceleration": summary["learning_acceleration"],
+                    "experiment_manager": summary["experiment_manager"],
                 },
             )
         )
@@ -167,12 +399,14 @@ class PaperForwardOpportunityScanner:
         return summary
 
     def raw_candidates(self, db: Session, limit: int) -> list[dict]:
-        if self.candidate_provider is not None:
-            return dedupe_candidates(self.candidate_provider(db, limit))[:limit]
-
-        from app.services.market_sniper import MarketSniperEngine
-
-        engine = MarketSniperEngine()
+        universe = BlumMarketUniverseAgent(self.thresholds).build(db)
+        self.last_universe_report = universe
+        eligible_tickers = {normalize_ticker(asset.ticker) for asset in universe.get("eligible_asset_objects", [])}
+        skipped_reasons = {
+            normalize_ticker(row.get("ticker")): str(row.get("reason") or "MARKET_DATA_UNAVAILABLE")
+            for row in universe.get("skipped_assets_with_reasons", [])
+            if normalize_ticker(row.get("ticker"))
+        }
         candidates: list[dict] = []
         seen: set[str] = set()
 
@@ -180,9 +414,22 @@ class PaperForwardOpportunityScanner:
             ticker = normalize_ticker(item.get("ticker"))
             if not ticker or ticker in seen:
                 return
+            if ticker not in eligible_tickers:
+                item = out_of_universe_payload(item, skipped_reasons.get(ticker, "MARKET_DATA_UNAVAILABLE"))
             payload = {**item, "scouting_source": source, "scouting_policy": "global_market_universe_stored_evidence_only"}
             seen.add(ticker)
             candidates.append(payload)
+
+        if self.candidate_provider is not None:
+            for item in dedupe_candidates(self.candidate_provider(db, limit)):
+                add(item, "candidate_provider")
+                if len(candidates) >= limit:
+                    break
+            return candidates[:limit]
+
+        from app.services.market_sniper import MarketSniperEngine
+
+        engine = MarketSniperEngine()
 
         try:
             payload = engine.candidates(db, limit=limit, persist=False)
@@ -192,7 +439,7 @@ class PaperForwardOpportunityScanner:
             db.add(scanner_event("MARKET_SKIPPED", "market_sniper_ranked_signals", f"{type(exc).__name__}: {exc}", {"source": "market_sniper"}))
 
         if len(candidates) < limit:
-            for asset in market_universe_assets(db, self.thresholds, limit=max(limit * 5, limit)):
+            for asset in (universe.get("eligible_asset_objects") or [])[: max(limit * 5, limit)]:
                 if normalize_ticker(asset.ticker) in seen:
                     continue
                 try:
@@ -206,19 +453,19 @@ class PaperForwardOpportunityScanner:
     def enrich_candidate(self, candidate: dict, asset: Asset | None, benchmarks: dict[str, bool]) -> dict:
         ticker = normalize_ticker(candidate.get("ticker"))
         asset_payload = candidate.get("asset") if isinstance(candidate.get("asset"), dict) else {}
-        asset_type = asset_payload.get("asset_type") or getattr(asset, "asset_type", None) or "Unknown"
-        market = market_key(asset or asset_payload)
-        asset_class = asset_class_key(asset or asset_payload)
-        benchmark = benchmark_for(asset_type=asset_type, market=market, sector=asset_payload.get("sector") or getattr(asset, "sector", ""))
-        benchmark_available = bool(benchmarks.get(normalize_ticker(benchmark)))
+        benchmark_context = BlumBenchmarkAgent().assess(candidate, asset, benchmarks)
+        asset_type = benchmark_context["asset_type"]
+        market = benchmark_context["market"]
+        asset_class = benchmark_context["asset_class"]
+        benchmark = benchmark_context["benchmark_asset"]
+        benchmark_available = benchmark_context["benchmark_available"]
         price_context = candidate.get("price_context") if isinstance(candidate.get("price_context"), dict) else {}
-        latest_price = safe_float(price_context.get("latest_price"), None)
-        latest_volume = safe_float(price_context.get("latest_volume"), None)
-        liquidity_score = liquidity_score_for(price_context, latest_price, latest_volume)
-        data_quality_status = data_quality_status_for(price_context, benchmark_available, self.thresholds.require_benchmark)
-        tradability_status = tradability_status_for(asset_type, latest_price, liquidity_score, self.thresholds.min_liquidity_score)
-        plan = candidate.get("trade_plan") if isinstance(candidate.get("trade_plan"), dict) else {}
-        risk_reward = risk_reward_ratio_from_plan(plan, latest_price)
+        data_availability = BlumDataAvailabilityAgent(self.thresholds).assess(candidate, benchmark_context)
+        latest_price = data_availability["latest_price"]
+        liquidity_context = data_availability["liquidity_context"]
+        data_quality_status = data_availability["data_quality_status"]
+        tradability_status = data_availability["tradability_status"]
+        risk_reward = BlumRiskRewardAgent().assess(candidate, latest_price)
         enriched_asset = {
             **asset_payload,
             "ticker": ticker,
@@ -233,7 +480,7 @@ class PaperForwardOpportunityScanner:
             "asset_class": asset_class,
             "benchmark_asset": benchmark,
             "benchmark_available": benchmark_available,
-            "liquidity_context": {"liquidity_score": liquidity_score, "latest_volume": latest_volume},
+            "liquidity_context": liquidity_context,
             "data_quality_status": data_quality_status,
             "tradability_status": tradability_status,
         }
@@ -244,7 +491,7 @@ class PaperForwardOpportunityScanner:
             "benchmark_available": benchmark_available,
             "data_quality_status": data_quality_status,
             "tradability_status": tradability_status,
-            "liquidity_score": liquidity_score,
+            "liquidity_score": liquidity_context["liquidity_score"],
         }
         return {
             **candidate,
@@ -253,30 +500,26 @@ class PaperForwardOpportunityScanner:
             "price_context": enriched_price_context,
             "benchmark_asset": benchmark,
             "benchmark_available": benchmark_available,
+            "benchmark_context": benchmark_context,
+            "data_availability": data_availability,
             "liquidity_context": enriched_asset["liquidity_context"],
             "data_quality_status": data_quality_status,
             "tradability_status": tradability_status,
-            "risk_reward_ratio": risk_reward,
+            "risk_reward": risk_reward,
+            "risk_reward_ratio": risk_reward["risk_reward_ratio"],
         }
 
     def classify_candidate(self, candidate: dict, rank: int) -> dict:
-        policy = ActionabilityPolicy(
-            minimum_data_quality=self.thresholds.min_data_quality,
-            minimum_confidence=self.thresholds.min_confidence,
-            minimum_reward_to_risk=self.thresholds.min_risk_reward,
-        )
-        diagnosis = diagnose_candidate_actionability(candidate, strict=True, policy=policy)
+        diagnosis = BlumActionabilityAgent(self.thresholds).diagnose(candidate)
         asset = candidate.get("asset") or {}
-        hard_data_block = candidate.get("data_quality_status") in {
-            "MARKET_DATA_UNAVAILABLE",
-            "UNSUPPORTED_MARKET_DATA",
-            "BENCHMARK_UNAVAILABLE",
-            "PROVIDER_UNAVAILABLE",
-        }
+        data_blocker = data_quality_blocker(candidate) or data_tradability_blocker(candidate)
+        tradability_blocker_status = tradability_blocker(candidate)
         if self.thresholds.require_benchmark and not candidate.get("benchmark_available"):
-            hard_data_block = True
-        if hard_data_block or diagnosis.actionability_status == "DATA_BLOCKED":
+            data_blocker = data_blocker or "BENCHMARK_UNAVAILABLE"
+        if data_blocker or diagnosis.actionability_status == "DATA_BLOCKED":
             classification = DATA_BLOCKED_CANDIDATE
+        elif tradability_blocker_status:
+            classification = BLOCKED_CANDIDATE
         elif diagnosis.actionability_status == "ACTIONABLE" and self.thresholds.allow_trade_candidates:
             classification = TRADE_CANDIDATE
         elif (diagnosis.should_wait or near_candidate(diagnosis, self.thresholds)) and self.thresholds.allow_watchlist_candidates:
@@ -326,12 +569,15 @@ class PaperForwardOpportunityScanner:
         counts = Counter(item["classification"] for item in classified)
         by_market = grouped_counts(classified, "market")
         by_class = grouped_counts(classified, "asset_class")
-        trade_items = sorted([item for item in classified if item["classification"] == TRADE_CANDIDATE], key=lambda item: item["score"], reverse=True)
-        watch_items = sorted([item for item in classified if item["classification"] == WATCHLIST_CANDIDATE], key=lambda item: item["score"], reverse=True)
-        blocked_items = sorted([item for item in classified if item["classification"] == BLOCKED_CANDIDATE], key=lambda item: item["score"], reverse=True)
-        data_blocked_items = sorted([item for item in classified if item["classification"] == DATA_BLOCKED_CANDIDATE], key=lambda item: item["score"], reverse=True)
-        best_cross_market = sorted(classified, key=lambda item: item["score"], reverse=True)[0] if classified else None
-        configured_market_report = configured_market_coverage(db, self.thresholds, classified)
+        ranked_items = BlumCrossMarketRankerAgent(self.thresholds).rank(classified)
+        trade_items = [item for item in ranked_items if item["classification"] == TRADE_CANDIDATE]
+        watch_items = [item for item in ranked_items if item["classification"] == WATCHLIST_CANDIDATE]
+        blocked_items = [item for item in ranked_items if item["classification"] == BLOCKED_CANDIDATE]
+        data_blocked_items = [item for item in ranked_items if item["classification"] == DATA_BLOCKED_CANDIDATE]
+        best_cross_market = ranked_items[0] if ranked_items else None
+        configured_market_report = self.last_universe_report or configured_market_coverage(db, self.thresholds, classified)
+        skipped_markets = configured_market_report.get("skipped_markets") or configured_market_report.get("markets_skipped") or []
+        skipped_reason = configured_market_report.get("reason_if_markets_were_skipped") or skipped_reason_text(skipped_markets)
         top_blockers = [{"reason": reason, "count": count} for reason, count in Counter(item["blocker"] for item in classified if item["blocker"]).most_common(8)]
         reason = no_trade_reason(counts, top_blockers)
         return {
@@ -356,13 +602,13 @@ class PaperForwardOpportunityScanner:
             "reason_if_no_trade_candidates": reason,
             "markets_scanned": configured_market_report["markets_scanned"],
             "asset_classes_scanned": configured_market_report["asset_classes_scanned"],
-            "assets_scanned_by_market": configured_market_report["assets_scanned_by_market"],
+            "assets_scanned_by_market": configured_market_report.get("assets_scanned_by_market") or configured_market_report.get("assets_by_market") or {},
             "trade_candidates_by_market": classification_by_market(classified, TRADE_CANDIDATE),
             "watchlist_candidates_by_market": classification_by_market(classified, WATCHLIST_CANDIDATE),
             "blocked_candidates_by_market": classification_by_market(classified, BLOCKED_CANDIDATE),
             "data_blocked_candidates_by_market": classification_by_market(classified, DATA_BLOCKED_CANDIDATE),
-            "skipped_markets": configured_market_report["skipped_markets"],
-            "reason_if_markets_were_skipped": configured_market_report["reason_if_markets_were_skipped"],
+            "skipped_markets": skipped_markets,
+            "reason_if_markets_were_skipped": skipped_reason,
             "latest_trade_candidates": [scanner_item_payload(item) for item in trade_items[:8]],
             "latest_watchlist_candidates": [scanner_item_payload(item) for item in watch_items[:8]],
             "latest_blocked_candidates": [scanner_item_payload(item) for item in blocked_items[:8]],
@@ -389,6 +635,21 @@ def dedupe_candidates(rows: list[dict]) -> list[dict]:
     return output
 
 
+def out_of_universe_payload(candidate: dict, reason: str) -> dict:
+    asset = candidate.get("asset") if isinstance(candidate.get("asset"), dict) else {}
+    price_context = candidate.get("price_context") if isinstance(candidate.get("price_context"), dict) else {}
+    return {
+        **candidate,
+        "asset": asset,
+        "actionability": "avoid",
+        "data_quality_status": reason,
+        "tradability_status": candidate.get("tradability_status") or "NOT_TRADABLE_NO_PRICE",
+        "price_context": {**price_context, "data_quality_status": reason},
+        "explanation": f"Blocked by configured scanner universe: {reason}.",
+        "scanner_universe_blocker": reason,
+    }
+
+
 def parse_csv(value: str | None) -> tuple[str, ...]:
     return tuple(item.strip().lower() for item in str(value or "").split(",") if item.strip())
 
@@ -405,23 +666,173 @@ def assets_for_candidates(db: Session, candidates: list[dict]) -> dict[str, Asse
     return {normalize_ticker(row.ticker): row for row in rows}
 
 
-def benchmark_availability_map(db: Session) -> dict[str, bool]:
-    rows = db.execute(select(Asset.ticker, func.count(PriceHistory.id)).join(PriceHistory, PriceHistory.asset_id == Asset.id).group_by(Asset.ticker)).all()
-    return {normalize_ticker(ticker): count > 0 for ticker, count in rows}
+def required_benchmark_tickers(candidates: list[dict], assets_by_ticker: dict[str, Asset]) -> list[str]:
+    tickers: list[str] = []
+    seen: set[str] = set()
+    agent = BlumBenchmarkAgent()
+    for candidate in candidates:
+        ticker = normalize_ticker(candidate.get("ticker"))
+        benchmark = normalize_ticker(agent.assess(candidate, assets_by_ticker.get(ticker), {})["benchmark_asset"])
+        if benchmark and benchmark not in seen:
+            seen.add(benchmark)
+            tickers.append(benchmark)
+    return tickers
+
+
+def benchmark_availability_details_map(
+    db: Session,
+    benchmark_tickers: list[str] | tuple[str, ...] | set[str] | None = None,
+    *,
+    max_stale_hours: float | None = None,
+) -> dict[str, dict]:
+    query = (
+        select(
+            Asset.ticker,
+            func.count(PriceHistory.id).label("rows_count"),
+            func.max(PriceHistory.date).label("latest_market_date"),
+        )
+        .join(PriceHistory, PriceHistory.asset_id == Asset.id)
+        .group_by(Asset.ticker)
+    )
+    if benchmark_tickers is not None:
+        normalized = sorted({normalize_ticker(ticker) for ticker in benchmark_tickers if normalize_ticker(ticker)})
+        if not normalized:
+            return {}
+        query = query.where(Asset.ticker.in_(normalized))
+    rows = db.execute(query).all()
+    output: dict[str, dict] = {}
+    for ticker, count, latest_market_date in rows:
+        latest_dt = parse_market_datetime(latest_market_date)
+        is_stale = False
+        if max_stale_hours and max_stale_hours > 0 and latest_dt is not None:
+            is_stale = latest_dt < datetime.utcnow() - timedelta(hours=max_stale_hours)
+        if count <= 0:
+            blocker = "BENCHMARK_PRICE_MISSING"
+        elif is_stale:
+            blocker = "BENCHMARK_STALE"
+        else:
+            blocker = ""
+        output[normalize_ticker(ticker)] = {
+            "benchmark_available": bool(count > 0 and not is_stale),
+            "benchmark_blocker": blocker,
+            "latest_benchmark_date": latest_dt.isoformat() if latest_dt else None,
+            "rows": int(count or 0),
+        }
+    return output
+
+
+def benchmark_availability_map(db: Session, benchmark_tickers: list[str] | tuple[str, ...] | set[str] | None = None) -> dict[str, bool]:
+    details = benchmark_availability_details_map(db, benchmark_tickers)
+    return {ticker: bool(payload.get("benchmark_available")) for ticker, payload in details.items()}
+
+
+class BlumMarketUniverseAgent:
+    """Build the bounded stored-data universe available to the scanner."""
+
+    def __init__(self, thresholds: ScannerThresholds):
+        self.thresholds = thresholds
+
+    def build(self, db: Session) -> dict:
+        requested_markets = list(self.thresholds.enabled_markets)
+        requested_asset_classes = list(self.thresholds.enabled_asset_classes)
+        latest_price_history = (
+            select(
+                PriceHistory.asset_id.label("asset_id"),
+                func.max(PriceHistory.date).label("latest_market_date"),
+            )
+            .group_by(PriceHistory.asset_id)
+            .subquery()
+        )
+        asset_rows = db.execute(
+            select(Asset, latest_price_history.c.latest_market_date)
+            .join(latest_price_history, latest_price_history.c.asset_id == Asset.id)
+            .where(Asset.is_active.is_(True))
+            .order_by(Asset.ticker)
+        ).all()
+
+        eligible: list[Asset] = []
+        skipped_assets: list[dict] = []
+        assets_by_market: dict[str, list[str]] = defaultdict(list)
+        assets_by_asset_class: dict[str, list[str]] = defaultdict(list)
+        per_market_counts: dict[str, int] = defaultdict(int)
+
+        for asset, latest_market_date in asset_rows:
+            ticker = normalize_ticker(asset.ticker)
+            market = market_key(asset)
+            asset_class = asset_class_key(asset)
+            skip_reason = self._skip_reason(market, asset_class, per_market_counts[market], latest_market_date)
+            if skip_reason:
+                skipped_assets.append(
+                    {
+                        "ticker": ticker,
+                        "market": market,
+                        "asset_class": asset_class,
+                        "reason": skip_reason,
+                    }
+                )
+                continue
+
+            eligible.append(asset)
+            per_market_counts[market] += 1
+            assets_by_market[market].append(ticker)
+            assets_by_asset_class[asset_class].append(ticker)
+
+        markets_scanned = ordered_requested_keys(requested_markets, assets_by_market)
+        asset_classes_scanned = ordered_requested_keys(requested_asset_classes, assets_by_asset_class)
+        markets_skipped = skipped_requested_keys(requested_markets, markets_scanned, "market")
+        asset_classes_skipped = skipped_requested_keys(requested_asset_classes, asset_classes_scanned, "asset_class")
+
+        return {
+            "markets_requested": requested_markets,
+            "markets_scanned": markets_scanned,
+            "markets_skipped": markets_skipped,
+            "reason_if_markets_were_skipped": skipped_reason_text(markets_skipped),
+            "asset_classes_requested": requested_asset_classes,
+            "asset_classes_scanned": asset_classes_scanned,
+            "asset_classes_skipped": asset_classes_skipped,
+            "reason_if_asset_classes_were_skipped": skipped_reason_text(asset_classes_skipped),
+            "assets_by_market": dict(assets_by_market),
+            "assets_by_asset_class": dict(assets_by_asset_class),
+            "total_assets_discovered": len(asset_rows),
+            "total_assets_eligible": len(eligible),
+            "skipped_assets_with_reasons": skipped_assets,
+            "eligible_assets": [normalize_ticker(asset.ticker) for asset in eligible],
+            "eligible_asset_objects": eligible,
+        }
+
+    def _skip_reason(self, market: str, asset_class: str, current_market_count: int, latest_market_date) -> str:
+        if asset_class not in self.thresholds.enabled_asset_classes:
+            return "ASSET_CLASS_NOT_ENABLED"
+        if market not in self.thresholds.enabled_markets:
+            return "MARKET_NOT_ENABLED"
+        if current_market_count >= self.thresholds.max_assets_per_market:
+            return "MAX_ASSETS_PER_MARKET_REACHED"
+        latest_dt = parse_market_datetime(latest_market_date)
+        if self.thresholds.scan_stale_data_max_age_hours > 0 and latest_dt is not None:
+            stale_after = datetime.utcnow() - timedelta(hours=self.thresholds.scan_stale_data_max_age_hours)
+            if latest_dt < stale_after:
+                return "STALE_PRICE_DATA"
+        return ""
+
+
+def ordered_requested_keys(requested: list[str], grouped: dict[str, list[str]]) -> list[str]:
+    return [key for key in requested if grouped.get(key)]
+
+
+def skipped_requested_keys(requested: list[str], scanned: list[str], kind: str) -> list[dict]:
+    scanned_set = set(scanned)
+    return [{kind: key, "reason": "NO_ELIGIBLE_STORED_PRICE_HISTORY"} for key in requested if key not in scanned_set]
+
+
+def skipped_reason_text(skipped: list[dict]) -> str:
+    if not skipped:
+        return ""
+    return "; ".join(f"{next((value for key, value in item.items() if key != 'reason'), 'unknown')}: {item['reason']}" for item in skipped)
 
 
 def market_universe_assets(db: Session, thresholds: ScannerThresholds, *, limit: int) -> list[Asset]:
-    assets = db.scalars(select(Asset).where(Asset.is_active.is_(True)).order_by(Asset.asset_type, Asset.ticker).limit(limit * 3)).all()
-    filtered = []
-    for asset in assets:
-        if asset_class_key(asset) not in thresholds.enabled_asset_classes:
-            continue
-        if market_key(asset) not in thresholds.enabled_markets:
-            continue
-        filtered.append(asset)
-        if len(filtered) >= limit:
-            break
-    return filtered
+    return BlumMarketUniverseAgent(thresholds).build(db)["eligible_asset_objects"][:limit]
+
 
 
 def market_key(asset: Asset | dict) -> str:
@@ -437,6 +848,8 @@ def market_key(asset: Asset | dict) -> str:
         return "commodities"
     if "bond" in asset_type or "rate" in category or "treasury" in category:
         return "bonds"
+    if "volatility" in asset_type or "volatility" in category or "vix" in asset_type or "vix" in category:
+        return "volatility"
     if "index" in asset_type:
         return "indexes"
     if "etf" in asset_type:
@@ -455,6 +868,8 @@ def asset_class_key(asset: Asset | dict) -> str:
         return "equities"
     if "etf" in asset_type:
         return "etfs"
+    if "volatility" in asset_type or "volatility" in category or "vix" in asset_type or "vix" in category:
+        return "volatility"
     if "index" in asset_type:
         return "indexes"
     if "commodity" in asset_type or "commodity" in category:
@@ -465,8 +880,6 @@ def asset_class_key(asset: Asset | dict) -> str:
         return "crypto"
     if "bond" in asset_type or "rate" in category or "treasury" in category:
         return "bonds"
-    if "volatility" in asset_type or "vix" in category:
-        return "volatility"
     return "equities" if not asset_type else asset_type.replace(" ", "_")
 
 
@@ -496,7 +909,36 @@ def benchmark_for(*, asset_type: str, market: str, sector: str = "") -> str:
     return settings.default_benchmark
 
 
-def data_quality_status_for(price_context: dict, benchmark_available: bool, require_benchmark: bool) -> str:
+def parse_market_datetime(value) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None)
+    if hasattr(value, "year") and hasattr(value, "month") and hasattr(value, "day"):
+        return datetime(int(value.year), int(value.month), int(value.day))
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        pass
+    try:
+        return datetime.strptime(text[:10], "%Y-%m-%d")
+    except ValueError:
+        return None
+
+
+def stale_price_data(price_context: dict, max_stale_hours: float | None) -> bool:
+    if not max_stale_hours or max_stale_hours <= 0:
+        return False
+    latest_dt = parse_market_datetime(price_context.get("latest_date") or price_context.get("date") or price_context.get("as_of"))
+    if latest_dt is None:
+        return False
+    return latest_dt < datetime.utcnow() - timedelta(hours=max_stale_hours)
+
+
+def data_quality_status_for(price_context: dict, benchmark_available: bool, require_benchmark: bool, *, min_data_quality: float | None = None, max_stale_hours: float | None = None) -> str:
     latest_price = safe_float(price_context.get("latest_price"), None)
     rows = int(safe_float(price_context.get("rows"), 0) or 0)
     data_quality = safe_float(price_context.get("data_quality_score"), None)
@@ -504,7 +946,10 @@ def data_quality_status_for(price_context: dict, benchmark_available: bool, requ
         return "MARKET_DATA_UNAVAILABLE"
     if rows <= 0:
         return "OHLCV_MISSING"
-    if data_quality is not None and data_quality < settings.paper_forward_min_data_quality:
+    if stale_price_data(price_context, max_stale_hours):
+        return "STALE_PRICE_DATA"
+    data_quality_floor = settings.paper_forward_min_data_quality if min_data_quality is None else min_data_quality
+    if data_quality is not None and data_quality < data_quality_floor:
         return "LOW_DATA_QUALITY"
     if require_benchmark and not benchmark_available:
         return "BENCHMARK_UNAVAILABLE"
@@ -549,7 +994,9 @@ def classification_reason(classification: str, diagnosis, candidate: dict) -> st
     if classification == WATCHLIST_CANDIDATE:
         return f"Interesting but not ready: {diagnosis.rejection_reason}."
     if classification == DATA_BLOCKED_CANDIDATE:
-        return candidate.get("data_quality_status") or diagnosis.rejection_reason
+        return data_quality_blocker(candidate) or data_tradability_blocker(candidate) or diagnosis.rejection_reason
+    if classification == BLOCKED_CANDIDATE:
+        return tradability_blocker(candidate) or diagnosis.rejection_reason
     return diagnosis.rejection_reason
 
 
@@ -559,8 +1006,36 @@ def blocker_for(classification: str, diagnosis, candidate: dict) -> str:
     if classification == WATCHLIST_CANDIDATE:
         return "waiting_for_entry_or_near_threshold"
     if classification == DATA_BLOCKED_CANDIDATE:
-        return candidate.get("data_quality_status") or diagnosis.rejection_reason
+        return data_quality_blocker(candidate) or data_tradability_blocker(candidate) or diagnosis.rejection_reason
+    if classification == BLOCKED_CANDIDATE:
+        return tradability_blocker(candidate) or diagnosis.rejection_reason
     return diagnosis.rejection_reason
+
+
+def normalized_status(value: object) -> str:
+    return str(value or "").strip().upper()
+
+
+def data_quality_blocker(candidate: dict) -> str:
+    status = normalized_status(candidate.get("data_quality_status"))
+    for blocker in DATA_BLOCKING_QUALITY_STATUSES:
+        if status == blocker or status.startswith(f"{blocker}:"):
+            return status
+    return ""
+
+
+def data_tradability_blocker(candidate: dict) -> str:
+    status = normalized_status(candidate.get("tradability_status"))
+    return status if status in DATA_BLOCKING_TRADABILITY_STATUSES else ""
+
+
+def tradability_blocker(candidate: dict) -> str:
+    status = normalized_status(candidate.get("tradability_status"))
+    if status in PASSING_TRADABILITY_STATUSES or status in DATA_BLOCKING_TRADABILITY_STATUSES:
+        return ""
+    if status in BLOCKING_TRADABILITY_STATUSES:
+        return status
+    return status
 
 
 def score_for(candidate: dict, diagnosis, classification: str) -> float:

@@ -284,6 +284,7 @@ from app.services.trading_intelligence_lab import (
     TradingIntelligenceMetricsService,
 )
 from app.services.live_forward_paper_trading import LiveForwardPaperTradingService
+from app.services.paper_forward_opportunity_scanner import PaperForwardOpportunityScanner
 from app.services.performance import performance_recorder
 from app.services.trader_brain import TraderBrainService
 from app.signals.backtest import run_simple_backtest
@@ -1343,6 +1344,15 @@ def paper_forward_run_lifecycle(
     db: Session = Depends(get_db),
 ) -> dict:
     return LiveForwardPaperTradingService().run_lifecycle(db, override=override)
+
+
+@router.post("/api/training/accelerate")
+def training_accelerate(db: Session = Depends(get_db)) -> dict:
+    scanner = PaperForwardOpportunityScanner()
+    scanner_summary = {"top_blockers": [], "markets_scanned": [], "asset_classes_scanned": []}
+    acceleration = scanner.learning_acceleration_agent.accelerate(db, scanner_summary=scanner_summary)
+    experiments = scanner.experiment_manager_agent.propose(db, acceleration_report=acceleration)
+    return {"status": "ok", "learning_acceleration": acceleration, "experiment_manager": experiments}
 
 
 @router.get("/api/learning-intelligence/dashboard")
