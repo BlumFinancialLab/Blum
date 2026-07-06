@@ -61,9 +61,6 @@ class TraderBrainService:
     """
 
     def brain(self, db: Session) -> dict:
-        learning = LearningSummaryService().summary(db)
-        readiness = TradingGameReadinessService().readiness(db)
-        alpha = AlphaReadinessEngine().readiness(db)
         latest_power = latest_row(db, BlumTradingPowerScore)
         latest_decision = latest_row(db, DecisionSuperiorityScore)
         latest_metric = latest_row(db, TradingIntelligenceMetric)
@@ -88,6 +85,9 @@ class TraderBrainService:
             .limit(1)
         )
         benchmarks = latest_benchmarks(db)
+        learning = lightweight_learning_status(latest_run)
+        readiness = lightweight_trading_readiness(latest_metric, latest_power, latest_lesson)
+        alpha = lightweight_alpha_status(benchmarks, latest_power, latest_metric)
         decision_quality = decision_quality_score(latest_decision, latest_metric)
         evidence_quality = evidence_quality_score(readiness, alpha, benchmarks)
         calibration = safe_float(getattr(latest_power, "statistical_confidence_score", None), None)
@@ -112,7 +112,9 @@ class TraderBrainService:
             "portfolio_intelligence": portfolio_intelligence,
             "knowledge_quality": knowledge_quality,
         }
-        brain_score = weighted_average(components)
+        brain_score = safe_float(getattr(latest_power, "score", None), None)
+        if brain_score is None:
+            brain_score = weighted_average(components)
         return {
             "status": "ready" if brain_score is not None else "insufficient_evidence",
             "version": TRADER_BRAIN_VERSION,
@@ -353,6 +355,59 @@ def latest_benchmarks(db: Session) -> list[LearningBenchmarkComparison]:
     for row in rows:
         latest.setdefault(f"{row.mode}:{row.benchmark_name}", row)
     return list(latest.values())
+
+
+def lightweight_learning_status(row: LearningRun | None) -> dict:
+    return {
+        "latest_learning_run_status": getattr(row, "status", None),
+        "latest_learning_run_at": row.started_at.isoformat() if row and row.started_at else None,
+        "target_progress": None,
+        "warnings": [],
+    }
+
+
+def lightweight_trading_readiness(
+    metric: TradingIntelligenceMetric | None,
+    power: BlumTradingPowerScore | None,
+    latest_lesson: TradeLearningEvidence | None,
+) -> dict:
+    has_evidence = any([metric, power, latest_lesson])
+    return {
+        "status": "READY" if has_evidence else "INSUFFICIENT_EVIDENCE",
+        "evidence_grade": lightweight_evidence_grade(
+            getattr(metric, "trades_count", None),
+            getattr(power, "statistical_confidence_score", None),
+        ),
+    }
+
+
+def lightweight_alpha_status(
+    benchmarks: list[LearningBenchmarkComparison],
+    power: BlumTradingPowerScore | None,
+    metric: TradingIntelligenceMetric | None,
+) -> dict:
+    benchmark_samples = sum(int(getattr(row, "sample_size", 0) or 0) for row in benchmarks)
+    return {
+        "status": "READY" if benchmark_samples >= 30 else "INSUFFICIENT_EVIDENCE",
+        "evidence_grade": lightweight_evidence_grade(
+            benchmark_samples or getattr(metric, "trades_count", None),
+            getattr(power, "statistical_confidence_score", None),
+        ),
+        "alpha_readiness_score": safe_float(getattr(power, "benchmark_relative_score", None), None),
+        "trade_count": safe_float(getattr(metric, "trades_count", None), 0.0),
+    }
+
+
+def lightweight_evidence_grade(sample_size: Any, confidence_score: Any = None) -> str:
+    confidence = safe_float(confidence_score, None)
+    samples = int(safe_float(sample_size, 0.0) or 0)
+    if samples >= 100 and (confidence is None or confidence >= 70):
+        return "strong"
+    if samples >= 50:
+        return "medium"
+    if samples >= 10:
+        return "low"
+    return "insufficient"
 
 
 def decision_quality_score(decision: DecisionSuperiorityScore | None, metric: TradingIntelligenceMetric | None) -> float | None:

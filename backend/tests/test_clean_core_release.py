@@ -50,3 +50,11 @@ def test_primary_frontend_navigation_stays_reduced_to_four_product_surfaces():
     assert 'label: "Alpha"' in text
     assert 'label: "Performance"' not in text
     assert 'label: "Radar"' not in text
+
+
+def test_primary_app_shell_does_not_fetch_heavy_snapshots_on_startup():
+    text = (ROOT.parents[1] / "frontend" / "components" / "AppShell.tsx").read_text()
+
+    assert 'api.learningSummary()' not in text
+    assert 'api.dashboardSnapshot("paper_forward_snapshot")' not in text
+    assert 'api.traderAlpha()' not in text

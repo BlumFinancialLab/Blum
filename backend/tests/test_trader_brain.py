@@ -28,6 +28,27 @@ def setup_db() -> Session:
     return Session(engine)
 
 
+def test_brain_snapshot_is_startup_safe_and_does_not_call_heavy_readiness_services(monkeypatch):
+    import app.engine.brain.trader_brain as trader_brain_module
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("heavy service should not run during Brain startup snapshot")
+
+    monkeypatch.setattr(trader_brain_module.LearningSummaryService, "summary", fail_if_called)
+    monkeypatch.setattr(trader_brain_module.TradingGameReadinessService, "readiness", fail_if_called)
+    monkeypatch.setattr(trader_brain_module.AlphaReadinessEngine, "readiness", fail_if_called)
+
+    with setup_db() as db:
+        db.add(LearningRun(run_id="fast-brain", status="completed", trigger="test", started_at=datetime.utcnow()))
+        db.commit()
+
+        payload = TraderBrainService().brain(db)
+
+    assert payload["version"] == TRADER_BRAIN_VERSION
+    assert payload["status"] in {"ready", "insufficient_evidence"}
+    assert payload["policy"].startswith("Trader Brain is read-only")
+
+
 def test_trader_brain_is_read_only_truth_first_summary():
     with setup_db() as db:
         game = TradingGame(game_id="brain-test", current_capital=140.0, starting_capital=100.0, target_capital=10000.0, trade_count=1)

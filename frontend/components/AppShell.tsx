@@ -84,24 +84,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         mounted = false;
       };
     }
-    Promise.allSettled([
-      api.systemStatus(),
-      api.learningSummary(),
-      api.dashboardSnapshot("paper_forward_snapshot"),
-      api.traderAlpha(),
-    ]).then(([systemResult, learningResult, paperResult, alphaResult]) => {
+    api.systemStatus().then((system) => {
       if (!mounted) return;
-      const system = systemResult.status === "fulfilled" ? systemResult.value : null;
-      const learning = learningResult.status === "fulfilled" ? learningResult.value : null;
-      const paper = paperResult.status === "fulfilled" ? paperResult.value : null;
-      const alpha = alphaResult.status === "fulfilled" ? alphaResult.value : null;
       setSystemStatus(system);
       setSidebarStatus({
         workerStatus: system?.runtime_flags?.autonomous_engine_enabled ? "workers on" : "workers off",
         modelStatus: system?.runtime_flags?.financial_brain_model_enabled ? "model active" : "snapshot mode",
-        lastLearningCycle: compactStatus(learning?.latest_learning_run_at ?? learning?.latest_run_timestamp ?? learning?.latest_learning_run_status ?? learning?.status),
-        paperForwardStatus: compactStatus(paper?.payload?.readiness ?? paper?.payload?.status ?? paper?.status),
-        alphaEvidenceGrade: compactStatus(alpha?.evidence_grade ?? alpha?.current_alpha_readiness?.evidence_grade ?? alpha?.status),
+        lastLearningCycle: "see Training",
+        paperForwardStatus: "see Paper",
+        alphaEvidenceGrade: "see Alpha",
       });
     }).catch(() => {
       if (mounted) setSidebarStatus(defaultSidebarStatus);
