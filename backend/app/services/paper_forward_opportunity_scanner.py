@@ -9,7 +9,8 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.models import Asset, LearningEvent, LearningFocusPriority, PriceHistory
+from app.models import Asset, BlumLearningExperiment, LearningEvent, LearningFocusPriority, LearningRun, MissedWinner, PriceHistory, SignalPerformance, StrategyMemory
+from app.services.learning_loop import LearningLoopService
 from app.services.trading_intelligence_lab import ActionabilityPolicy, diagnose_candidate_actionability, risk_reward_ratio_from_plan, safe_float
 
 
@@ -194,13 +195,16 @@ class BlumCrossMarketRankerAgent:
 
 
 class BlumLearningAccelerationAgent:
-    """Create bounded learning-focus metadata from stored evidence only."""
+    """Execute bounded learning acceleration from stored evidence only."""
 
-    def accelerate(self, db: Session, *, scanner_summary: dict) -> dict:
+    def accelerate(self, db: Session, *, scanner_summary: dict, execute: bool = False) -> dict:
+        started = datetime.utcnow()
         if not settings.blum_learning_acceleration_enabled:
-            return {"enabled": False, "status": "disabled", "batches_scheduled": 0, "batches_completed": 0}
+            return {"enabled": False, "status": "DISABLED", "batches_requested": 0, "batches_completed": 0}
 
         max_batches = max(1, int(settings.blum_learning_acceleration_max_batches_per_run))
+        max_assets = max(1, int(settings.blum_learning_acceleration_max_assets_per_run))
+        max_runtime = max(1, int(settings.blum_learning_acceleration_max_runtime_seconds))
         top_blockers = scanner_summary.get("top_blockers") or []
         repeated_blockers = [row for row in top_blockers if int(row.get("count") or 0) >= 2][:max_batches]
         focus_rows = db.scalars(
@@ -210,63 +214,152 @@ class BlumLearningAccelerationAgent:
             .limit(max_batches)
         ).all()
 
-        priority_setups = [str(row.target) for row in focus_rows if row.target][:max_batches]
-        batches = min(max_batches, len(focus_rows) + len(repeated_blockers))
-        return {
+        memory_targets = weak_memory_targets(db, max_items=max_batches)
+        missed_targets = missed_winner_targets(db, max_items=max_batches)
+        priority_setups = bounded_unique(
+            [str(row.target) for row in focus_rows if row.target]
+            + [str(row.get("setup") or row.get("target") or "") for row in memory_targets],
+            max_batches,
+        )
+        priority_tickers = bounded_unique([str(row.get("ticker") or "") for row in missed_targets], max_assets)
+        target_count = len(focus_rows) + len(repeated_blockers) + len(memory_targets) + len(missed_targets)
+        batches_requested = min(max_batches, max(0, target_count))
+        learning_runs: list[dict] = []
+        benchmark_blockers = benchmark_gap_blockers(db)
+        status = "IDLE" if batches_requested == 0 else "SCHEDULED"
+        if execute and batches_requested > 0:
+            for _ in range(batches_requested):
+                if (datetime.utcnow() - started).total_seconds() >= max_runtime:
+                    status = "THROTTLED"
+                    break
+                result = LearningLoopService().run_batch(
+                    db,
+                    batch_size=min(max_assets, max(1, int(settings.professional_learning_batch_size))),
+                    trigger="learning_acceleration",
+                    sniper_simulation_limit=0,
+                )
+                learning_runs.append(result)
+                if result.get("status") == "budget_wait":
+                    status = "THROTTLED"
+                    break
+            if status != "THROTTLED":
+                status = "COMPLETED" if learning_runs else "BLOCKED"
+        elif batches_requested == 0:
+            status = "NO_EVIDENCE"
+
+        batches_completed = len([row for row in learning_runs if row.get("status") in {"ok", "completed"}])
+        memory_updates = sum(int(row.get("memory_updates") or 0) for row in learning_runs)
+        model_version_changes = [row.get("model_version") for row in learning_runs if row.get("model_version")]
+        payload = {
             "enabled": True,
             "last_run_at": datetime.utcnow().isoformat(),
-            "status": "ready" if batches else "no_evidence",
-            "learning_acceleration_mode": "bounded_replay_planning",
-            "additional_replay_batches_scheduled": batches,
-            "additional_walk_forward_batches_scheduled": min(len(focus_rows), max_batches),
-            "batches_scheduled": batches,
-            "batches_completed": 0,
+            "status": status,
+            "learning_acceleration_mode": "bounded_execution" if execute else "bounded_scheduling",
+            "batches_requested": batches_requested,
+            "batches_completed": batches_completed,
+            "batches_scheduled": batches_requested,
             "priority_markets": scanner_summary.get("markets_scanned") or [],
             "priority_asset_classes": scanner_summary.get("asset_classes_scanned") or [],
+            "priority_tickers": priority_tickers,
             "priority_setups": priority_setups,
             "uncertainty_targets": [row.target for row in focus_rows if row.priority_type in {"weak_promising_setup", "weakness_replay"}],
-            "missed_opportunity_targets": [row.target for row in focus_rows if "missed" in str(row.priority_type or "")],
+            "missed_opportunity_targets": [row.target for row in focus_rows if "missed" in str(row.priority_type or "")] + priority_tickers,
             "repeated_blockers": repeated_blockers,
-            "estimated_learning_gain": round(sum(float(row.expected_learning_value or 0.0) for row in focus_rows), 4),
+            "weak_memory_targets": memory_targets,
+            "learning_runs": learning_runs,
+            "experiments_created": 0,
+            "experiments_completed": 0,
+            "memory_updates": memory_updates,
+            "model_version_changes": model_version_changes,
+            "benchmark_blockers": benchmark_blockers,
+            "estimated_learning_gain": round(sum(float(row.expected_learning_value or 0.0) for row in focus_rows) + len(repeated_blockers) * 8.0 + len(missed_targets) * 12.0, 4),
             "safety_limits_applied": {
                 "max_batches_per_run": max_batches,
-                "max_assets_per_run": settings.blum_learning_acceleration_max_assets_per_run,
-                "max_runtime_seconds": settings.blum_learning_acceleration_max_runtime_seconds,
+                "max_assets_per_run": max_assets,
+                "max_runtime_seconds": max_runtime,
                 "budget_guard_enabled": settings.blum_learning_acceleration_budget_guard_enabled,
             },
-            "next_acceleration_action": "Run bounded replay or walk-forward validation from backend scheduler/manual endpoint.",
+            "next_acceleration_action": next_acceleration_action(status, benchmark_blockers),
         }
+        db.add(
+            LearningEvent(
+                event_type="blum_learning_acceleration_completed",
+                severity="Info" if status in {"COMPLETED", "SCHEDULED"} else "Warning",
+                title="BLUM learning acceleration cycle completed",
+                description=f"Acceleration status {status}; bounded batches completed {batches_completed}/{batches_requested}.",
+                payload=payload,
+            )
+        )
+        db.flush()
+        return payload
 
 
 class BlumExperimentManagerAgent:
-    """Propose reversible experiments from acceleration metadata."""
+    """Persist reversible experiments from acceleration metadata."""
 
     def propose(self, db: Session, *, acceleration_report: dict) -> dict:
         if not settings.blum_experiment_manager_enabled:
-            return {"enabled": False, "status": "disabled", "active_experiments": [], "completed_experiments": []}
+            return {"enabled": False, "status": "DISABLED", "active_experiments": [], "completed_experiments": [], "experiments_created": 0, "experiments_completed": 0}
 
         priorities = acceleration_report.get("priority_setups") or []
-        experiments = [
-            {
-                "experiment_id": f"exp-{normalize_ticker(target) or 'UNKNOWN'}",
-                "hypothesis": f"Replay {target} and compare entry trigger quality versus benchmark-relative outcome.",
-                "setup_type": target,
-                "training_window": "stored_historical_replay",
-                "validation_window": "walk_forward_when_available",
-                "benchmark": settings.default_benchmark,
-                "status": "proposed",
-            }
-            for target in priorities[: max(1, int(settings.blum_experiment_max_active_experiments))]
-        ]
+        max_experiments = max(1, int(settings.blum_experiment_max_active_experiments))
+        active: list[dict] = []
+        completed: list[dict] = []
+        created_count = 0
+        completed_count = 0
+        latest_run = first_learning_run(acceleration_report)
+        for target in priorities[:max_experiments]:
+            experiment_id = experiment_id_for(str(target), acceleration_report)
+            row = db.scalar(select(BlumLearningExperiment).where(BlumLearningExperiment.experiment_id == experiment_id).limit(1))
+            if row is None:
+                row = BlumLearningExperiment(
+                    experiment_id=experiment_id,
+                    hypothesis=f"Replay {target} and compare entry trigger quality versus benchmark-relative outcome.",
+                    target_market=first_value(acceleration_report.get("priority_markets"), "global"),
+                    target_asset_class=first_value(acceleration_report.get("priority_asset_classes"), "mixed"),
+                    target_setup=str(target),
+                    training_window={"mode": "bounded_historical_replay", "source": "LearningLoopService"},
+                    validation_window={"mode": "walk_forward_validation", "requires_benchmark": True},
+                    sample_size=0,
+                    benchmark_asset=settings.default_benchmark,
+                    status="PROPOSED",
+                    next_action="Run bounded learning acceleration before promotion.",
+                    source_payload={"acceleration_status": acceleration_report.get("status")},
+                )
+                db.add(row)
+                db.flush()
+                created_count += 1
+            if latest_run and int(latest_run.get("reports_created") or 0) > 0:
+                row.status = "COMPLETED"
+                row.sample_size = int(latest_run.get("reports_created") or 0)
+                row.result_summary = latest_run
+                row.conclusion = "Evidence collected from bounded replay. Promotion remains blocked until benchmark/out-of-sample validation improves versus baseline."
+                row.next_action = "Compare learned decision against baseline and require sufficient benchmark evidence before promotion."
+                completed_count += 1
+                completed.append(serialize_experiment(row))
+            else:
+                active.append(serialize_experiment(row))
+        db.add(
+            LearningEvent(
+                event_type="blum_learning_experiment_manager_updated",
+                severity="Info",
+                title="BLUM experiment manager updated",
+                description=f"Experiments created {created_count}; completed {completed_count}.",
+                payload={"experiments_created": created_count, "experiments_completed": completed_count, "active": active, "completed": completed},
+            )
+        )
+        db.flush()
         return {
             "enabled": True,
-            "status": "proposed" if experiments else "no_priority",
-            "active_experiments": experiments,
-            "completed_experiments": [],
-            "best_experiment": experiments[0] if experiments else None,
+            "status": "COMPLETED" if completed else "PROPOSED" if active else "NO_PRIORITY",
+            "experiments_created": created_count,
+            "experiments_completed": completed_count,
+            "active_experiments": active,
+            "completed_experiments": completed,
+            "best_experiment": (completed or active or [None])[0],
             "rejected_experiments": [],
             "promoted_rules": [],
-            "blocked_promotions_reason": "Experiments require out-of-sample evidence before rule promotion.",
+            "blocked_promotions_reason": "Experiments require sufficient out-of-sample and benchmark-relative evidence before promotion.",
         }
 
 
@@ -617,6 +710,135 @@ class PaperForwardOpportunityScanner:
             "candidate_payloads_for_persistence": [item["candidate"] for item in classified],
             "next_possible_action": next_possible_action(counts, top_blockers),
         }
+
+
+def weak_memory_targets(db: Session, *, max_items: int) -> list[dict]:
+    signals = db.scalars(
+        select(SignalPerformance)
+        .where((SignalPerformance.reliability_score < 45) | (SignalPerformance.sample_count < settings.blum_learning_acceleration_min_samples))
+        .order_by(SignalPerformance.reliability_score, desc(SignalPerformance.updated_at))
+        .limit(max_items)
+    ).all()
+    memories = db.scalars(
+        select(StrategyMemory)
+        .where((StrategyMemory.reliability_score < 45) | (StrategyMemory.sample_count < settings.blum_learning_acceleration_min_samples))
+        .order_by(StrategyMemory.reliability_score, desc(StrategyMemory.updated_at))
+        .limit(max_items)
+    ).all()
+    output: list[dict] = []
+    for row in signals:
+        output.append(
+            {
+                "source": "SignalPerformance",
+                "target": row.signal_name,
+                "setup": row.signal_name,
+                "sample_count": row.sample_count,
+                "reliability_score": row.reliability_score,
+                "reason": "Signal reliability is weak or undersampled.",
+            }
+        )
+    for row in memories:
+        output.append(
+            {
+                "source": "StrategyMemory",
+                "target": row.category,
+                "setup": row.category,
+                "sample_count": row.sample_count,
+                "reliability_score": row.reliability_score,
+                "reason": "Strategy memory is weak or undersampled.",
+            }
+        )
+    return output[:max_items]
+
+
+def missed_winner_targets(db: Session, *, max_items: int) -> list[dict]:
+    rows = db.scalars(
+        select(MissedWinner)
+        .order_by(desc(MissedWinner.benchmark_relative_return), desc(MissedWinner.created_at))
+        .limit(max_items)
+    ).all()
+    return [
+        {
+            "source": "MissedWinner",
+            "ticker": row.ticker,
+            "target": row.ticker,
+            "benchmark_relative_return": row.benchmark_relative_return,
+            "reason": row.rejection_reason or "Missed winner needs replay.",
+        }
+        for row in rows
+    ]
+
+
+def benchmark_gap_blockers(db: Session) -> list[dict]:
+    rows = db.scalars(select(LearningRun).order_by(desc(LearningRun.started_at)).limit(20)).all()
+    blockers = []
+    for row in rows:
+        summary = row.summary if isinstance(row.summary, dict) else {}
+        if summary.get("benchmark_blocker") == "WALK_FORWARD_BENCHMARK_MISSING":
+            blockers.append({"run_id": row.run_id, "cause": summary.get("benchmark_missing_cause") or "benchmark calculation not materialized"})
+    return blockers[:8]
+
+
+def bounded_unique(values: list[str], limit: int) -> list[str]:
+    output: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value or "").strip()
+        key = text.lower()
+        if not text or key in seen:
+            continue
+        seen.add(key)
+        output.append(text)
+        if len(output) >= limit:
+            break
+    return output
+
+
+def next_acceleration_action(status: str, blockers: list[dict]) -> str:
+    if status == "THROTTLED":
+        return "Wait for budget guard reset, then continue bounded acceleration."
+    if blockers:
+        return "Materialize missing walk-forward benchmark comparisons before promoting learned rules."
+    if status == "COMPLETED":
+        return "Review FeedbackLoopAudit and experiment results before any model version promotion."
+    if status == "NO_EVIDENCE":
+        return "Generate ResearchPlanner priorities or scanner blockers before acceleration."
+    return "Continue scheduled bounded learning acceleration."
+
+
+def first_learning_run(acceleration_report: dict) -> dict | None:
+    rows = acceleration_report.get("learning_runs") or []
+    return rows[0] if rows and isinstance(rows[0], dict) else None
+
+
+def first_value(values: list | None, fallback: str) -> str:
+    if values:
+        return str(values[0])
+    return fallback
+
+
+def experiment_id_for(target: str, acceleration_report: dict) -> str:
+    market = first_value(acceleration_report.get("priority_markets"), "global")
+    asset_class = first_value(acceleration_report.get("priority_asset_classes"), "mixed")
+    return f"exp-{normalize_ticker(market) or 'GLOBAL'}-{normalize_ticker(asset_class) or 'MIXED'}-{normalize_ticker(target) or 'UNKNOWN'}"
+
+
+def serialize_experiment(row: BlumLearningExperiment) -> dict:
+    return {
+        "experiment_id": row.experiment_id,
+        "hypothesis": row.hypothesis,
+        "target_market": row.target_market,
+        "target_asset_class": row.target_asset_class,
+        "target_setup": row.target_setup,
+        "training_window": row.training_window,
+        "validation_window": row.validation_window,
+        "sample_size": row.sample_size,
+        "benchmark_asset": row.benchmark_asset,
+        "status": row.status,
+        "result_summary": row.result_summary,
+        "conclusion": row.conclusion,
+        "next_action": row.next_action,
+    }
 
 
 def scanner_event(event_type: str, title: str, description: str, payload: dict) -> LearningEvent:

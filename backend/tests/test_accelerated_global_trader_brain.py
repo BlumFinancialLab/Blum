@@ -1,15 +1,16 @@
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import Session
 
 from app.core.database import Base
 from app.engine.brain.trader_brain import alpha_benchmark_gap_payload, training_continuity_payload
-from app.models import Asset, LearningRun, PriceHistory
+from app.models import Asset, BlumLearningExperiment, LearningEvent, LearningFocusPriority, LearningRun, PriceHistory
 from app.services.paper_forward_opportunity_scanner import (
     BLOCKED_CANDIDATE,
     DATA_BLOCKED_CANDIDATE,
     TRADE_CANDIDATE,
+    BlumExperimentManagerAgent,
     BlumActionabilityAgent,
     BlumBenchmarkAgent,
     BlumDataAvailabilityAgent,
@@ -579,13 +580,90 @@ def test_learning_acceleration_report_is_bounded():
         report = scanner.learning_acceleration_agent.accelerate(
             db,
             scanner_summary={"top_blockers": [{"reason": "MISSING_ENTRY", "count": 3}]},
+            execute=False,
         )
 
     assert report["enabled"] is True
-    assert report["status"] in {"scheduled", "ready", "throttled", "no_evidence"}
+    assert report["status"] in {"SCHEDULED", "COMPLETED", "THROTTLED", "NO_EVIDENCE", "scheduled", "ready", "throttled", "no_evidence"}
     assert report["safety_limits_applied"]["max_runtime_seconds"] > 0
     assert "priority_setups" in report
     assert "repeated_blockers" in report
+
+
+def test_learning_acceleration_executes_bounded_learning_batches(monkeypatch):
+    calls: list[dict] = []
+
+    class FakeLearningLoopService:
+        def run_batch(self, db, batch_size=None, trigger="manual", sniper_simulation_limit=None):
+            calls.append({"batch_size": batch_size, "trigger": trigger, "sniper_simulation_limit": sniper_simulation_limit})
+            return {
+                "status": "ok",
+                "run_id": f"accelerated-{len(calls)}",
+                "reports_created": 2,
+                "batch_size": batch_size,
+                "model_version": {"status": "skipped", "reason": "threshold_not_met"},
+            }
+
+    from app.services import paper_forward_opportunity_scanner as module
+
+    monkeypatch.setattr(module, "LearningLoopService", FakeLearningLoopService)
+    with setup_db() as db:
+        db.add(
+            LearningFocusPriority(
+                priority_type="missed_entry_replay",
+                target="momentum_breakout",
+                reason="missed entries need replay",
+                expected_learning_value=88.0,
+                urgency="high",
+                status="active",
+            )
+        )
+        db.commit()
+
+        report = PaperForwardOpportunityScanner(candidate_provider=lambda db, limit: []).learning_acceleration_agent.accelerate(
+            db,
+            scanner_summary={
+                "top_blockers": [{"reason": "STALE_PRICE_DATA", "count": 3}],
+                "markets_scanned": ["us_equities"],
+                "asset_classes_scanned": ["equities"],
+            },
+            execute=True,
+        )
+
+        event_row = db.scalar(select(LearningEvent).where(LearningEvent.event_type == "blum_learning_acceleration_completed").limit(1))
+
+    assert calls
+    assert len(calls) <= report["safety_limits_applied"]["max_batches_per_run"]
+    assert calls[0]["trigger"] == "learning_acceleration"
+    assert report["status"] == "COMPLETED"
+    assert report["batches_requested"] >= 1
+    assert report["batches_completed"] == len(calls)
+    assert report["learning_runs"][0]["run_id"] == "accelerated-1"
+    assert report["memory_updates"] >= 0
+    assert event_row is not None
+
+
+def test_experiment_manager_persists_structured_experiments():
+    with setup_db() as db:
+        report = {
+            "priority_markets": ["us_equities"],
+            "priority_asset_classes": ["equities"],
+            "priority_setups": ["momentum_breakout"],
+            "learning_runs": [{"status": "ok", "run_id": "learn-test", "reports_created": 3}],
+            "batches_completed": 1,
+        }
+
+        payload = BlumExperimentManagerAgent().propose(db, acceleration_report=report)
+        row = db.scalar(select(BlumLearningExperiment).where(BlumLearningExperiment.target_setup == "momentum_breakout").limit(1))
+
+    assert payload["experiments_created"] == 1
+    assert payload["experiments_completed"] == 1
+    assert row is not None
+    assert row.status == "COMPLETED"
+    assert row.hypothesis
+    assert row.benchmark_asset == "SPY"
+    assert row.result_summary["run_id"] == "learn-test"
+    assert row.next_action
 
 
 def test_budget_wait_with_recent_productive_run_is_throttled():

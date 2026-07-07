@@ -12,6 +12,7 @@ from app.core.config import get_settings
 from app.engine.contracts import ENGINE_VERSION, PROJECT_FEATURE_SET
 from app.models import (
     AlphaRecoveryAction,
+    BlumLearningExperiment,
     BlumTradingPowerScore,
     DashboardSnapshot,
     DecisionSuperiorityScore,
@@ -185,6 +186,7 @@ class TraderBrainService:
             "budget_guard": validation.get("budget_guard"),
             "training_continuity": training_continuity,
             "learning_acceleration": latest_learning_acceleration_payload(db),
+            "learning_experiments": latest_learning_experiments_payload(db),
             "trades_being_analyzed": trade_analysis_payload(db),
             "patterns_discovered": [lesson_payload(row) for row in lessons if row.lesson_type not in ["setup_failed", "entry_timing_bad"]][:8],
             "patterns_rejected": [lesson_payload(row) for row in lessons if row.lesson_type in ["setup_failed", "entry_timing_bad"]][:8],
@@ -1037,11 +1039,13 @@ def training_continuity_payload(db: Session, latest_run: LearningRun | None) -> 
 def latest_learning_acceleration_payload(db: Session) -> dict:
     event = db.scalar(
         select(LearningEvent)
-        .where(LearningEvent.event_type == "OPPORTUNITY_SCANNED")
+        .where(LearningEvent.event_type.in_(["blum_learning_acceleration_completed", "OPPORTUNITY_SCANNED", "paper_forward_opportunity_scan_completed"]))
         .order_by(desc(LearningEvent.created_at))
         .limit(1)
     )
     payload = event.payload if event and isinstance(event.payload, dict) else {}
+    if event and event.event_type == "blum_learning_acceleration_completed":
+        return payload
     acceleration = payload.get("learning_acceleration") if isinstance(payload.get("learning_acceleration"), dict) else None
     if acceleration:
         return acceleration
@@ -1062,6 +1066,42 @@ def latest_learning_acceleration_payload(db: Session) -> dict:
             "max_runtime_seconds": settings.blum_learning_acceleration_max_runtime_seconds,
         },
         "next_acceleration_action": "Run backend scanner or manual training acceleration.",
+    }
+
+
+def latest_learning_experiments_payload(db: Session) -> dict:
+    rows = db.scalars(
+        select(BlumLearningExperiment)
+        .order_by(desc(BlumLearningExperiment.updated_at), desc(BlumLearningExperiment.created_at))
+        .limit(8)
+    ).all()
+    active = [learning_experiment_payload(row) for row in rows if row.status not in {"COMPLETED", "REJECTED", "RETIRED"}]
+    completed = [learning_experiment_payload(row) for row in rows if row.status == "COMPLETED"]
+    return {
+        "count": len(rows),
+        "active_count": len(active),
+        "completed_count": len(completed),
+        "active": active,
+        "completed": completed,
+        "status": "NO_EXPERIMENTS" if not rows else "READY",
+    }
+
+
+def learning_experiment_payload(row: BlumLearningExperiment) -> dict:
+    return {
+        "experiment_id": row.experiment_id,
+        "hypothesis": row.hypothesis,
+        "target_market": row.target_market,
+        "target_asset_class": row.target_asset_class,
+        "target_setup": row.target_setup,
+        "sample_size": row.sample_size,
+        "benchmark_asset": row.benchmark_asset,
+        "status": row.status,
+        "result_summary": row.result_summary if isinstance(row.result_summary, dict) else {},
+        "conclusion": row.conclusion,
+        "next_action": row.next_action,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
 
 

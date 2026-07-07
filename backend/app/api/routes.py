@@ -1350,9 +1350,34 @@ def paper_forward_run_lifecycle(
 def training_accelerate(db: Session = Depends(get_db)) -> dict:
     scanner = PaperForwardOpportunityScanner()
     scanner_summary = {"top_blockers": [], "markets_scanned": [], "asset_classes_scanned": []}
-    acceleration = scanner.learning_acceleration_agent.accelerate(db, scanner_summary=scanner_summary)
+    acceleration = scanner.learning_acceleration_agent.accelerate(db, scanner_summary=scanner_summary, execute=True)
     experiments = scanner.experiment_manager_agent.propose(db, acceleration_report=acceleration)
-    return {"status": "ok", "learning_acceleration": acceleration, "experiment_manager": experiments}
+    acceleration["experiments_created"] = experiments.get("experiments_created", 0)
+    acceleration["experiments_completed"] = experiments.get("experiments_completed", 0)
+    db.commit()
+    return {
+        "status": acceleration.get("status"),
+        "targets_selected": {
+            "priority_markets": acceleration.get("priority_markets", []),
+            "priority_asset_classes": acceleration.get("priority_asset_classes", []),
+            "priority_tickers": acceleration.get("priority_tickers", []),
+            "priority_setups": acceleration.get("priority_setups", []),
+            "uncertainty_targets": acceleration.get("uncertainty_targets", []),
+            "missed_opportunity_targets": acceleration.get("missed_opportunity_targets", []),
+            "repeated_blockers": acceleration.get("repeated_blockers", []),
+        },
+        "batches_requested": acceleration.get("batches_requested", 0),
+        "batches_completed": acceleration.get("batches_completed", 0),
+        "experiments_created": experiments.get("experiments_created", 0),
+        "experiments_completed": experiments.get("experiments_completed", 0),
+        "memory_updates": acceleration.get("memory_updates", 0),
+        "model_version_changes": acceleration.get("model_version_changes", []),
+        "benchmark_blockers": acceleration.get("benchmark_blockers", []),
+        "safety_limits_applied": acceleration.get("safety_limits_applied", {}),
+        "next_action": acceleration.get("next_acceleration_action"),
+        "learning_acceleration": acceleration,
+        "experiment_manager": experiments,
+    }
 
 
 @router.get("/api/learning-intelligence/dashboard")

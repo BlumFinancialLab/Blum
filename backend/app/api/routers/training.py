@@ -19,3 +19,8 @@ def training_ground(db: Session = Depends(get_db)) -> dict:
 @router.get("/api/training/snapshot")
 def training_snapshot(db: Session = Depends(get_db)) -> dict:
     return BlumEngineFacade().training_snapshot(db)
+
+
+@router.post("/api/training/accelerate")
+def training_accelerate(db: Session = Depends(get_db)) -> dict:
+    return BlumEngineFacade().training_acceleration(db)

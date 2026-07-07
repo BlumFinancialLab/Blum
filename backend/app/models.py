@@ -1423,6 +1423,33 @@ class LearningRun(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
 
+class BlumLearningExperiment(Base):
+    __tablename__ = "blum_learning_experiments"
+    __table_args__ = (
+        UniqueConstraint("experiment_id", name="uq_blum_learning_experiment_id"),
+        Index("ix_blum_learning_experiments_status_created", "status", "created_at"),
+        Index("ix_blum_learning_experiments_setup_status", "target_setup", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    experiment_id: Mapped[str] = mapped_column(String(140), unique=True, index=True)
+    hypothesis: Mapped[str] = mapped_column(Text, default="")
+    target_market: Mapped[str] = mapped_column(String(100), default="", index=True)
+    target_asset_class: Mapped[str] = mapped_column(String(80), default="", index=True)
+    target_setup: Mapped[str] = mapped_column(String(140), default="", index=True)
+    training_window: Mapped[dict] = mapped_column(JsonType, default=dict)
+    validation_window: Mapped[dict] = mapped_column(JsonType, default=dict)
+    sample_size: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    benchmark_asset: Mapped[str] = mapped_column(String(32), default="SPY", index=True)
+    status: Mapped[str] = mapped_column(String(40), default="PROPOSED", index=True)
+    result_summary: Mapped[dict] = mapped_column(JsonType, default=dict)
+    conclusion: Mapped[str] = mapped_column(Text, default="")
+    next_action: Mapped[str] = mapped_column(Text, default="")
+    source_payload: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
 class HistoricalPrediction(Base):
     __tablename__ = "historical_predictions"
     __table_args__ = (
