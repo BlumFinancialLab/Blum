@@ -35,6 +35,7 @@ from app.services.trading_intelligence_lab import (
     live_forward_duplicate_key,
     paper_forward_actionability_summary,
     period_return,
+    price_on_or_before,
     safe_float,
     serialize_live_event,
     serialize_paper_forward_trade,
@@ -472,11 +473,13 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
 
         game = self.active_or_create_live_game(db)
         try:
+            events_before = int(db.scalar(select(func.count(LiveForwardPaperTradeEvent.id))) or 0)
             opened = self.open_eligible_trades(db)
             updated = self.update_open_trades(db)
             closed = self.close_resolved_trades(db)
             lessons = self.publish_lessons(db)
             self.refresh_live_game_counts(db, game)
+            events_after = int(db.scalar(select(func.count(LiveForwardPaperTradeEvent.id))) or 0)
             db.commit()
             snapshot = self.publish_snapshot(db)
             return {
@@ -489,6 +492,14 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
                     "close_resolved_trades": closed,
                     "publish_lessons": {"created": len(lessons), "lessons": lessons[:8]},
                 },
+                "candidates_checked": len(opened.get("opened", [])) + len(opened.get("waiting", [])) + len(opened.get("data_blocked", [])) + len(opened.get("skipped", [])),
+                "opened_trades": len(opened.get("opened", [])),
+                "updated_trades": len(updated.get("updated", [])),
+                "closed_trades": len(closed.get("closed", [])),
+                "blocked_candidates": len(opened.get("data_blocked", [])) + len(opened.get("skipped", [])),
+                "waiting_for_trigger": len(opened.get("waiting", [])),
+                "events_created": max(0, events_after - events_before),
+                "next_action": "Run /api/paper-forward/run-lifecycle again after fresh market data or candidate creation.",
                 "actionability_summary": snapshot.get("payload", {}).get("actionability_summary") if isinstance(snapshot, dict) else None,
                 "snapshot_status": snapshot.get("status"),
                 "current_blockers": snapshot.get("payload", {}).get("current_blockers", []) if isinstance(snapshot, dict) else [],
@@ -530,6 +541,15 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
             if int(live_game.open_positions or 0) >= settings.live_trading_game_max_open_positions:
                 skipped.append({"trade_id": trade.id, "ticker": trade.ticker, "reason": "max_open_positions_reached"})
                 break
+
+            if classification_from_trade(trade) != TRADE_CANDIDATE:
+                waiting.append({
+                    "trade_id": trade.id,
+                    "ticker": trade.ticker,
+                    "reason": "non_trade_candidate",
+                    "classification": classification_from_trade(trade),
+                })
+                continue
 
             latest = latest_market_price_after(db, trade.ticker, trade.decision_timestamp)
             if latest is None:
@@ -837,11 +857,27 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
         scanner_summary = paper_forward_scanner_snapshot_summary(scanner_rows)
         scanner_summary = {**scanner_summary, **latest_scanner_event_summary(db, scanner_summary)}
         lifecycle_mode = self.lifecycle_mode(actionability_summary)
+        opened_today = int(db.scalar(select(func.count(LiveForwardPaperTrade.id)).where(LiveForwardPaperTrade.game_id == game.id, LiveForwardPaperTrade.status == "OPEN", func.date(LiveForwardPaperTrade.opened_at) == date.today())) or 0)
+        closed_today = int(db.scalar(select(func.count(LiveForwardPaperTrade.id)).where(LiveForwardPaperTrade.game_id == game.id, LiveForwardPaperTrade.status.in_(["CLOSED", "EXPIRED", "INVALIDATED"]), func.date(LiveForwardPaperTrade.closed_at) == date.today())) or 0)
+        latest_open_trades = db.scalars(
+            select(LiveForwardPaperTrade)
+            .where(LiveForwardPaperTrade.game_id == game.id, LiveForwardPaperTrade.status == "OPEN")
+            .order_by(desc(LiveForwardPaperTrade.opened_at))
+            .limit(8)
+        ).all()
+        latest_closed_trades = db.scalars(
+            select(LiveForwardPaperTrade)
+            .where(LiveForwardPaperTrade.game_id == game.id, LiveForwardPaperTrade.status.in_(["CLOSED", "EXPIRED", "INVALIDATED"]))
+            .order_by(desc(LiveForwardPaperTrade.closed_at))
+            .limit(8)
+        ).all()
         payload.update(
             {
+                "lifecycle_enabled": bool(settings.paper_forward_lifecycle_enabled),
                 "readiness_status": payload.get("readiness"),
                 "last_run_at": payload.get("last_worker_run"),
                 "paper_forward_lifecycle_mode": lifecycle_mode,
+                "lifecycle_mode": lifecycle_mode,
                 "actionability_policy": ActionabilityPolicy().to_dict(),
                 "actionability_summary": actionability_summary,
                 "candidate_count": total_counts["candidate_count"],
@@ -860,6 +896,23 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
                 "invalidated_count": total_counts["invalidated_count"],
                 "data_blocked_count": total_counts["data_blocked_count"],
                 "error_count": total_counts["error_count"],
+                "opened_today": opened_today,
+                "closed_today": closed_today,
+                "latest_open_trades": [serialize_paper_forward_trade(row, compact=True) for row in latest_open_trades],
+                "latest_closed_trades": [serialize_paper_forward_trade(row, compact=True) for row in latest_closed_trades],
+                "latest_lifecycle_events": [serialize_live_event(row) for row in latest_events],
+                "reason_if_no_open_trades": total_counts["open_count"] == 0 and paper_forward_open_count_reason(total_counts["open_count"], total_counts["candidate_count"], total_counts["waiting_for_trigger_count"]) or None,
+                "reason_if_no_closed_trades": total_counts["closed_count"] == 0 and paper_forward_closed_count_reason(
+                    total_counts["closed_count"],
+                    total_counts["open_count"],
+                    total_counts["candidate_count"],
+                    total_counts["waiting_for_trigger_count"],
+                ) or None,
+                "next_lifecycle_action": (
+                    "Enable PAPER_FORWARD_LIFECYCLE_ENABLED to activate paper-forward lifecycle." if not settings.paper_forward_lifecycle_enabled else
+                    "Run /api/paper-forward/run-lifecycle after fresh market data and candidate creation." if total_counts["open_count"] == 0 else
+                    "Continue monitoring open trades with /api/paper-forward/run-lifecycle as new market data arrives."
+                ),
                 "latest_candidates": payload.get("candidates", []),
                 "recently_closed_trades": payload.get("recently_closed", []),
                 "latest_events": [serialize_live_event(row) for row in latest_events],
@@ -1041,6 +1094,31 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
             "POSITION_OPENED",
             "Paper position opened. No broker execution.",
             payload={"position_size": trade.position_size, "risk_amount": trade.risk_amount, "entry_date": latest_date.isoformat()},
+            price_used=latest_price,
+        )
+        benchmark_price_at_open = price_on_or_before(db, trade.benchmark_ticker or game.benchmark_ticker, latest_date)
+        plan = (trade.frozen_decision_payload or {}).get("trade_plan") or {}
+        self.append_event_once(
+            db,
+            trade,
+            "PAPER_TRADE_OPENED",
+            "Paper-forward trade opened after the frozen entry condition was met.",
+            payload={
+                "opened_at": now.isoformat(),
+                "open_price": latest_price,
+                "quantity": trade.position_size,
+                "notional_value": trade.notional_value,
+                "stop_price": trade.stop_loss,
+                "target_1": trade.target_1,
+                "target_2": trade.target_2,
+                "initial_risk": trade.expected_risk,
+                "expected_holding_days": plan.get("expected_holding_days") or plan.get("expected_holding_period"),
+                "benchmark_price_at_open": benchmark_price_at_open,
+                "model_version_used": trade.model_version_used,
+                "weights_used": trade.weights_used,
+                "strategy_memory_used": trade.strategy_memory_used,
+                "frozen_decision_payload": trade.frozen_decision_payload,
+            },
             price_used=latest_price,
         )
         return serialize_paper_forward_trade(trade, compact=True)

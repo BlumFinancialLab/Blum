@@ -12,6 +12,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app/backend \
     NEXT_TELEMETRY_DISABLED=1 \
     TOKENIZERS_PARALLELISM=false \
+    PAPER_FORWARD_LIFECYCLE_ENABLED=true \
     PORT=7860
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
