@@ -5,7 +5,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 
-revision = "0029_learning_acceleration_engine"
+revision = "0029_learning_accel"
 down_revision = "0028_paper_forward_core"
 branch_labels = None
 depends_on = None
