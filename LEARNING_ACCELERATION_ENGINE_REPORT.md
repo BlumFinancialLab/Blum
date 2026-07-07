@@ -102,10 +102,59 @@ Smoke results:
 - `GET /api/alpha/snapshot`: `BACKEND_NOT_RUNNING`
 - `POST /api/training/accelerate`: `BACKEND_NOT_RUNNING`
 
+## Remote deployment
+
+Hugging Face Space:
+
+- `Italianhype/Blum`
+
+Commits deployed:
+
+- `7ccbfff869629855cc655cf04a5d56834d7b955a` - initial learning acceleration upload
+- `fa3b3785194b4410bb77ccacdb227fd25e32bce4` - Alembic revision-id fix
+
+Runtime verification:
+
+- runtime stage: `RUNNING`
+- runtime sha: `fa3b3785194b4410bb77ccacdb227fd25e32bce4`
+
+Remote smoke checks after deploy:
+
+- `GET /api/brain/snapshot`: `200`
+- `GET /api/training/snapshot`: `200`
+- `GET /api/alpha/snapshot`: `200`
+- `POST /api/training/accelerate`: `200`
+
+Observed remote acceleration result:
+
+```json
+{
+  "status": "THROTTLED",
+  "batches_requested": 3,
+  "batches_completed": 2,
+  "experiments_created": 3,
+  "experiments_completed": 3,
+  "memory_updates": 0,
+  "next_action": "Wait for budget guard reset, then continue bounded acceleration."
+}
+```
+
+Post-run Training snapshot evidence:
+
+- `learning_acceleration.status`: `THROTTLED`
+- `learning_acceleration.batches_requested`: `3`
+- `learning_acceleration.batches_completed`: `2`
+- `learning_experiments.count`: `3`
+- `learning_experiments.completed_count`: `3`
+
+Deployment issue fixed:
+
+- The first remote deploy failed during Alembic upgrade because the revision id `0029_learning_acceleration_engine` exceeded the Space database's `alembic_version.version_num` length.
+- Fixed by shortening the revision id to `0029_learning_accel`.
+
 ## Known limitations
 
 - Manual acceleration only executes when stored evidence targets exist; it does not invent training samples.
 - Model version promotion remains governed by existing evidence thresholds.
 - Walk-forward benchmark gaps are surfaced as blockers; this sprint does not backfill missing benchmark rows.
 - Real improvement still depends on the quality and breadth of stored historical market data.
-
