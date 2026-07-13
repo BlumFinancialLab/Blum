@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Callable, Protocol
 
 from sqlalchemy import func, select
@@ -173,7 +173,9 @@ class BaseMarketDeskAgent:
     def _is_stale(self, latest_date: date) -> bool:
         if self.stale_after_hours <= 0:
             return False
-        latest = datetime.combine(latest_date, datetime.min.time())
+        # PriceHistory stores a market date, not an intraday observation time.
+        # Keep a Friday daily bar fresh through the weekend freshness budget.
+        latest = datetime.combine(latest_date, time.max)
         return latest < datetime.utcnow() - timedelta(hours=self.stale_after_hours)
 
     def _availability_payload(self, status: str, configured_count: int, eligible_count: int) -> dict:

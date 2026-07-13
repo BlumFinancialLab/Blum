@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -136,6 +136,19 @@ def test_unavailable_agent_remains_skipped_when_reused_after_discovery():
     assert availability["status"] == "NO_ASSETS_CONFIGURED"
     assert result["skipped_reason"] == "NO_ASSETS_CONFIGURED"
     assert result["opportunities_found"] == 0
+
+
+def test_daily_bar_freshness_uses_end_of_market_date():
+    with setup_db() as db:
+        asset = add_asset(db, "NVDA")
+        stored = db.query(PriceHistory).filter(PriceHistory.asset_id == asset.id).one()
+        stored.date = date.today() - timedelta(days=4)
+        db.commit()
+
+        availability = NasdaqAgent(stale_after_hours=96.0).availability(db)
+
+    assert availability["status"] == "AVAILABLE"
+    assert availability["eligible_asset_count"] == 1
 
 
 def test_quant_edge_rejects_candidate_when_sample_is_insufficient():

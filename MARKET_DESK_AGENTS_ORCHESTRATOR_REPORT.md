@@ -56,7 +56,7 @@ Verdicts are:
 - `REJECTED_BENCHMARK_UNDERPERFORMANCE`
 - `DATA_BLOCKED`
 
-Approval requires the configured minimum sample size, positive expectancy, sufficient edge score, acceptable risk/reward, no high overfitting risk and no measured benchmark underperformance. Stored fractional rates are normalized consistently (`0.58` is reported as `58%`). Sharpe and Sortino remain `null` when no persisted source supplies them.
+Approval requires the configured minimum sample size, positive expectancy, sufficient edge score, acceptable risk/reward, no high overfitting risk and no measured benchmark underperformance. Stored fractional rates are normalized consistently (`0.58` is reported as `58%`). Sharpe and Sortino remain `null` when no persisted source supplies them. Daily OHLCV freshness uses the end of the stored market date, preventing a Friday close from being rejected early on Monday solely because `PriceHistory.date` has no intraday timestamp.
 
 ## Diversification Rules
 
