@@ -11,17 +11,19 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.models import Asset, BlumLearningExperiment, LearningEvent, LearningFocusPriority, LearningRun, MissedWinner, PriceHistory, SignalPerformance, StrategyMemory
 from app.services.learning_loop import LearningLoopService
+from app.services.paper_forward_contracts import (
+    BLOCKED_CANDIDATE,
+    DATA_BLOCKED_CANDIDATE,
+    SUPPORTED_CLASSIFICATIONS,
+    TRADE_CANDIDATE,
+    WATCHLIST_CANDIDATE,
+)
 from app.services.trading_intelligence_lab import ActionabilityPolicy, diagnose_candidate_actionability, risk_reward_ratio_from_plan, safe_float
 
 
 settings = get_settings()
 
 
-TRADE_CANDIDATE = "TRADE_CANDIDATE"
-WATCHLIST_CANDIDATE = "WATCHLIST_CANDIDATE"
-BLOCKED_CANDIDATE = "BLOCKED_CANDIDATE"
-DATA_BLOCKED_CANDIDATE = "DATA_BLOCKED_CANDIDATE"
-SUPPORTED_CLASSIFICATIONS = {TRADE_CANDIDATE, WATCHLIST_CANDIDATE, BLOCKED_CANDIDATE, DATA_BLOCKED_CANDIDATE}
 DATA_BLOCKING_QUALITY_STATUSES = {
     "MARKET_DATA_UNAVAILABLE",
     "OHLCV_MISSING",
@@ -370,8 +372,14 @@ class PaperForwardOpportunityScanner:
     intelligence into classified candidate payloads and a cross-market report.
     """
 
-    def __init__(self, *, candidate_provider: CandidateProvider | None = None):
+    def __init__(self, *, candidate_provider: CandidateProvider | None = None, orchestrator=None):
         self.candidate_provider = candidate_provider
+        self._orchestrator_injected = orchestrator is not None
+        self.orchestrator = orchestrator
+        if self.orchestrator is None and self.candidate_provider is None and settings.blum_cross_market_orchestrator_enabled:
+            from app.services.cross_market_orchestrator import BlumCrossMarketOpportunityOrchestrator
+
+            self.orchestrator = BlumCrossMarketOpportunityOrchestrator()
         self.last_universe_report: dict | None = None
         self.learning_acceleration_agent = BlumLearningAccelerationAgent()
         self.experiment_manager_agent = BlumExperimentManagerAgent()
@@ -390,23 +398,28 @@ class PaperForwardOpportunityScanner:
             scan_stale_data_max_age_hours=max(0.0, float(settings.paper_forward_scan_stale_data_max_age_hours)),
             cross_market_ranking_enabled=bool(settings.paper_forward_cross_market_ranking_enabled),
         )
+        self._default_thresholds = self.thresholds
 
     def scan(self, db: Session, *, limit: int | None = None) -> dict:
         max_items = max(1, min(int(limit or self.thresholds.max_candidates_per_run), self.thresholds.max_candidates_per_run))
-        raw_candidates = self.raw_candidates(db, max_items)
-        assets_by_ticker = assets_for_candidates(db, raw_candidates)
-        benchmark_availability = benchmark_availability_details_map(
-            db,
-            required_benchmark_tickers(raw_candidates, assets_by_ticker),
-            max_stale_hours=self.thresholds.scan_stale_data_max_age_hours,
-        )
+        use_orchestrator = self.orchestrator is not None and (self._orchestrator_injected or self.thresholds == self._default_thresholds)
+        if use_orchestrator:
+            summary = orchestrator_compatibility_summary(self.orchestrator.run(db, limit=max_items), self.thresholds)
+        else:
+            raw_candidates = self.raw_candidates(db, max_items)
+            assets_by_ticker = assets_for_candidates(db, raw_candidates)
+            benchmark_availability = benchmark_availability_details_map(
+                db,
+                required_benchmark_tickers(raw_candidates, assets_by_ticker),
+                max_stale_hours=self.thresholds.scan_stale_data_max_age_hours,
+            )
 
-        classified: list[dict] = []
-        for rank, candidate in enumerate(raw_candidates, start=1):
-            enriched = self.enrich_candidate(candidate, assets_by_ticker.get(normalize_ticker(candidate.get("ticker"))), benchmark_availability)
-            classified.append(self.classify_candidate(enriched, rank))
+            classified: list[dict] = []
+            for rank, candidate in enumerate(raw_candidates, start=1):
+                enriched = self.enrich_candidate(candidate, assets_by_ticker.get(normalize_ticker(candidate.get("ticker"))), benchmark_availability)
+                classified.append(self.classify_candidate(enriched, rank))
 
-        summary = self.summary(db, classified)
+            summary = self.summary(db, classified)
         summary["learning_acceleration"] = self.learning_acceleration_agent.accelerate(db, scanner_summary=summary)
         summary["experiment_manager"] = self.experiment_manager_agent.propose(db, acceleration_report=summary["learning_acceleration"])
         db.add(
@@ -427,6 +440,7 @@ class PaperForwardOpportunityScanner:
                     "thresholds": summary["thresholds"],
                     "learning_acceleration": summary["learning_acceleration"],
                     "experiment_manager": summary["experiment_manager"],
+                    **orchestrator_event_fields(summary),
                 },
             )
         )
@@ -462,6 +476,7 @@ class PaperForwardOpportunityScanner:
                     "thresholds": summary["thresholds"],
                     "learning_acceleration": summary["learning_acceleration"],
                     "experiment_manager": summary["experiment_manager"],
+                    **orchestrator_event_fields(summary),
                 },
             )
         )
@@ -710,6 +725,72 @@ class PaperForwardOpportunityScanner:
             "candidate_payloads_for_persistence": [item["candidate"] for item in classified],
             "next_possible_action": next_possible_action(counts, top_blockers),
         }
+
+
+def orchestrator_compatibility_summary(report: dict, thresholds: ScannerThresholds) -> dict:
+    verdict_counts = (report.get("quant_edge_summary") or {}).get("verdict_counts") or {}
+    top_blockers = [
+        {"reason": verdict, "count": int(count)}
+        for verdict, count in sorted(verdict_counts.items(), key=lambda item: int(item[1]), reverse=True)
+        if verdict != "APPROVED_FOR_PAPER"
+    ][:8]
+    opportunities_by_agent = report.get("opportunities_by_agent") or {}
+    assets_scanned_by_market: dict[str, int] = defaultdict(int)
+    for _agent_name, payload in opportunities_by_agent.items():
+        market = payload.get("market") or "unknown"
+        assets_scanned_by_market[str(market)] += int(payload.get("assets_scanned") or 0)
+
+    latest_trade = report.get("latest_trade_candidates") or []
+    latest_watch = report.get("latest_watchlist_candidates") or []
+    latest_blocked = report.get("latest_blocked_candidates") or []
+    latest_data_blocked = report.get("latest_data_blocked_candidates") or []
+    skipped = report.get("skipped_markets") or []
+    return {
+        **report,
+        "thresholds": thresholds.to_dict(),
+        "top_blockers": top_blockers,
+        "best_trade_candidate": latest_trade[0] if latest_trade else None,
+        "best_watchlist_candidate": latest_watch[0] if latest_watch else None,
+        "assets_scanned_by_market": dict(assets_scanned_by_market),
+        "trade_candidates_by_market": candidate_counts_by_market(latest_trade),
+        "watchlist_candidates_by_market": candidate_counts_by_market(latest_watch),
+        "blocked_candidates_by_market": candidate_counts_by_market(latest_blocked),
+        "data_blocked_candidates_by_market": candidate_counts_by_market(latest_data_blocked),
+        "reason_if_markets_were_skipped": skipped_reason_text(skipped),
+        "next_possible_action": (
+            "Freeze Quant Edge approved candidates and wait for lifecycle trigger evaluation."
+            if report.get("trade_candidate_count")
+            else "Increase stored historical evidence for the highest-ranked rejected setups."
+        ),
+        "created_trade_candidates": [],
+        "created_watchlist_candidates": [],
+        "created_blocked_candidates": [],
+        "created_data_blocked_candidates": [],
+        "duplicates": [],
+    }
+
+
+def candidate_counts_by_market(rows: list[dict]) -> dict[str, int]:
+    counts = Counter(str(row.get("market") or "unknown") for row in rows)
+    return dict(counts)
+
+
+def orchestrator_event_fields(summary: dict) -> dict:
+    return {
+        "enabled_market_desk_agents": summary.get("enabled_market_desk_agents", []),
+        "agents_run": summary.get("agents_run", []),
+        "agents_skipped": summary.get("agents_skipped", []),
+        "opportunities_by_agent": summary.get("opportunities_by_agent", {}),
+        "best_opportunity_by_agent": summary.get("best_opportunity_by_agent", {}),
+        "top_cross_market_opportunities": summary.get("top_cross_market_opportunities", []),
+        "quant_edge_summary": summary.get("quant_edge_summary", {}),
+        "rejected_no_edge_count": summary.get("rejected_no_edge_count", 0),
+        "rejected_overfitting_count": summary.get("rejected_overfitting_count", 0),
+        "rejected_insufficient_sample_count": summary.get("rejected_insufficient_sample_count", 0),
+        "diversification_summary": summary.get("diversification_summary", {}),
+        "repeated_ticker_warning": summary.get("repeated_ticker_warning", False),
+        "reason_if_same_tickers_repeat": summary.get("reason_if_same_tickers_repeat"),
+    }
 
 
 def weak_memory_targets(db: Session, *, max_items: int) -> list[dict]:

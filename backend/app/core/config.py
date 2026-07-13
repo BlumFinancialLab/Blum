@@ -119,6 +119,24 @@ class Settings(BaseSettings):
     paper_forward_max_assets_per_market: int = Field(default=25, alias="PAPER_FORWARD_MAX_ASSETS_PER_MARKET")
     paper_forward_scan_stale_data_max_age_hours: float = Field(default=72.0, alias="PAPER_FORWARD_SCAN_STALE_DATA_MAX_AGE_HOURS")
     paper_forward_cross_market_ranking_enabled: bool = Field(default=True, alias="PAPER_FORWARD_CROSS_MARKET_RANKING_ENABLED")
+    blum_enabled_market_desk_agents: str = Field(
+        default=(
+            "FTSEMIBAgent,DAXAgent,CAC40Agent,IBEX35Agent,SMIAgent,EuroStoxx50Agent,"
+            "WallStreetAgent,SP500Agent,NasdaqAgent,DowJonesAgent,Russell2000Agent,"
+            "NikkeiAgent,HangSengAgent,IndiaNiftyAgent,ChinaAAgent,EmergingMarketsAgent,"
+            "ETFDeskAgent,CryptoDeskAgent,ForexDeskAgent,CommodityDeskAgent,"
+            "RatesBondProxyAgent,VolatilityDeskAgent"
+        ),
+        alias="BLUM_ENABLED_MARKET_DESK_AGENTS",
+    )
+    blum_max_candidates_per_agent: int = Field(default=5, alias="BLUM_MAX_CANDIDATES_PER_AGENT")
+    blum_max_candidates_per_market: int = Field(default=8, alias="BLUM_MAX_CANDIDATES_PER_MARKET")
+    blum_max_candidates_per_asset_class: int = Field(default=12, alias="BLUM_MAX_CANDIDATES_PER_ASSET_CLASS")
+    blum_max_candidates_per_ticker: int = Field(default=1, alias="BLUM_MAX_CANDIDATES_PER_TICKER")
+    blum_cross_market_orchestrator_enabled: bool = Field(default=True, alias="BLUM_CROSS_MARKET_ORCHESTRATOR_ENABLED")
+    blum_quant_edge_min_score: float = Field(default=60.0, alias="BLUM_QUANT_EDGE_MIN_SCORE")
+    blum_quant_edge_min_sample_size: int = Field(default=20, alias="BLUM_QUANT_EDGE_MIN_SAMPLE_SIZE")
+    blum_reject_high_overfitting_risk: bool = Field(default=True, alias="BLUM_REJECT_HIGH_OVERFITTING_RISK")
     blum_learning_acceleration_enabled: bool = Field(default=True, alias="BLUM_LEARNING_ACCELERATION_ENABLED")
     blum_learning_acceleration_max_batches_per_run: int = Field(default=3, alias="BLUM_LEARNING_ACCELERATION_MAX_BATCHES_PER_RUN")
     blum_learning_acceleration_max_assets_per_run: int = Field(default=30, alias="BLUM_LEARNING_ACCELERATION_MAX_ASSETS_PER_RUN")

@@ -551,6 +551,19 @@ def test_paper_forward_snapshot_exposes_scanner_acceleration_and_count_reasons()
                     "best_cross_market_candidate": {"ticker": "NVDA", "score": 92.0},
                     "markets_scanned": ["us_equities", "europe_equities"],
                     "asset_classes_scanned": ["equities", "etfs"],
+                    "enabled_market_desk_agents": ["NasdaqAgent", "DAXAgent"],
+                    "agents_run": ["NasdaqAgent"],
+                    "agents_skipped": [{"agent_name": "DAXAgent", "status": "NO_ASSETS_CONFIGURED"}],
+                    "opportunities_by_agent": {"NasdaqAgent": {"trade_candidates": 4}},
+                    "best_opportunity_by_agent": {"NasdaqAgent": {"ticker": "NVDA", "score": 92.0}},
+                    "top_cross_market_opportunities": [{"ticker": "NVDA", "score": 92.0}],
+                    "quant_edge_summary": {"assessed_count": 14, "approved_count": 4},
+                    "rejected_no_edge_count": 3,
+                    "rejected_overfitting_count": 2,
+                    "rejected_insufficient_sample_count": 5,
+                    "diversification_summary": {"selected_by_market": {"nasdaq": 4}},
+                    "repeated_ticker_warning": False,
+                    "reason_if_same_tickers_repeat": None,
                     "learning_acceleration": {
                         "status": "ready",
                         "priority_markets": ["us_equities"],
@@ -575,6 +588,14 @@ def test_paper_forward_snapshot_exposes_scanner_acceleration_and_count_reasons()
         assert snapshot["priority_setups"] == ["momentum_breakout"]
         assert snapshot["repeated_blockers"] == ["BENCHMARK_STALE"]
         assert snapshot["missed_opportunity_targets"] == ["NVDA"]
+        assert snapshot["enabled_market_desk_agents"] == ["NasdaqAgent", "DAXAgent"]
+        assert snapshot["agents_run"] == ["NasdaqAgent"]
+        assert snapshot["agents_skipped"][0]["agent_name"] == "DAXAgent"
+        assert snapshot["opportunities_by_agent"]["NasdaqAgent"]["trade_candidates"] == 4
+        assert snapshot["top_cross_market_opportunities"][0]["ticker"] == "NVDA"
+        assert snapshot["quant_edge_summary"]["approved_count"] == 4
+        assert snapshot["rejected_insufficient_sample_count"] == 5
+        assert snapshot["diversification_summary"]["selected_by_market"] == {"nasdaq": 4}
         assert "No paper-forward trades have opened yet" in snapshot["open_count_reason"]
         assert "No paper-forward trades have closed yet" in snapshot["closed_count_reason"]
 
