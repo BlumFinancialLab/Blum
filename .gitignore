@@ -10,3 +10,4 @@ frontend/.next/
 frontend/out/
 backend/app/static/
 *.db
+.worktrees/
