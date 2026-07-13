@@ -3,6 +3,8 @@ from __future__ import annotations
 import pytest
 
 from app.services.copy_readiness_metrics import (
+    EvidenceProvenance,
+    ForwardEvidenceProvenance,
     ReadinessContext,
     ReadinessThresholds,
     canonical_evidence_class,
@@ -14,11 +16,39 @@ from app.services.copy_readiness_metrics import (
 )
 
 
+def replay_provenance(**overrides) -> EvidenceProvenance:
+    values = {
+        "canonical_evidence_class": "REPLAY_EVIDENCE",
+        "source_projection_id": "replay:strategy-a",
+        "strategy_identity": "strategy-a",
+        "horizon": "1d",
+        "terminal": True,
+        "closed_count": 500,
+    }
+    values.update(overrides)
+    return EvidenceProvenance(**values)
+
+
+def forward_provenance(**overrides) -> ForwardEvidenceProvenance:
+    values = {
+        "canonical_evidence_class": "PAPER_FORWARD_EVIDENCE",
+        "source_projection_id": "paper:strategy-a",
+        "strategy_identity": "strategy-a",
+        "horizon": "1d",
+        "terminal": True,
+        "closed_count": 40,
+        "compatible_with_replay": True,
+    }
+    values.update(overrides)
+    return ForwardEvidenceProvenance(**values)
+
+
 def context_fixture(**overrides) -> ReadinessContext:
     values = {
         "replay_sample": 500,
         "global_forward_sample": 120,
         "forward_sample": 40,
+        "replay_evidence": replay_provenance(),
         "observation_days": 120,
         "net_expectancy": 0.25,
         "benchmark_excess": 1.2,
@@ -35,6 +65,32 @@ def context_fixture(**overrides) -> ReadinessContext:
         "previous_status": None,
     }
     values.update(overrides)
+    strategy_forward_evidence = values.get("strategy_forward_evidence") or forward_provenance(
+        closed_count=values["forward_sample"],
+    )
+    values["strategy_forward_evidence"] = strategy_forward_evidence
+    if "global_forward_evidence" not in overrides:
+        global_count = values["global_forward_sample"]
+        forward_count = values["forward_sample"]
+        remaining_count = (
+            global_count - forward_count
+            if isinstance(global_count, int) and isinstance(forward_count, int)
+            else None
+        )
+        values["global_forward_evidence"] = (
+            (strategy_forward_evidence,)
+            if remaining_count in (None, 0)
+            else (
+                strategy_forward_evidence,
+                forward_provenance(
+                    canonical_evidence_class="INTRADAY_FORWARD_EVIDENCE",
+                    source_projection_id="intraday:strategy-b",
+                    strategy_identity="strategy-b",
+                    horizon="1m",
+                    closed_count=remaining_count,
+                ),
+            )
+        )
     return ReadinessContext(**values)
 
 
@@ -50,6 +106,14 @@ def context_fixture(**overrides) -> ReadinessContext:
 )
 def test_canonical_evidence_class_normalizes_legacy_and_mode_values(value, trading_mode, expected):
     assert canonical_evidence_class(value, trading_mode) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "trading_mode"),
+    [(None, None), ("unknown evidence", None), (None, "candidate")],
+)
+def test_canonical_evidence_class_keeps_missing_or_unknown_values_unavailable(value, trading_mode):
+    assert canonical_evidence_class(value, trading_mode) is None
 
 
 def test_wilson_interval_is_null_for_an_empty_sample():
@@ -92,8 +156,18 @@ def test_decay_does_not_fabricate_a_comparison_when_evidence_is_missing():
 
 def test_decay_classifies_material_forward_loss_as_failure():
     result = evaluate_decay(
-        {"net_expectancy": 0.5, "profit_factor": 2.0, "max_drawdown": 5.0},
-        {"net_expectancy": -0.1, "profit_factor": 0.8, "max_drawdown": 8.0},
+        {
+            "provenance": replay_provenance(),
+            "net_expectancy": 0.5,
+            "profit_factor": 2.0,
+            "max_drawdown": 5.0,
+        },
+        {
+            "provenance": forward_provenance(),
+            "net_expectancy": -0.1,
+            "profit_factor": 0.8,
+            "max_drawdown": 8.0,
+        },
         ReadinessThresholds(),
     )
 
@@ -102,13 +176,44 @@ def test_decay_classifies_material_forward_loss_as_failure():
 
 def test_decay_classifies_expectancy_degradation_against_thresholds():
     result = evaluate_decay(
-        {"net_expectancy": 1.0},
-        {"net_expectancy": 0.6},
+        {"provenance": replay_provenance(), "net_expectancy": 1.0},
+        {"provenance": forward_provenance(), "net_expectancy": 0.6},
         ReadinessThresholds(max_decay_pct=35.0),
     )
 
     assert result["performance_decay_pct"] == pytest.approx(40.0)
     assert result["status"] == "HIGH_DECAY"
+
+
+def test_decay_rejects_mixed_class_forward_performance():
+    result = evaluate_decay(
+        {"provenance": replay_provenance(), "net_expectancy": 1.0},
+        {
+            "provenance": (
+                forward_provenance(),
+                forward_provenance(
+                    canonical_evidence_class="INTRADAY_FORWARD_EVIDENCE",
+                    source_projection_id="intraday:strategy-a",
+                ),
+            ),
+            "net_expectancy": 0.8,
+        },
+        ReadinessThresholds(),
+    )
+
+    assert result["status"] == "INSUFFICIENT_EVIDENCE"
+    assert result["performance_decay_pct"] is None
+
+
+def test_decay_rejects_incompatible_horizons():
+    result = evaluate_decay(
+        {"provenance": replay_provenance(horizon="1d"), "net_expectancy": 1.0},
+        {"provenance": forward_provenance(horizon="1m"), "net_expectancy": 0.8},
+        ReadinessThresholds(),
+    )
+
+    assert result["status"] == "INSUFFICIENT_EVIDENCE"
+    assert result["performance_decay_pct"] is None
 
 
 def test_replay_only_cannot_be_copy_ready():
@@ -157,6 +262,92 @@ def test_terminal_forward_evidence_can_reach_copy_ready():
 
     assert decision.status == "COPY_READY_PAPER_ONLY"
     assert decision.maturity_score == 100.0
+
+
+@pytest.mark.parametrize(
+    ("provenance", "expected_gate"),
+    [
+        (forward_provenance(terminal=False), "strategy_forward_evidence_not_terminal"),
+        (
+            forward_provenance(canonical_evidence_class="REPLAY_EVIDENCE"),
+            "strategy_forward_evidence_class_invalid",
+        ),
+        (
+            forward_provenance(canonical_evidence_class="UNKNOWN_EVIDENCE"),
+            "strategy_forward_evidence_class_invalid",
+        ),
+    ],
+)
+def test_non_forward_or_non_terminal_provenance_cannot_promote(provenance, expected_gate):
+    decision = evaluate_copy_readiness(
+        context_fixture(
+            strategy_forward_evidence=provenance,
+            global_forward_evidence=(provenance,),
+            forward_sample=40,
+            global_forward_sample=40,
+        ),
+        ReadinessThresholds(global_forward_trades=40),
+    )
+
+    assert decision.status != "COPY_READY_PAPER_ONLY"
+    assert expected_gate in decision.failed_gates
+
+
+def test_global_maturity_unions_only_closed_canonical_forward_counts():
+    paper = forward_provenance(closed_count=60)
+    intraday = forward_provenance(
+        canonical_evidence_class="INTRADAY_FORWARD_EVIDENCE",
+        source_projection_id="intraday:strategy-b",
+        strategy_identity="strategy-b",
+        horizon="1m",
+        closed_count=60,
+    )
+    decision = evaluate_copy_readiness(
+        context_fixture(
+            strategy_forward_evidence=paper,
+            global_forward_evidence=(paper, intraday),
+            forward_sample=60,
+            global_forward_sample=120,
+        ),
+        ReadinessThresholds(strategy_forward_trades=60),
+    )
+
+    assert "global_forward_trades" in decision.passed_gates
+    assert decision.status == "COPY_READY_PAPER_ONLY"
+
+
+@pytest.mark.parametrize("missing_count", [None, "not-measured"])
+def test_missing_or_invalid_forward_counts_remain_unavailable_instead_of_zero(missing_count):
+    missing_evidence = forward_provenance(closed_count=missing_count)
+    decision = evaluate_copy_readiness(
+        context_fixture(
+            forward_sample=None,
+            global_forward_sample=None,
+            strategy_forward_evidence=missing_evidence,
+            global_forward_evidence=(missing_evidence,),
+        ),
+        ReadinessThresholds(),
+    )
+
+    assert "global_forward_trades_unavailable" in decision.failed_gates
+    assert "strategy_forward_trades_unavailable" in decision.failed_gates
+    assert decision.status != "REPLAY_ONLY"
+
+
+def test_incompatible_context_provenance_cannot_promote():
+    forward = forward_provenance(horizon="1m")
+    decision = evaluate_copy_readiness(
+        context_fixture(
+            strategy_forward_evidence=forward,
+            global_forward_evidence=(forward,),
+            forward_sample=40,
+            global_forward_sample=40,
+        ),
+        ReadinessThresholds(global_forward_trades=40),
+    )
+
+    assert "replay_forward_incompatible" in decision.failed_gates
+    assert decision.status != "COPY_READY_PAPER_ONLY"
 
 
 def test_forward_failure_suspends_readiness():
