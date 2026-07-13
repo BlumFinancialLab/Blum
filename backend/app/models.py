@@ -3855,3 +3855,82 @@ class ReplayStrategyValidation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
     experiment = relationship("BlumLearningExperiment")
+
+
+class StrategyEvidenceSnapshot(Base):
+    __tablename__ = "strategy_evidence_snapshots"
+    __table_args__ = (
+        Index("ix_strategy_evidence_snapshots_latest", "strategy_id", "evidence_class", "evaluated_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    strategy_id: Mapped[str] = mapped_column(String(160), index=True)
+    setup_type: Mapped[str] = mapped_column(String(100), index=True)
+    evidence_class: Mapped[str] = mapped_column(String(60), index=True)
+    total_trades: Mapped[int] = mapped_column(Integer, default=0)
+    closed_trades: Mapped[int] = mapped_column(Integer, default=0)
+    forward_trades: Mapped[int] = mapped_column(Integer, default=0)
+    win_rate: Mapped[float | None] = mapped_column(Float)
+    gross_expectancy: Mapped[float | None] = mapped_column(Float)
+    net_expectancy: Mapped[float | None] = mapped_column(Float)
+    average_r: Mapped[float | None] = mapped_column(Float)
+    profit_factor: Mapped[float | None] = mapped_column(Float)
+    sharpe_proxy: Mapped[float | None] = mapped_column(Float)
+    sortino_proxy: Mapped[float | None] = mapped_column(Float)
+    max_drawdown: Mapped[float | None] = mapped_column(Float)
+    benchmark_return: Mapped[float | None] = mapped_column(Float)
+    benchmark_excess: Mapped[float | None] = mapped_column(Float)
+    total_costs: Mapped[float | None] = mapped_column(Float)
+    average_slippage: Mapped[float | None] = mapped_column(Float)
+    metrics_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    markets_json: Mapped[list] = mapped_column(JsonType, default=list)
+    timeframes_json: Mapped[list] = mapped_column(JsonType, default=list)
+    source_rows_json: Mapped[list] = mapped_column(JsonType, default=list)
+    warnings_json: Mapped[list] = mapped_column(JsonType, default=list)
+    concentration_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    regimes_json: Mapped[list] = mapped_column(JsonType, default=list)
+    confidence_interval_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    evaluated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class StrategyReadinessHistory(Base):
+    __tablename__ = "strategy_readiness_history"
+    __table_args__ = (
+        Index("ix_strategy_readiness_history_latest", "strategy_id", "evaluated_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    strategy_id: Mapped[str] = mapped_column(String(160), index=True)
+    previous_copy_readiness_status: Mapped[str | None] = mapped_column(String(80))
+    copy_readiness_status: Mapped[str] = mapped_column(String(80), index=True)
+    maturity_score: Mapped[float] = mapped_column(Float, default=0.0)
+    global_forward_trades: Mapped[int] = mapped_column(Integer, default=0)
+    strategy_forward_trades: Mapped[int] = mapped_column(Integer, default=0)
+    observation_days: Mapped[int] = mapped_column(Integer, default=0)
+    passed_gates_json: Mapped[list] = mapped_column(JsonType, default=list)
+    failed_gates_json: Mapped[list] = mapped_column(JsonType, default=list)
+    blockers_json: Mapped[list] = mapped_column(JsonType, default=list)
+    reasons_json: Mapped[list] = mapped_column(JsonType, default=list)
+    decay_status: Mapped[str | None] = mapped_column(String(80), index=True)
+    real_capital_eligibility: Mapped[str | None] = mapped_column(String(100), index=True)
+    threshold_version: Mapped[str] = mapped_column(String(80), default="copy-readiness-v1", index=True)
+    evaluated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class EvidenceTimelineEvent(Base):
+    __tablename__ = "evidence_timeline_events"
+    __table_args__ = (
+        UniqueConstraint("event_key", name="uq_evidence_timeline_events_event_key"),
+        Index("ix_evidence_timeline_events_strategy_time", "strategy_id", "event_timestamp"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    event_key: Mapped[str] = mapped_column(String(220), index=True)
+    event_type: Mapped[str] = mapped_column(String(100), index=True)
+    strategy_id: Mapped[str | None] = mapped_column(String(160), index=True)
+    trade_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    payload_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    event_timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
