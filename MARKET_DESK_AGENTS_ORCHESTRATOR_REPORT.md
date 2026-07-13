@@ -119,8 +119,13 @@ This is a contract example backed by automated test fixtures, not a claim about 
 - Python compilation: passed.
 - Market desk and orchestrator tests: passed.
 - Existing live-forward paper trading tests: passed.
-- Full backend suite: passed before final deployment verification.
+- Full backend suite: `204 passed`.
 - Local backend smoke: `BACKEND_NOT_RUNNING` before deployment; no empty payload artifact was created.
+- Hugging Face Space runtime: `RUNNING` on commit `9792e5b` before this report-only update.
+- Remote snapshot: HTTP 200 in 0.55 seconds.
+- Remote trades: HTTP 200 in 0.50 seconds.
+- Remote paper-forward run: HTTP 200 in 23.61 seconds; 7 desks ran and 20 stored-data candidates were assessed.
+- Remote Quant Edge outcome: 13 candidates rejected for insufficient risk/reward, 7 rejected for overfitting risk, 1 retained as watchlist, and no trade was forced.
 
 ## Known Limitations
 
@@ -140,4 +145,4 @@ This is a contract example backed by automated test fixtures, not a claim about 
 - Paper-forward scanner integration: **DONE**
 - Read-only snapshot diagnostics: **DONE**
 - Automated tests: **DONE**
-- Production deployment and remote smoke: **PENDING FINAL VERIFICATION**
+- Production deployment and remote smoke: **DONE**
