@@ -216,6 +216,21 @@ def test_decay_rejects_incompatible_horizons():
     assert result["performance_decay_pct"] is None
 
 
+@pytest.mark.parametrize(
+    "forward",
+    [forward_provenance(terminal="open"), forward_provenance(compatible_with_replay="false")],
+)
+def test_decay_rejects_truthy_non_boolean_provenance_flags(forward):
+    result = evaluate_decay(
+        {"provenance": replay_provenance(), "net_expectancy": 1.0},
+        {"provenance": forward, "net_expectancy": 0.8},
+        ReadinessThresholds(),
+    )
+
+    assert result["status"] == "INSUFFICIENT_EVIDENCE"
+    assert result["performance_decay_pct"] is None
+
+
 def test_replay_only_cannot_be_copy_ready():
     context = context_fixture(global_forward_sample=0, forward_sample=0)
 
@@ -268,6 +283,7 @@ def test_terminal_forward_evidence_can_reach_copy_ready():
     ("provenance", "expected_gate"),
     [
         (forward_provenance(terminal=False), "strategy_forward_evidence_not_terminal"),
+        (forward_provenance(terminal="open"), "strategy_forward_evidence_not_terminal"),
         (
             forward_provenance(canonical_evidence_class="REPLAY_EVIDENCE"),
             "strategy_forward_evidence_class_invalid",
@@ -347,6 +363,31 @@ def test_incompatible_context_provenance_cannot_promote():
     )
 
     assert "replay_forward_incompatible" in decision.failed_gates
+    assert decision.status != "COPY_READY_PAPER_ONLY"
+
+
+def test_truthy_compatibility_string_cannot_promote():
+    forward = forward_provenance(compatible_with_replay="false")
+    decision = evaluate_copy_readiness(
+        context_fixture(
+            strategy_forward_evidence=forward,
+            global_forward_evidence=(forward,),
+            forward_sample=40,
+            global_forward_sample=40,
+        ),
+        ReadinessThresholds(global_forward_trades=40),
+    )
+
+    assert "replay_forward_incompatible" in decision.failed_gates
+    assert decision.status != "COPY_READY_PAPER_ONLY"
+
+
+@pytest.mark.parametrize("field", ["observation_days", "ticker_count", "regime_count"])
+@pytest.mark.parametrize("value", [None, "not-measured"])
+def test_missing_or_invalid_readiness_counts_have_explicit_unavailable_gates(field, value):
+    decision = evaluate_copy_readiness(context_fixture(**{field: value}), ReadinessThresholds())
+
+    assert f"{field}_unavailable" in decision.failed_gates
     assert decision.status != "COPY_READY_PAPER_ONLY"
 
 

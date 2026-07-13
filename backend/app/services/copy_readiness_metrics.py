@@ -72,14 +72,14 @@ class ReadinessContext:
     replay_evidence: EvidenceProvenance | None = None
     strategy_forward_evidence: ForwardEvidenceProvenance | None = None
     global_forward_evidence: tuple[ForwardEvidenceProvenance, ...] = ()
-    observation_days: int = 0
+    observation_days: int | None = None
     net_expectancy: float | None = None
     benchmark_excess: float | None = None
     max_drawdown: float | None = None
     decay_status: str = "INSUFFICIENT_EVIDENCE"
     decay_pct: float | None = None
-    ticker_count: int = 0
-    regime_count: int = 0
+    ticker_count: int | None = None
+    regime_count: int | None = None
     ticker_concentration: float | None = None
     market_concentration: float | None = None
     costs_available: bool = False
@@ -276,6 +276,9 @@ def _paper_gate_results(context: ReadinessContext, thresholds: ReadinessThreshol
     decay_pct = _number(context.decay_pct)
     global_forward_count = _global_forward_closed_count(context)
     strategy_forward_count = _strategy_forward_closed_count(context)
+    observation_days = _count(context.observation_days)
+    ticker_count = _count(context.ticker_count)
+    regime_count = _count(context.regime_count)
     provenance_gate = _strategy_forward_provenance_gate(context)
     return (
         (
@@ -287,7 +290,10 @@ def _paper_gate_results(context: ReadinessContext, thresholds: ReadinessThreshol
             strategy_forward_count is not None and strategy_forward_count >= thresholds.strategy_forward_trades,
         ),
         provenance_gate,
-        ("observation_days", _integer(context.observation_days) >= thresholds.observation_days),
+        (
+            "observation_days_unavailable" if observation_days is None else "observation_days",
+            observation_days is not None and observation_days >= thresholds.observation_days,
+        ),
         ("net_expectancy_positive", _number(context.net_expectancy) is not None and _number(context.net_expectancy) > 0),
         (
             "benchmark_excess_unavailable" if benchmark is None else "benchmark_excess_positive",
@@ -301,8 +307,14 @@ def _paper_gate_results(context: ReadinessContext, thresholds: ReadinessThreshol
             and context.decay_status not in FORWARD_FAILURE_STATUSES
             and decay_pct <= thresholds.max_decay_pct,
         ),
-        ("ticker_count", _integer(context.ticker_count) >= thresholds.min_tickers),
-        ("regime_count", _integer(context.regime_count) >= thresholds.min_regimes),
+        (
+            "ticker_count_unavailable" if ticker_count is None else "ticker_count",
+            ticker_count is not None and ticker_count >= thresholds.min_tickers,
+        ),
+        (
+            "regime_count_unavailable" if regime_count is None else "regime_count",
+            regime_count is not None and regime_count >= thresholds.min_regimes,
+        ),
         (
             "ticker_concentration_unavailable" if context.ticker_concentration is None else "ticker_concentration",
             context.ticker_concentration is not None and context.ticker_concentration <= thresholds.max_ticker_concentration,
@@ -334,19 +346,25 @@ def _has_material_forward_failure(context: ReadinessContext, thresholds: Readine
 def _high_confidence_ready(context: ReadinessContext, thresholds: ReadinessThresholds) -> bool:
     global_forward_count = _global_forward_closed_count(context)
     strategy_forward_count = _strategy_forward_closed_count(context)
+    observation_days = _count(context.observation_days)
+    ticker_count = _count(context.ticker_count)
+    regime_count = _count(context.regime_count)
     return (
         _has_compatible_context_provenance(context)
         and global_forward_count is not None
         and global_forward_count >= thresholds.high_confidence_global_forward_trades
         and strategy_forward_count is not None
         and strategy_forward_count >= thresholds.high_confidence_strategy_forward_trades
-        and _integer(context.observation_days) >= thresholds.high_confidence_observation_days
+        and observation_days is not None
+        and observation_days >= thresholds.high_confidence_observation_days
         and _number(context.max_drawdown) is not None
         and abs(_number(context.max_drawdown)) <= thresholds.high_confidence_max_drawdown
         and _number(context.decay_pct) is not None
         and _number(context.decay_pct) <= thresholds.high_confidence_max_decay_pct
-        and _integer(context.ticker_count) >= thresholds.high_confidence_min_tickers
-        and _integer(context.regime_count) >= thresholds.high_confidence_min_regimes
+        and ticker_count is not None
+        and ticker_count >= thresholds.high_confidence_min_tickers
+        and regime_count is not None
+        and regime_count >= thresholds.high_confidence_min_regimes
         and context.ticker_concentration is not None
         and context.ticker_concentration <= thresholds.high_confidence_max_ticker_concentration
         and context.market_concentration is not None
@@ -357,13 +375,17 @@ def _high_confidence_ready(context: ReadinessContext, thresholds: ReadinessThres
 def _capital_eligible(context: ReadinessContext, thresholds: ReadinessThresholds) -> bool:
     global_forward_count = _global_forward_closed_count(context)
     strategy_forward_count = _strategy_forward_closed_count(context)
+    observation_days = _count(context.observation_days)
+    ticker_count = _count(context.ticker_count)
+    regime_count = _count(context.regime_count)
     return (
         _has_compatible_context_provenance(context)
         and global_forward_count is not None
         and global_forward_count >= thresholds.capital_global_forward_trades
         and strategy_forward_count is not None
         and strategy_forward_count >= thresholds.capital_strategy_forward_trades
-        and _integer(context.observation_days) >= thresholds.capital_observation_days
+        and observation_days is not None
+        and observation_days >= thresholds.capital_observation_days
         and _number(context.net_expectancy) is not None
         and _number(context.net_expectancy) > 0
         and _number(context.benchmark_excess) is not None
@@ -373,8 +395,10 @@ def _capital_eligible(context: ReadinessContext, thresholds: ReadinessThresholds
         and _number(context.decay_pct) is not None
         and _number(context.decay_pct) <= thresholds.capital_max_decay_pct
         and context.decay_status not in FORWARD_FAILURE_STATUSES
-        and _integer(context.ticker_count) >= thresholds.capital_min_tickers
-        and _integer(context.regime_count) >= thresholds.capital_min_regimes
+        and ticker_count is not None
+        and ticker_count >= thresholds.capital_min_tickers
+        and regime_count is not None
+        and regime_count >= thresholds.capital_min_regimes
         and context.ticker_concentration is not None
         and context.ticker_concentration <= thresholds.capital_max_ticker_concentration
         and context.market_concentration is not None
@@ -408,7 +432,7 @@ def _provenance_pair_is_compatible(
     assert isinstance(replay_evidence, EvidenceProvenance)
     assert isinstance(forward_evidence, ForwardEvidenceProvenance)
     return (
-        forward_evidence.compatible_with_replay
+        forward_evidence.compatible_with_replay is True
         and replay_evidence.strategy_identity == forward_evidence.strategy_identity
         and replay_evidence.horizon == forward_evidence.horizon
     )
@@ -422,7 +446,7 @@ def _is_valid_replay_provenance(provenance: object) -> bool:
         and _has_identity(provenance.source_projection_id)
         and _has_identity(provenance.strategy_identity)
         and _has_identity(provenance.horizon)
-        and provenance.terminal
+        and provenance.terminal is True
         and _count(provenance.closed_count) is not None
     )
 
@@ -438,7 +462,7 @@ def _is_valid_forward_provenance(provenance: object) -> bool:
         and _has_identity(provenance.source_projection_id)
         and _has_identity(provenance.strategy_identity)
         and _has_identity(provenance.horizon)
-        and provenance.terminal
+        and provenance.terminal is True
         and _count(provenance.closed_count) is not None
     )
 
@@ -501,7 +525,7 @@ def _strategy_forward_provenance_gate(context: ReadinessContext) -> tuple[str, b
         return ("strategy_forward_evidence_class_invalid", False)
     if not _has_identity(provenance.source_projection_id):
         return ("strategy_forward_evidence_source_unavailable", False)
-    if not provenance.terminal:
+    if provenance.terminal is not True:
         return ("strategy_forward_evidence_not_terminal", False)
     if _count(provenance.closed_count) is None:
         return ("strategy_forward_evidence_count_unavailable", False)
