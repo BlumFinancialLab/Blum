@@ -3889,7 +3889,7 @@ class StrategyEvidenceSnapshot(Base):
     warnings_json: Mapped[list] = mapped_column(JsonType, default=list)
     concentration_json: Mapped[dict] = mapped_column(JsonType, default=dict)
     regimes_json: Mapped[list] = mapped_column(JsonType, default=list)
-    confidence_interval_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    confidence_interval_json: Mapped[dict | None] = mapped_column(JsonType)
     evaluated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 

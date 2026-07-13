@@ -7,8 +7,8 @@ import math
 import re
 from statistics import fmean, pstdev
 
-from sqlalchemy import func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, or_, select
+from sqlalchemy.orm import Session, aliased
 
 from app.models import (
     HyperbolicReplayTrade,
@@ -21,7 +21,6 @@ from app.services.copy_readiness_metrics import (
     PAPER_FORWARD_EVIDENCE,
     REPLAY_EVIDENCE,
     WALK_FORWARD_EVIDENCE,
-    canonical_evidence_class,
     concentration,
     wilson_interval,
 )
@@ -186,26 +185,18 @@ class StrategyEvidenceProjector:
         return evidence
 
     def _load_paper_forward_rows(self, db: Session, *, limit: int) -> list[_EvidenceRow]:
-        intraday = or_(
-            LiveForwardPaperTrade.evidence_type.in_(("PAPER_FORWARD_INTRADAY", INTRADAY_FORWARD_EVIDENCE)),
-            LiveForwardPaperTrade.trading_mode.ilike("%INTRADAY%"),
-        )
         rows = db.scalars(
             select(LiveForwardPaperTrade)
-            .where(~intraday)
+            .where(_not_identified_as_intraday())
             .order_by(LiveForwardPaperTrade.decision_timestamp.desc(), LiveForwardPaperTrade.id.desc())
             .limit(limit)
         ).all()
         return [self._forward_row(row, evidence_class=PAPER_FORWARD_EVIDENCE) for row in rows]
 
     def _load_intraday_forward_rows(self, db: Session, *, limit: int) -> list[_EvidenceRow]:
-        intraday = or_(
-            LiveForwardPaperTrade.evidence_type.in_(("PAPER_FORWARD_INTRADAY", INTRADAY_FORWARD_EVIDENCE)),
-            LiveForwardPaperTrade.trading_mode.ilike("%INTRADAY%"),
-        )
         rows = db.scalars(
             select(LiveForwardPaperTrade)
-            .where(intraday)
+            .where(_identified_as_intraday())
             .order_by(LiveForwardPaperTrade.decision_timestamp.desc(), LiveForwardPaperTrade.id.desc())
             .limit(limit)
         ).all()
@@ -315,10 +306,7 @@ class StrategyEvidenceProjector:
                 "markets": concentration([row.market or "" for row in terminal_rows]),
             },
             regimes_json=regimes,
-            confidence_interval_json=(
-                wilson_interval(round(wins), measured_sample_size) if not summary_rows else None
-            )
-            or {},
+            confidence_interval_json=wilson_interval(round(wins), measured_sample_size) if not summary_rows else None,
             evaluated_at=datetime.utcnow(),
         )
 
@@ -336,29 +324,34 @@ class StrategyEvidenceQuery:
     ) -> dict:
         bounded_limit = _bounded_limit(limit, maximum=MAX_QUERY_LIMIT)
         bounded_offset = max(0, _integer(offset))
-        rank = func.row_number().over(
-            partition_by=(StrategyEvidenceSnapshot.strategy_id, StrategyEvidenceSnapshot.evidence_class),
-            order_by=(StrategyEvidenceSnapshot.evaluated_at.desc(), StrategyEvidenceSnapshot.id.desc()),
-        ).label("rank")
-        ranked = select(StrategyEvidenceSnapshot.id.label("id"), rank).subquery()
-        statement = (
-            select(StrategyEvidenceSnapshot)
-            .join(ranked, StrategyEvidenceSnapshot.id == ranked.c.id)
-            .where(ranked.c.rank == 1)
-        )
+        later = aliased(StrategyEvidenceSnapshot)
+        later_snapshot_exists = select(later.id).where(
+            later.strategy_id == StrategyEvidenceSnapshot.strategy_id,
+            later.evidence_class == StrategyEvidenceSnapshot.evidence_class,
+            or_(
+                later.evaluated_at > StrategyEvidenceSnapshot.evaluated_at,
+                and_(
+                    later.evaluated_at == StrategyEvidenceSnapshot.evaluated_at,
+                    later.id > StrategyEvidenceSnapshot.id,
+                ),
+            ),
+        ).exists()
+        statement = select(StrategyEvidenceSnapshot).where(~later_snapshot_exists)
         if strategy_id is not None:
             statement = statement.where(StrategyEvidenceSnapshot.strategy_id == strategy_id)
-        total = int(db.scalar(select(func.count()).select_from(statement.subquery())) or 0)
         rows = db.scalars(
             statement.order_by(StrategyEvidenceSnapshot.evaluated_at.desc(), StrategyEvidenceSnapshot.id.desc())
             .offset(bounded_offset)
-            .limit(bounded_limit)
+            .limit(bounded_limit + 1)
         ).all()
+        has_more = len(rows) > bounded_limit
+        page_rows = rows[:bounded_limit]
         return {
-            "items": [_serialize_snapshot(row) for row in rows],
-            "total": total,
+            "items": [_serialize_snapshot(row) for row in page_rows],
             "limit": bounded_limit,
             "offset": bounded_offset,
+            "has_more": has_more,
+            "next_offset": bounded_offset + bounded_limit if has_more else None,
         }
 
 
@@ -390,13 +383,33 @@ def _serialize_snapshot(row: StrategyEvidenceSnapshot) -> dict:
         "warnings": row.warnings_json or [],
         "concentration": row.concentration_json or {},
         "regimes": row.regimes_json or [],
-        "confidence_interval": row.confidence_interval_json or {},
+        "confidence_interval": row.confidence_interval_json,
         "evaluated_at": row.evaluated_at.isoformat() if row.evaluated_at else None,
     }
 
 
 def _bounded_limit(value: int, *, maximum: int) -> int:
     return min(maximum, max(1, _integer(value)))
+
+
+def _identified_as_intraday():
+    return or_(
+        LiveForwardPaperTrade.evidence_type.in_(("PAPER_FORWARD_INTRADAY", INTRADAY_FORWARD_EVIDENCE)),
+        LiveForwardPaperTrade.trading_mode.ilike("%INTRADAY%"),
+    )
+
+
+def _not_identified_as_intraday():
+    return and_(
+        or_(
+            LiveForwardPaperTrade.evidence_type.is_(None),
+            LiveForwardPaperTrade.evidence_type.not_in(("PAPER_FORWARD_INTRADAY", INTRADAY_FORWARD_EVIDENCE)),
+        ),
+        or_(
+            LiveForwardPaperTrade.trading_mode.is_(None),
+            ~LiveForwardPaperTrade.trading_mode.ilike("%INTRADAY%"),
+        ),
+    )
 
 
 def _integer(value: object) -> int:

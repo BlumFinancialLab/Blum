@@ -16,7 +16,7 @@ from app.models import (
     ReplayStrategyValidation,
     StrategyEvidenceSnapshot,
 )
-from app.services.copy_readiness_projector import StrategyEvidenceProjector, StrategyEvidenceQuery
+from app.services.copy_readiness_evidence import StrategyEvidenceProjector, StrategyEvidenceQuery
 
 
 NOW = datetime(2026, 7, 13, 14, 30)
@@ -209,6 +209,33 @@ def test_open_forward_trade_does_not_count_as_closed_evidence(db):
     assert card.forward_trades == 0
 
 
+def test_legacy_standard_forward_producer_shape_projects_as_paper_without_mutating_source(db):
+    game = LiveForwardPaperGame(game_id="legacy-standard-forward-game")
+    db.add(game)
+    db.flush()
+    # Standard paper-forward producers predate the provenance fields and leave both unset.
+    source = forward_trade(
+        game,
+        uid="legacy-standard-forward",
+        evidence_type=None,
+        trading_mode=None,
+        gross_pnl_eur=1.0,
+        net_pnl_eur=0.8,
+    )
+    db.add(source)
+    db.commit()
+
+    StrategyEvidenceProjector().project(db)
+
+    card = latest_card(db, "PAPER_FORWARD_EVIDENCE")
+    db.refresh(source)
+    assert card.source_rows_json[0]["source_type"] == "live_forward_paper_trade"
+    assert card.source_rows_json[0]["source_id"] == source.id
+    assert card.closed_trades == 1
+    assert source.evidence_type is None
+    assert source.trading_mode is None
+
+
 def test_costs_and_slippage_reduce_net_expectancy(db):
     game = LiveForwardPaperGame(game_id="cost-evidence-game")
     db.add(game)
@@ -246,6 +273,40 @@ def test_missing_benchmark_remains_null(db):
     card = latest_card(db, "PAPER_FORWARD_EVIDENCE")
     assert card.benchmark_return is None
     assert card.benchmark_excess is None
+
+
+def test_open_only_evidence_persists_and_serializes_no_confidence_interval(db):
+    game = LiveForwardPaperGame(game_id="open-confidence-game")
+    db.add(game)
+    db.flush()
+    db.add(forward_trade(game, uid="open-confidence", status="OPEN"))
+    db.commit()
+
+    StrategyEvidenceProjector().project(db)
+
+    card = latest_card(db, "PAPER_FORWARD_EVIDENCE")
+    page = StrategyEvidenceQuery().latest_cards(db, limit=1, offset=0)
+    assert card.confidence_interval_json is None
+    assert page["items"][0]["confidence_interval"] is None
+
+
+def test_summary_only_evidence_persists_and_serializes_no_confidence_interval(db):
+    db.add(
+        ReplayStrategyValidation(
+            setup_type="summary_only",
+            sample_size=25,
+            metrics_json={"net_expectancy": 0.4, "win_rate": 0.6},
+            created_at=NOW,
+        )
+    )
+    db.commit()
+
+    StrategyEvidenceProjector().project(db)
+
+    card = latest_card(db, "WALK_FORWARD_EVIDENCE")
+    page = StrategyEvidenceQuery().latest_cards(db, limit=1, offset=0, strategy_id=card.strategy_id)
+    assert card.confidence_interval_json is None
+    assert page["items"][0]["confidence_interval"] is None
 
 
 def test_strategy_identity_uses_validation_then_warns_on_setup_fallback(db):
@@ -301,3 +362,12 @@ def test_projector_and_query_are_bounded(db):
     assert page["limit"] == 1
     assert page["offset"] == 0
     assert len(page["items"]) == 1
+    assert page["has_more"] is True
+    assert page["next_offset"] == 1
+    assert "total" not in page
+
+    next_page = StrategyEvidenceQuery().latest_cards(db, limit=101, offset=page["next_offset"])
+    assert next_page["limit"] == 100
+    assert next_page["offset"] == 1
+    assert next_page["has_more"] is False
+    assert next_page["next_offset"] is None

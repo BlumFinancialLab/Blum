@@ -185,6 +185,28 @@ def test_unknown_numeric_values_remain_null_and_measured_zero_is_preserved():
         assert measured_zero_readiness.observation_days == 0
 
 
+def test_confidence_interval_json_remains_nullable_without_a_default():
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+
+    column = StrategyEvidenceSnapshot.__table__.c.confidence_interval_json
+    assert column.nullable
+    assert column.default is None
+    assert column.server_default is None
+
+    with Session(engine) as db:
+        row = StrategyEvidenceSnapshot(
+            strategy_id="setup:summary_only",
+            setup_type="summary_only",
+            evidence_class="WALK_FORWARD_EVIDENCE",
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+
+        assert row.confidence_interval_json is None
+
+
 def test_copy_readiness_migration_is_append_only_and_round_trips_on_sqlite(tmp_path, monkeypatch):
     config, database_url = _upgrade_copy_readiness_from_predecessor(tmp_path, monkeypatch)
     engine = create_engine(database_url, future=True)
@@ -198,6 +220,9 @@ def test_copy_readiness_migration_is_append_only_and_round_trips_on_sqlite(tmp_p
         assert {
             column["name"]: column for column in inspector.get_columns("strategy_readiness_history")
         }["maturity_score"]["nullable"]
+        assert {
+            column["name"]: column for column in inspector.get_columns("strategy_evidence_snapshots")
+        }["confidence_interval_json"]["nullable"]
         assert connection.execute(
             sa.text(
                 "INSERT INTO strategy_evidence_snapshots "
