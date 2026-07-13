@@ -12,6 +12,67 @@ depends_on = None
 
 
 json_type = sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), "postgresql")
+append_only_tables = (
+    "strategy_evidence_snapshots",
+    "strategy_readiness_history",
+    "evidence_timeline_events",
+)
+
+
+def _trigger_name(table_name: str, operation: str) -> str:
+    return f"prevent_copy_readiness_{table_name}_{operation.lower()}"
+
+
+def _create_append_only_guards() -> None:
+    dialect_name = op.get_bind().dialect.name
+    if dialect_name == "postgresql":
+        op.execute(
+            """
+            CREATE FUNCTION prevent_copy_readiness_evidence_mutation()
+            RETURNS trigger AS $$
+            BEGIN
+                RAISE EXCEPTION 'copy readiness evidence is append-only';
+            END;
+            $$ LANGUAGE plpgsql
+            """
+        )
+        for table_name in append_only_tables:
+            for operation in ("UPDATE", "DELETE"):
+                op.execute(
+                    f"CREATE TRIGGER {_trigger_name(table_name, operation)} "
+                    f"BEFORE {operation} ON {table_name} "
+                    "FOR EACH ROW EXECUTE FUNCTION prevent_copy_readiness_evidence_mutation()"
+                )
+        return
+
+    if dialect_name == "sqlite":
+        for table_name in append_only_tables:
+            for operation in ("UPDATE", "DELETE"):
+                op.execute(
+                    f"CREATE TRIGGER {_trigger_name(table_name, operation)} "
+                    f"BEFORE {operation} ON {table_name} "
+                    "FOR EACH ROW BEGIN "
+                    "SELECT RAISE(ABORT, 'copy readiness evidence is append-only'); "
+                    "END"
+                )
+
+
+def _drop_append_only_guards() -> None:
+    dialect_name = op.get_bind().dialect.name
+    if dialect_name not in {"postgresql", "sqlite"}:
+        return
+
+    for table_name in append_only_tables:
+        for operation in ("UPDATE", "DELETE"):
+            if dialect_name == "postgresql":
+                op.execute(
+                    f"DROP TRIGGER IF EXISTS {_trigger_name(table_name, operation)} ON {table_name}"
+                )
+            else:
+                op.execute(f"DROP TRIGGER IF EXISTS {_trigger_name(table_name, operation)}")
+
+    if dialect_name == "postgresql":
+        op.execute("DROP FUNCTION IF EXISTS prevent_copy_readiness_evidence_mutation()")
 
 
 def upgrade() -> None:
@@ -21,9 +82,9 @@ def upgrade() -> None:
         sa.Column("strategy_id", sa.String(160), nullable=False),
         sa.Column("setup_type", sa.String(100), nullable=False),
         sa.Column("evidence_class", sa.String(60), nullable=False),
-        sa.Column("total_trades", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("closed_trades", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("forward_trades", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column("total_trades", sa.Integer()),
+        sa.Column("closed_trades", sa.Integer()),
+        sa.Column("forward_trades", sa.Integer()),
         sa.Column("win_rate", sa.Float()),
         sa.Column("gross_expectancy", sa.Float()),
         sa.Column("net_expectancy", sa.Float()),
@@ -61,10 +122,10 @@ def upgrade() -> None:
         sa.Column("strategy_id", sa.String(160), nullable=False),
         sa.Column("previous_copy_readiness_status", sa.String(80)),
         sa.Column("copy_readiness_status", sa.String(80), nullable=False),
-        sa.Column("maturity_score", sa.Float(), nullable=False, server_default="0"),
-        sa.Column("global_forward_trades", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("strategy_forward_trades", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("observation_days", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column("maturity_score", sa.Float()),
+        sa.Column("global_forward_trades", sa.Integer()),
+        sa.Column("strategy_forward_trades", sa.Integer()),
+        sa.Column("observation_days", sa.Integer()),
         sa.Column("passed_gates_json", json_type),
         sa.Column("failed_gates_json", json_type),
         sa.Column("blockers_json", json_type),
@@ -110,9 +171,11 @@ def upgrade() -> None:
         "evidence_timeline_events",
         ["strategy_id", "event_timestamp"],
     )
+    _create_append_only_guards()
 
 
 def downgrade() -> None:
+    _drop_append_only_guards()
     op.drop_table("evidence_timeline_events")
     op.drop_table("strategy_readiness_history")
     op.drop_table("strategy_evidence_snapshots")
