@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
@@ -27,6 +28,7 @@ from app.services.intraday_paper_engine import BlumIntradayPaperEngine, Intraday
 from app.services.live_forward_paper_trading import LiveForwardPaperTradingService
 from app.services.promoted_strategy_registry import BlumPromotedStrategyRegistry
 from app.services import realtime
+from app.services import intraday_paper_engine as intraday_module
 from app.engine.brain.trader_brain import TraderBrainService
 
 
@@ -414,6 +416,33 @@ def test_intraday_run_reports_data_blocked_when_no_eligible_market_data_exists()
     assert persisted is not None
     assert persisted.status == "DATA_BLOCKED"
     assert result["blockers"][0]["reason"] == "NO_DESK_ASSETS_WITH_INTRADAY_DATA"
+
+
+def test_intraday_discovery_allows_gateway_to_hydrate_assets_without_existing_one_minute_bars(monkeypatch):
+    class StubRegistry:
+        def __init__(self, *, agents):
+            self.agents = agents
+
+        def discover(self, db):
+            return SimpleNamespace(
+                available_agents=[
+                    SimpleNamespace(
+                        agent_name="NasdaqAgent",
+                        benchmark="QQQ",
+                        _eligible_assets=[asset],
+                    )
+                ]
+            )
+
+    with setup_db() as db:
+        asset = seed_asset(db)
+        monkeypatch.setattr(intraday_module, "MarketDeskRegistry", StubRegistry)
+        discovered = BlumIntradayPaperEngine(
+            now_provider=lambda: NOW,
+            refresh_missing=False,
+        )._discover_assets(db)
+
+    assert discovered == [asset]
 
 
 def test_intraday_command_is_post_only_and_settings_are_bounded():

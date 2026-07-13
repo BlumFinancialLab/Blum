@@ -177,16 +177,6 @@ class BlumIntradayPaperEngine:
             return self._serialize_run(failed, failed.data_blockers)
 
     def _discover_assets(self, db: Session) -> list[Asset]:
-        asset_ids = db.scalars(
-            select(ReplayMarketBar.asset_id)
-            .where(ReplayMarketBar.timeframe == "1m")
-            .group_by(ReplayMarketBar.asset_id)
-            .order_by(desc(func.max(ReplayMarketBar.bar_timestamp)))
-            .limit(self.max_assets * 3)
-        ).all()
-        if not asset_ids:
-            return []
-        allowed_ids = set(asset_ids)
         agent_types = enabled_agents(parse_names(settings.blum_enabled_market_desk_agents), stale_after_hours=settings.paper_forward_scan_stale_data_max_age_hours)
         discovery = MarketDeskRegistry(agents=agent_types).discover(db)
         ranked: list[Asset] = []
@@ -195,7 +185,7 @@ class BlumIntradayPaperEngine:
             if agent.agent_name not in {"WallStreetAgent", "SP500Agent", "NasdaqAgent", "DowJonesAgent", "Russell2000Agent", "FTSEMIBAgent", "DAXAgent", "CAC40Agent", "ETFDeskAgent"}:
                 continue
             for asset in list(getattr(agent, "_eligible_assets", None) or []):
-                if asset.id not in allowed_ids or asset.id in seen:
+                if asset.id in seen:
                     continue
                 seen.add(asset.id)
                 self._desk_context[asset.id] = (agent.agent_name, agent.benchmark)
