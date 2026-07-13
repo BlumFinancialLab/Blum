@@ -181,7 +181,10 @@ def test_quant_edge_approves_positive_stored_setup_evidence():
         )
         db.commit()
 
-        assessment = BlumQuantEdgeAgent(min_score=60.0, min_sample_size=20).assess(db, candidate())
+        payload = candidate()
+        payload.pop("risk_reward_ratio")
+        payload["trade_plan"]["risk_reward_estimate"] = {"reward_to_risk": 2.5}
+        assessment = BlumQuantEdgeAgent(min_score=60.0, min_sample_size=20).assess(db, payload)
 
     assert assessment["verdict"] == APPROVED_FOR_PAPER
     assert assessment["sample_size"] == 60

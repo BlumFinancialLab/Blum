@@ -7,6 +7,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from app.models import ExecutionSimulation, HistoricalPrediction, LearningBenchmarkComparison, PredictionOutcome, RMultipleMetric, SignalPerformance, StrategyMemory
+from app.services.trading_intelligence_lab import risk_reward_ratio_from_plan, safe_float
 
 
 APPROVED_FOR_PAPER = "APPROVED_FOR_PAPER"
@@ -179,7 +180,13 @@ class BlumQuantEdgeAgent:
             4,
         )
 
-        risk_reward = float(candidate.get("risk_reward_ratio") or 0.0)
+        plan = candidate.get("trade_plan") if isinstance(candidate.get("trade_plan"), dict) else {}
+        price_context = candidate.get("price_context") if isinstance(candidate.get("price_context"), dict) else {}
+        latest_price = safe_float(price_context.get("latest_price"), None)
+        risk_reward = safe_float(candidate.get("risk_reward_ratio"), None)
+        if risk_reward is None:
+            risk_reward = risk_reward_ratio_from_plan(plan, latest_price)
+        risk_reward = float(risk_reward or 0.0)
         if risk_reward < self.min_risk_reward:
             verdict = REJECTED_BAD_RISK_REWARD
             explanation = f"Risk/reward {risk_reward:.2f} is below the required {self.min_risk_reward:.2f}."
