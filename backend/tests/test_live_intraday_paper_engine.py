@@ -6,10 +6,22 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from app.core.database import Base
-from app.models import Asset, IntradayPaperRun, LiveForwardPaperGame, LiveForwardPaperTrade, ReplayMarketBar, ReplayStrategyValidation
+from app.models import (
+    Asset,
+    IntradayPaperRun,
+    LearningEvent,
+    LiveForwardPaperGame,
+    LiveForwardPaperTrade,
+    LiveForwardPaperTradeEvent,
+    ReplayMarketBar,
+    ReplayStrategyValidation,
+    StrategyMemory,
+    TradeLearningEvidence,
+)
 from app.services.intraday_contracts import PAPER_FORWARD_INTRADAY
 from app.services.intraday_market_data import StrictIntradayDataGateway
 from app.services.intraday_opportunity import IntradayPortfolioState, BlumIntradayOpportunityEngine
+from app.services.intraday_paper_engine import BlumIntradayPaperEngine, IntradayPaperLearningService, intraday_snapshot_summary
 from app.services.promoted_strategy_registry import BlumPromotedStrategyRegistry
 
 
@@ -247,3 +259,139 @@ def test_intraday_trade_persists_strategy_cost_and_lifecycle_metadata():
     assert stored.evidence_type == PAPER_FORWARD_INTRADAY
     assert stored.timeframe_stack == ["1d", "15m", "5m", "1m"]
     assert stored.promoted_validation_id == validation_id
+
+
+def test_run_opens_only_promoted_triggered_candidate_with_adverse_fill():
+    with setup_db() as db:
+        asset = seed_asset(db)
+        seed_validation(db)
+        seed_complete_stack(db, asset)
+        observed_price = db.scalar(
+            select(ReplayMarketBar.close)
+            .where(ReplayMarketBar.asset_id == asset.id, ReplayMarketBar.timeframe == "1m")
+            .order_by(ReplayMarketBar.bar_timestamp.desc())
+            .limit(1)
+        )
+        engine = BlumIntradayPaperEngine(now_provider=lambda: NOW, refresh_missing=False)
+
+        first = engine.run_once(db, trigger="test", assets=[asset])
+        second = engine.run_once(db, trigger="test", assets=[asset])
+        trade = db.scalar(select(LiveForwardPaperTrade).where(LiveForwardPaperTrade.evidence_type == PAPER_FORWARD_INTRADAY))
+        events = db.scalars(
+            select(LiveForwardPaperTradeEvent)
+            .where(LiveForwardPaperTradeEvent.paper_trade_id == trade.id)
+            .order_by(LiveForwardPaperTradeEvent.id)
+        ).all()
+
+    assert first["trades_opened"] == 1
+    assert second["trades_opened"] == 0
+    assert trade is not None
+    assert trade.entry_price > observed_price
+    assert trade.frozen_decision_payload["evidence_type"] == PAPER_FORWARD_INTRADAY
+    assert [event.event_type for event in events[:2]] == ["INTRADAY_TRADE_CANDIDATE", "INTRADAY_TRADE_OPENED"]
+
+
+def test_lifecycle_uses_only_later_one_minute_bar_and_closes_stop():
+    with setup_db() as db:
+        asset = seed_asset(db)
+        seed_validation(db)
+        seed_complete_stack(db, asset)
+        clock = {"now": NOW}
+        engine = BlumIntradayPaperEngine(now_provider=lambda: clock["now"], refresh_missing=False)
+        opened = engine.run_once(db, trigger="test", assets=[asset])
+        trade = db.scalar(select(LiveForwardPaperTrade).where(LiveForwardPaperTrade.evidence_type == PAPER_FORWARD_INTRADAY))
+        frozen_payload = dict(trade.frozen_decision_payload)
+        stop = float(trade.stop_loss)
+
+        clock["now"] = NOW + timedelta(minutes=1)
+        db.add(
+            ReplayMarketBar(
+                asset_id=asset.id,
+                source_symbol=asset.ticker,
+                normalized_symbol=asset.ticker,
+                market=asset.country,
+                timeframe="1m",
+                bar_timestamp=clock["now"],
+                open=stop + 0.2,
+                high=stop + 0.3,
+                low=stop - 0.2,
+                close=stop - 0.1,
+                volume=3_000_000,
+                provider="fixture",
+                acquired_at=clock["now"],
+                data_quality_score=95.0,
+                source_metadata={"source": "test"},
+            )
+        )
+        db.commit()
+        closed = engine.run_once(db, trigger="test", assets=[asset])
+        db.refresh(trade)
+
+    assert opened["trades_opened"] == 1
+    assert closed["trades_closed"] == 1
+    assert trade.status == "CLOSED"
+    assert trade.close_reason == "STOP_HIT"
+    assert trade.last_managed_bar_at == NOW + timedelta(minutes=1)
+    assert trade.closed_at == NOW + timedelta(minutes=1)
+    assert trade.frozen_decision_payload == frozen_payload
+    assert trade.net_pnl_eur < 0
+
+
+def test_closed_intraday_trade_updates_forward_memory_once_but_open_trade_does_not():
+    with setup_db() as db:
+        game = LiveForwardPaperGame(game_id="learning", starting_capital=100, current_capital=100, cash=100)
+        db.add(game)
+        db.flush()
+        trade = LiveForwardPaperTrade(
+            trade_uid="learning-trade",
+            game_id=game.id,
+            ticker="NVDA",
+            setup_type="intraday_breakout",
+            status="OPEN",
+            decision_timestamp=NOW,
+            duplicate_key="learning-trade-key",
+            trading_mode="INTRADAY_PAPER_FORWARD",
+            evidence_type=PAPER_FORWARD_INTRADAY,
+            market="USA",
+            desk="NasdaqAgent",
+            session_name="regular",
+            timeframe_stack=["1d", "15m", "5m", "1m"],
+            entry_price=100.0,
+            stop_loss=99.0,
+            position_size=1.0,
+            frozen_decision_payload={"regime": "trend_up"},
+        )
+        db.add(trade)
+        db.flush()
+        learning = IntradayPaperLearningService()
+        assert learning.apply_closed_trade(db, trade)["status"] == "not_closed"
+
+        trade.status = "CLOSED"
+        trade.closed_at = NOW + timedelta(minutes=20)
+        trade.exit_price = 102.0
+        trade.net_pnl_eur = 1.9
+        trade.r_multiple = 1.9
+        trade.excess_return_vs_benchmark = 1.5
+        trade.close_reason = "TARGET_HIT"
+        first = learning.apply_closed_trade(db, trade)
+        second = learning.apply_closed_trade(db, trade)
+        evidence_count = len(db.scalars(select(TradeLearningEvidence)).all())
+        memory_count = len(db.scalars(select(StrategyMemory)).all())
+        event_count = len(db.scalars(select(LearningEvent).where(LearningEvent.event_type == "intraday_paper_trade_closed")).all())
+
+    assert first["status"] == "applied"
+    assert second["status"] == "duplicate"
+    assert evidence_count == 1
+    assert memory_count == 1
+    assert event_count == 1
+
+
+def test_intraday_snapshot_is_read_only_and_reports_no_activity_truthfully():
+    with setup_db() as db:
+        before = len(db.scalars(select(IntradayPaperRun)).all())
+        snapshot = intraday_snapshot_summary(db, now=NOW)
+        after = len(db.scalars(select(IntradayPaperRun)).all())
+
+    assert before == after == 0
+    assert snapshot["status"] == "NO_INTRADAY_RUNS"
+    assert snapshot["trades_opened_today"] == 0
