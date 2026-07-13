@@ -26,6 +26,7 @@ from app.services.performance import performance_recorder
 from app.services.pipeline import PipelineService
 from app.services.trading_game import TradingGameSimulator
 from app.services.live_forward_paper_trading import LiveForwardPaperTradingService
+from app.services.intraday_paper_engine import BlumIntradayPaperEngine
 from app.services.worker_runtime import runtime_worker_coordinator
 from app.services.adaptive_replay_training import BlumAdaptiveTrainingController
 from app.signals.engine import SignalEngine
@@ -72,6 +73,8 @@ def start_realtime_services() -> None:
     _add_interval_job(run_market_refresh, minutes=settings.market_refresh_minutes, job_id="market_refresh", delay_seconds=360, jitter_seconds=45)
     if settings.live_trading_game_enabled:
         _add_interval_job(run_live_forward_paper_trading_job, minutes=settings.market_refresh_minutes, job_id="live_forward_paper_trading", delay_seconds=390, jitter_seconds=45)
+    if settings.intraday_paper_enabled:
+        _add_interval_job(run_intraday_paper_trading_job, minutes=settings.intraday_paper_minutes, job_id="intraday_paper_trading", delay_seconds=420, jitter_seconds=15)
     _add_interval_job(run_data_gap_repair, minutes=settings.data_gap_repair_minutes, job_id="data_gap_repair", delay_seconds=480, jitter_seconds=45)
     _add_interval_job(run_accuracy_audit_job, minutes=settings.accuracy_audit_minutes, job_id="accuracy_audit", delay_seconds=600, jitter_seconds=45)
     _add_interval_job(run_macro_refresh, minutes=settings.macro_refresh_minutes, job_id="macro_refresh", delay_seconds=720, jitter_seconds=45)
@@ -277,6 +280,10 @@ def run_live_forward_paper_trading_job() -> None:
         return service.run_once(db)
 
     _run_job("live_forward_paper_trading", work)
+
+
+def run_intraday_paper_trading_job() -> None:
+    _run_job("intraday_paper_trading", lambda db: BlumIntradayPaperEngine().run_once(db, trigger="scheduled"))
 
 
 def run_professional_learning_cycle_job() -> None:

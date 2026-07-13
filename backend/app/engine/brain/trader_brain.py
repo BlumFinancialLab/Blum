@@ -251,6 +251,8 @@ class TraderBrainService:
         live_game = latest_row(db, LiveForwardPaperGame)
         benchmarks = latest_benchmarks(db)
         paper_rows = db.scalars(select(LiveForwardPaperTrade).order_by(desc(LiveForwardPaperTrade.created_at)).limit(500)).all()
+        intraday_rows = [row for row in paper_rows if row.evidence_type == "PAPER_FORWARD_INTRADAY"]
+        standard_paper_rows = [row for row in paper_rows if row.evidence_type != "PAPER_FORWARD_INTRADAY"]
         lesson_rows = dedupe_lessons(
             db.scalars(select(TradeLearningEvidence).order_by(desc(TradeLearningEvidence.created_at)).limit(60)).all()
         )
@@ -263,12 +265,15 @@ class TraderBrainService:
         blocker_rows = alpha_blockers(paper_rows, closed_rows, benchmarks, paper_summary, actionability_summary=actionability_summary, lifecycle_mode=lifecycle_mode)
         historical_split = historical_replay_evidence_split(db, benchmarks)
         walk_forward_split = walk_forward_evidence_split(db, benchmarks)
-        paper_split = paper_forward_evidence_split(paper_rows, live_game, label="Paper-Forward Evidence", actionability_summary=actionability_summary, lifecycle_mode=lifecycle_mode)
-        live_split = live_forward_evidence_split(paper_rows, live_game, actionability_summary=actionability_summary, lifecycle_mode=lifecycle_mode)
+        standard_actionability = paper_forward_actionability_summary(standard_paper_rows)
+        paper_split = paper_forward_evidence_split(standard_paper_rows, live_game, label="Paper-Forward Evidence", actionability_summary=standard_actionability, lifecycle_mode=lifecycle_mode)
+        live_split = live_forward_evidence_split(standard_paper_rows, live_game, actionability_summary=standard_actionability, lifecycle_mode=lifecycle_mode)
+        intraday_split = intraday_paper_evidence_split(intraday_rows, live_game)
         evidence_split = {
             "historical_replay": historical_split,
             "walk_forward_validation": walk_forward_split,
             "paper_forward": paper_split,
+            "intraday_paper_forward": intraday_split,
             "live_forward": live_split,
         }
         evidence_grade, evidence_reason = alpha_grade_from_splits(evidence_split)
@@ -333,6 +338,7 @@ class TraderBrainService:
             "historical": historical_split,
             "walk_forward": walk_forward_split,
             "paper_forward": paper_split,
+            "intraday_paper_forward": intraday_split,
             "live_forward": live_split,
             "current_alpha_readiness": alpha_readiness,
             "edge_map": alpha_edge_map(paper_rows),
@@ -1904,12 +1910,15 @@ def alpha_verdict(grade: str, summary: dict, blockers: list[dict]) -> str:
 
 def alpha_grade_from_splits(evidence_split: dict) -> tuple[str, str]:
     paper = evidence_split.get("paper_forward") or {}
+    intraday = evidence_split.get("intraday_paper_forward") or {}
     live = evidence_split.get("live_forward") or {}
     walk = evidence_split.get("walk_forward_validation") or {}
     historical = evidence_split.get("historical_replay") or {}
     paper_grade = str(paper.get("evidence_grade") or "NO_DATA")
     if paper_grade != "NO_DATA":
         return paper_grade, str(paper.get("evidence_reason") or "Paper-forward evidence is available.")
+    if split_has_data(intraday):
+        return str(intraday.get("evidence_grade") or "INSUFFICIENT_EVIDENCE"), str(intraday.get("evidence_reason") or "Intraday paper-forward evidence is available separately.")
     if split_has_data(live):
         live_grade = cap_non_forward_grade(str(live.get("evidence_grade") or "INSUFFICIENT_EVIDENCE"))
         return live_grade, str(live.get("evidence_reason") or "Live-forward evidence exists, but paper-forward evidence remains limited.")
@@ -1922,9 +1931,12 @@ def alpha_grade_from_splits(evidence_split: dict) -> tuple[str, str]:
 
 def alpha_verdict_from_splits(evidence_split: dict, grade: str) -> str:
     paper = evidence_split.get("paper_forward") or {}
+    intraday = evidence_split.get("intraday_paper_forward") or {}
     walk = evidence_split.get("walk_forward_validation") or {}
     historical = evidence_split.get("historical_replay") or {}
     if not split_has_data(paper):
+        if split_has_data(intraday):
+            return "Intraday paper-forward evidence exists; sample strength is reported separately."
         if split_has_data(walk):
             return "Walk-forward evidence exists, paper-forward still insufficient."
         if split_has_data(historical):
@@ -1942,7 +1954,7 @@ def alpha_verdict_from_splits(evidence_split: dict, grade: str) -> str:
 
 
 def primary_alpha_evidence(evidence_split: dict) -> dict:
-    for key in ("paper_forward", "live_forward", "walk_forward_validation", "historical_replay"):
+    for key in ("paper_forward", "intraday_paper_forward", "live_forward", "walk_forward_validation", "historical_replay"):
         split = evidence_split.get(key) or {}
         if split_has_data(split):
             return {
@@ -2169,6 +2181,32 @@ def live_forward_evidence_split(rows: list[LiveForwardPaperTrade], game: LiveFor
         return split
     split = paper_forward_evidence_split(rows, game, label="Live-Forward Evidence", actionability_summary=actionability_summary, lifecycle_mode=lifecycle_mode)
     split["data_source"] = "live_forward_paper_trades"
+    return split
+
+
+def intraday_paper_evidence_split(rows: list[LiveForwardPaperTrade], game: LiveForwardPaperGame | None) -> dict:
+    closed = [row for row in rows if paper_forward_trade_is_closed(row)]
+    if not closed:
+        return empty_alpha_evidence_split(
+            "Intraday Paper-Forward Evidence",
+            "live_forward_paper_trades:PAPER_FORWARD_INTRADAY",
+            "No closed intraday paper-forward trades exist yet.",
+        )
+    split = paper_forward_evidence_split(
+        rows,
+        game,
+        label="Intraday Paper-Forward Evidence",
+        actionability_summary=paper_forward_actionability_summary(rows),
+        lifecycle_mode="INTRADAY_LIFECYCLE_ENABLED",
+    )
+    split.update(
+        {
+            "data_source": "live_forward_paper_trades:PAPER_FORWARD_INTRADAY",
+            "evidence_type": "PAPER_FORWARD_INTRADAY",
+            "average_holding_minutes": average_present([row.holding_minutes for row in closed]),
+            "costs_paid": round(sum(float(row.costs_paid or 0.0) for row in closed), 4),
+        }
+    )
     return split
 
 

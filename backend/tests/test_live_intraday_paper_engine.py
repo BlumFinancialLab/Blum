@@ -5,6 +5,8 @@ from datetime import datetime, timedelta
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
+from app.api.routes import router
+from app.core.config import Settings
 from app.core.database import Base
 from app.models import (
     Asset,
@@ -22,7 +24,10 @@ from app.services.intraday_contracts import PAPER_FORWARD_INTRADAY
 from app.services.intraday_market_data import StrictIntradayDataGateway
 from app.services.intraday_opportunity import IntradayPortfolioState, BlumIntradayOpportunityEngine
 from app.services.intraday_paper_engine import BlumIntradayPaperEngine, IntradayPaperLearningService, intraday_snapshot_summary
+from app.services.live_forward_paper_trading import LiveForwardPaperTradingService
 from app.services.promoted_strategy_registry import BlumPromotedStrategyRegistry
+from app.services import realtime
+from app.engine.brain.trader_brain import TraderBrainService
 
 
 NOW = datetime(2026, 7, 13, 14, 30)
@@ -395,3 +400,88 @@ def test_intraday_snapshot_is_read_only_and_reports_no_activity_truthfully():
     assert before == after == 0
     assert snapshot["status"] == "NO_INTRADAY_RUNS"
     assert snapshot["trades_opened_today"] == 0
+
+
+def test_intraday_command_is_post_only_and_settings_are_bounded():
+    methods = {
+        method
+        for route in router.routes
+        if getattr(route, "path", None) == "/api/paper-forward/run-intraday"
+        for method in (route.methods or set())
+    }
+    settings = Settings(DATABASE_URL="sqlite:///:memory:")
+
+    assert methods == {"POST"}
+    assert settings.intraday_paper_enabled is True
+    assert 1 <= settings.intraday_paper_minutes <= 60
+    assert settings.intraday_max_runtime_seconds <= 120
+
+
+def test_scheduler_runs_intraday_worker_independently(monkeypatch):
+    observed = {}
+
+    class StubEngine:
+        def run_once(self, db, *, trigger):
+            observed["db"] = db
+            observed["trigger"] = trigger
+            return {"status": "COMPLETED"}
+
+    sentinel_db = object()
+    monkeypatch.setattr(realtime, "BlumIntradayPaperEngine", StubEngine)
+    monkeypatch.setattr(realtime, "_run_job", lambda name, work: observed.update(name=name, result=work(sentinel_db)))
+
+    realtime.run_intraday_paper_trading_job()
+
+    assert observed == {"name": "intraday_paper_trading", "db": sentinel_db, "trigger": "scheduled", "result": {"status": "COMPLETED"}}
+
+
+def test_paper_snapshot_embeds_read_only_intraday_summary():
+    with setup_db() as db:
+        payload = LiveForwardPaperTradingService().snapshot_payload(db)
+
+    assert payload["intraday"]["status"] == "NO_INTRADAY_RUNS"
+    assert payload["intraday"]["evidence_type"] == PAPER_FORWARD_INTRADAY
+
+
+def test_alpha_keeps_closed_intraday_evidence_separate_from_generic_paper_forward():
+    with setup_db() as db:
+        game = LiveForwardPaperGame(game_id="alpha-intraday", starting_capital=100, current_capital=102, cash=102, realized_pl=2)
+        db.add(game)
+        db.flush()
+        db.add(
+            LiveForwardPaperTrade(
+                trade_uid="alpha-intraday-trade",
+                game_id=game.id,
+                ticker="NVDA",
+                setup_type="intraday_breakout",
+                status="CLOSED",
+                decision_timestamp=NOW,
+                decision_date=NOW.date(),
+                opened_at=NOW,
+                closed_at=NOW + timedelta(minutes=30),
+                entry_price=100,
+                exit_price=102,
+                position_size=1,
+                net_pnl_eur=1.9,
+                gross_pnl_eur=2.0,
+                pnl_percent=1.9,
+                r_multiple=1.9,
+                benchmark_return_same_period=0.5,
+                excess_return_vs_benchmark=1.4,
+                outcome_label="win",
+                duplicate_key="alpha-intraday-key",
+                trading_mode="INTRADAY_PAPER_FORWARD",
+                evidence_type=PAPER_FORWARD_INTRADAY,
+                timeframe_stack=["1d", "15m", "5m", "1m"],
+                costs_paid=0.1,
+                holding_minutes=30,
+            )
+        )
+        db.commit()
+        snapshot = TraderBrainService().alpha(db)
+
+    intraday = snapshot["evidence_split"]["intraday_paper_forward"]
+    assert intraday["sample_size"] == 1
+    assert intraday["costs_paid"] == 0.1
+    assert intraday["average_holding_minutes"] == 30
+    assert snapshot["evidence_split"]["paper_forward"]["sample_size"] == 0

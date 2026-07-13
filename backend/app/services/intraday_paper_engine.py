@@ -9,6 +9,7 @@ from uuid import uuid4
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.models import (
     Asset,
     FeedbackLoopAudit,
@@ -26,12 +27,15 @@ from app.services.intraday_contracts import INTRADAY_TRADE_CANDIDATE, PAPER_FORW
 from app.services.intraday_market_data import StrictIntradayDataGateway
 from app.services.intraday_opportunity import BlumIntradayOpportunityEngine, IntradayPortfolioState
 from app.services.live_forward_paper_trading import LiveForwardPaperTradingService
+from app.services.cross_market_orchestrator import enabled_agents, parse_names
+from app.services.market_desks import MarketDeskRegistry
 from app.services.promoted_strategy_registry import BlumPromotedStrategyRegistry, normalize_market
 from app.services.trading_intelligence_lab import ensure_live_trade_game
 
 
 INTRADAY_MODE = "INTRADAY_PAPER_FORWARD"
 TERMINAL_STATUSES = {"CLOSED", "EXPIRED", "INVALIDATED"}
+settings = get_settings()
 
 
 class BlumIntradayPaperEngine:
@@ -45,21 +49,37 @@ class BlumIntradayPaperEngine:
         opportunity: BlumIntradayOpportunityEngine | None = None,
         now_provider: Callable[[], datetime] = datetime.utcnow,
         refresh_missing: bool = True,
-        max_assets: int = 20,
-        max_runtime_seconds: float = 45.0,
-        max_holding_minutes: int = 90,
+        max_assets: int | None = None,
+        max_runtime_seconds: float | None = None,
+        max_holding_minutes: int | None = None,
     ):
         self.registry = registry or BlumPromotedStrategyRegistry()
-        self.gateway = gateway or StrictIntradayDataGateway(refresh_missing=refresh_missing)
-        self.opportunity = opportunity or BlumIntradayOpportunityEngine()
+        self.gateway = gateway or StrictIntradayDataGateway(
+            refresh_missing=refresh_missing,
+            max_one_minute_age=timedelta(minutes=settings.intraday_max_one_minute_age_minutes),
+        )
+        self.opportunity = opportunity or BlumIntradayOpportunityEngine(
+            min_expected_move_bps=settings.intraday_min_expected_move_bps,
+            max_spread_to_target_ratio=settings.intraday_max_spread_to_target_ratio,
+            min_liquidity_score=settings.intraday_min_liquidity_score,
+            max_open_positions=settings.intraday_max_open_positions,
+            max_positions_per_market=settings.intraday_max_positions_per_market,
+            max_positions_per_desk=settings.intraday_max_positions_per_desk,
+            max_positions_per_asset_class=settings.intraday_max_positions_per_asset_class,
+            max_total_risk_percent=settings.intraday_max_total_risk_percent,
+            min_volatility_bps=settings.intraday_min_volatility_bps,
+        )
         self.now_provider = now_provider
-        self.max_assets = max(1, int(max_assets))
-        self.max_runtime_seconds = max(1.0, float(max_runtime_seconds))
-        self.max_holding_minutes = max(1, int(max_holding_minutes))
+        self.max_assets = max(1, int(max_assets if max_assets is not None else settings.intraday_max_assets_per_run))
+        self.max_runtime_seconds = max(1.0, float(max_runtime_seconds if max_runtime_seconds is not None else settings.intraday_max_runtime_seconds))
+        self.max_holding_minutes = max(1, int(max_holding_minutes if max_holding_minutes is not None else settings.intraday_max_holding_minutes))
         self.paper = LiveForwardPaperTradingService()
         self.learning = IntradayPaperLearningService()
+        self._desk_context: dict[int, tuple[str, str]] = {}
 
     def run_once(self, db: Session, *, trigger: str = "manual", assets: Iterable[Asset] | None = None) -> dict:
+        if not settings.intraday_paper_enabled:
+            return {"status": "DISABLED", "evidence_type": PAPER_FORWARD_INTRADAY, "blockers": ["intraday_paper_disabled"]}
         now = self.now_provider()
         started = monotonic()
         run = IntradayPaperRun(
@@ -79,6 +99,8 @@ class BlumIntradayPaperEngine:
             run.trades_closed = lifecycle["trades_closed"]
 
             selected_assets = list(assets)[: self.max_assets] if assets is not None else self._discover_assets(db)
+            if not selected_assets:
+                blockers.append({"reason": "NO_DESK_ASSETS_WITH_INTRADAY_DATA", "detail": "No enabled USA/Europe desk asset currently has stored one-minute data."})
             run.assets_checked = 0
             seen_markets: set[str] = set()
             for asset in selected_assets:
@@ -98,7 +120,7 @@ class BlumIntradayPaperEngine:
                     continue
                 for strategy in strategies:
                     portfolio = self._portfolio_state(db, game)
-                    desk, benchmark = desk_and_benchmark(asset)
+                    desk, benchmark = self._desk_context.get(asset.id, desk_and_benchmark(asset))
                     decision = self.opportunity.evaluate(
                         strategy=strategy,
                         data=data,
@@ -131,6 +153,12 @@ class BlumIntradayPaperEngine:
             }
             self.paper.refresh_live_game_counts(db, game)
             db.commit()
+            try:
+                self.paper.publish_snapshot(db)
+                db.commit()
+            except Exception as snapshot_exc:
+                db.rollback()
+                blockers.append({"reason": "SNAPSHOT_REFRESH_FAILED", "detail": str(snapshot_exc)})
             return self._serialize_run(run, blockers)
         except Exception as exc:
             db.rollback()
@@ -158,9 +186,23 @@ class BlumIntradayPaperEngine:
         ).all()
         if not asset_ids:
             return []
-        rows = db.scalars(select(Asset).where(Asset.id.in_(asset_ids), Asset.is_active.is_(True))).all()
-        by_id = {row.id: row for row in rows}
-        return [by_id[asset_id] for asset_id in asset_ids if asset_id in by_id][: self.max_assets]
+        allowed_ids = set(asset_ids)
+        agent_types = enabled_agents(parse_names(settings.blum_enabled_market_desk_agents), stale_after_hours=settings.paper_forward_scan_stale_data_max_age_hours)
+        discovery = MarketDeskRegistry(agents=agent_types).discover(db)
+        ranked: list[Asset] = []
+        seen: set[int] = set()
+        for agent in discovery.available_agents:
+            if agent.agent_name not in {"WallStreetAgent", "SP500Agent", "NasdaqAgent", "DowJonesAgent", "Russell2000Agent", "FTSEMIBAgent", "DAXAgent", "CAC40Agent", "ETFDeskAgent"}:
+                continue
+            for asset in list(getattr(agent, "_eligible_assets", None) or []):
+                if asset.id not in allowed_ids or asset.id in seen:
+                    continue
+                seen.add(asset.id)
+                self._desk_context[asset.id] = (agent.agent_name, agent.benchmark)
+                ranked.append(asset)
+                if len(ranked) >= self.max_assets:
+                    return ranked
+        return ranked
 
     def _portfolio_state(self, db: Session, game: LiveForwardPaperGame) -> IntradayPortfolioState:
         rows = db.scalars(
@@ -387,10 +429,10 @@ class BlumIntradayPaperEngine:
             return "TRAILING_STOP", float(trade.trailing_stop)
         opened_at = trade.opened_at or trade.decision_timestamp
         holding = (bar.bar_timestamp - opened_at).total_seconds() / 60
-        if holding >= self.max_holding_minutes:
-            return "TIME_EXIT", float(bar.close)
         if bar.bar_timestamp.date() > opened_at.date():
-            return "NO_OVERNIGHT_EXIT", float(bar.open or bar.close)
+            return "MARKET_CLOSE", float(bar.open or bar.close)
+        if holding >= self.max_holding_minutes:
+            return "TIME_STOP", float(bar.close)
         return None, None
 
     def _close_trade(self, db: Session, *, game: LiveForwardPaperGame, trade: LiveForwardPaperTrade, bar: ReplayMarketBar, raw_exit: float, reason: str) -> None:
@@ -421,6 +463,7 @@ class BlumIntradayPaperEngine:
         trade.invalidation_hit = reason == "INVALIDATION_HIT"
         trade.target_1_hit = reason == "TARGET_HIT"
         trade.outcome_label = "win" if net > 0 else "loss" if net < 0 else "breakeven"
+        self._update_benchmark_outcome(db, trade, bar.bar_timestamp)
         trade.lesson_learned = intraday_lesson(trade)
         trade.unrealized_pnl = 0.0
         game.cash = float(game.cash or 0.0) + exit_fill * quantity
@@ -442,7 +485,32 @@ class BlumIntradayPaperEngine:
             ledger.r_multiple = trade.r_multiple
             ledger.outcome_label = trade.outcome_label
             ledger.capital_after = game.current_capital
+            ledger.benchmark_return_same_period = trade.benchmark_return_same_period
+            ledger.excess_return_vs_benchmark = trade.excess_return_vs_benchmark
         self.paper.append_event(db, trade.id, "INTRADAY_TRADE_CLOSED", f"Intraday paper trade closed: {reason}.", {"bar_timestamp": bar.bar_timestamp.isoformat(), "gross_pnl": gross, "net_pnl": net, "costs_paid": total_cost}, exit_fill)
+        self.paper.append_event(db, trade.id, "INTRADAY_OUTCOME_EVALUATED", "Closed intraday outcome evaluated against stored benchmark data when available.", {"r_multiple": trade.r_multiple, "benchmark_return": trade.benchmark_return_same_period, "benchmark_excess": trade.excess_return_vs_benchmark}, exit_fill)
+
+    def _update_benchmark_outcome(self, db: Session, trade: LiveForwardPaperTrade, exit_timestamp: datetime) -> None:
+        benchmark = db.scalar(select(Asset).where(func.upper(Asset.ticker) == str(trade.benchmark_ticker or "").upper()).limit(1))
+        if benchmark is None:
+            return
+        entry_row = db.scalar(
+            select(ReplayMarketBar)
+            .where(ReplayMarketBar.asset_id == benchmark.id, ReplayMarketBar.timeframe == "1m", ReplayMarketBar.bar_timestamp <= (trade.opened_at or trade.decision_timestamp))
+            .order_by(desc(ReplayMarketBar.bar_timestamp))
+            .limit(1)
+        )
+        exit_row = db.scalar(
+            select(ReplayMarketBar)
+            .where(ReplayMarketBar.asset_id == benchmark.id, ReplayMarketBar.timeframe == "1m", ReplayMarketBar.bar_timestamp <= exit_timestamp)
+            .order_by(desc(ReplayMarketBar.bar_timestamp))
+            .limit(1)
+        )
+        if entry_row is None or exit_row is None or float(entry_row.close or 0.0) <= 0:
+            return
+        benchmark_return = (float(exit_row.close) / float(entry_row.close) - 1) * 100
+        trade.benchmark_return_same_period = round(benchmark_return, 6)
+        trade.excess_return_vs_benchmark = round(float(trade.pnl_percent or 0.0) - benchmark_return, 6)
 
     @staticmethod
     def _update_excursions(trade: LiveForwardPaperTrade, bar: ReplayMarketBar) -> None:
@@ -479,6 +547,8 @@ class BlumIntradayPaperEngine:
             "rejected_due_to_risk": run.rejected_due_to_risk,
             "rejected_due_to_concentration": run.rejected_due_to_concentration,
             "blockers": blockers,
+            "data_blockers": blockers,
+            "next_action": "Continue on the next fresh one-minute bar." if run.trades_opened or run.trades_updated else "Resolve recorded blockers; never force activity.",
             "duration_seconds": run.duration_seconds,
             "evidence_type": PAPER_FORWARD_INTRADAY,
         }
@@ -573,21 +643,52 @@ def intraday_snapshot_summary(db: Session, *, now: datetime | None = None) -> di
     today_rows = [row for row in rows if (row.decision_date or row.created_at.date()) == day]
     closed = [row for row in rows if row.status in TERMINAL_STATUSES]
     costs = sum(float(row.costs_paid or 0.0) for row in closed)
+    open_rows = [row for row in rows if row.status == "OPEN"]
+    rejection_counts = {
+        "rejected_due_to_costs": int(latest_run.rejected_due_to_costs or 0) if latest_run else 0,
+        "rejected_due_to_concentration": int(latest_run.rejected_due_to_concentration or 0) if latest_run else 0,
+    }
+    if not latest_run:
+        inactivity_reason = "No intraday run has completed."
+        next_action = "Wait for the bounded backend worker or invoke the explicit manual POST."
+    elif not rows:
+        latest_blockers = latest_run.data_blockers or []
+        inactivity_reason = str((latest_blockers[0] if latest_blockers else {}).get("reason") or "No strategy passed all forward gates.")
+        next_action = "Resolve the recorded data/promotion blocker; do not force a paper trade."
+    else:
+        inactivity_reason = None
+        next_action = "Manage open positions from later one-minute bars and continue strict scans."
     return {
         "status": latest_run.status if latest_run else "NO_INTRADAY_RUNS",
+        "intraday_engine_status": latest_run.status if latest_run else "NO_INTRADAY_RUNS",
         "last_run_at": latest_run.started_at.isoformat() if latest_run else None,
         "last_run_duration_seconds": latest_run.duration_seconds if latest_run else None,
         "intraday_scans_today": int(db.scalar(select(func.count(IntradayPaperRun.id)).where(func.date(IntradayPaperRun.started_at) == day)) or 0),
         "candidates_today": len(today_rows),
+        "intraday_candidates_today": len(today_rows),
         "trades_opened_today": sum(1 for row in today_rows if row.opened_at is not None),
+        "intraday_opened_today": sum(1 for row in today_rows if row.opened_at is not None),
         "trades_closed_today": sum(1 for row in rows if row.closed_at and row.closed_at.date() == day),
-        "open_positions": sum(1 for row in rows if row.status == "OPEN"),
+        "intraday_closed_today": sum(1 for row in rows if row.closed_at and row.closed_at.date() == day),
+        "open_positions": len(open_rows),
+        "open_positions_by_market": dict(Counter(row.market or "UNKNOWN" for row in open_rows)),
+        "open_positions_by_desk": dict(Counter(row.desk or "UNKNOWN" for row in open_rows)),
+        "open_positions_by_ticker": dict(Counter(row.ticker for row in open_rows)),
+        "distinct_markets_traded_today": len({row.market for row in today_rows if row.market}),
+        "distinct_tickers_traded_today": len({row.ticker for row in today_rows if row.ticker}),
         "closed_sample_size": len(closed),
         "realized_pnl": round(sum(float(row.net_pnl_eur or 0.0) for row in closed), 4) if closed else None,
         "average_r": round(sum(float(row.r_multiple or 0.0) for row in closed) / len(closed), 4) if closed else None,
         "benchmark_excess": average_present([row.excess_return_vs_benchmark for row in closed]),
         "average_holding_minutes": average_present([row.holding_minutes for row in closed]),
+        "avg_holding_minutes": average_present([row.holding_minutes for row in closed]),
+        "avg_net_r": round(sum(float(row.r_multiple or 0.0) for row in closed) / len(closed), 4) if closed else None,
+        "realized_intraday_pnl": round(sum(float(row.net_pnl_eur or 0.0) for row in closed), 4) if closed else None,
+        "intraday_benchmark_excess": average_present([row.excess_return_vs_benchmark for row in closed]),
         "costs_paid": round(costs, 4) if closed else None,
+        **rejection_counts,
+        "reason_if_no_intraday_trades": inactivity_reason,
+        "next_intraday_action": next_action,
         "markets": dict(Counter(row.market or "UNKNOWN" for row in rows)),
         "desks": dict(Counter(row.desk or "UNKNOWN" for row in rows)),
         "setups": dict(Counter(row.setup_type for row in rows)),

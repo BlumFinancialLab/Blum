@@ -37,7 +37,9 @@ class BlumIntradayOpportunityEngine:
         max_open_positions: int = 5,
         max_positions_per_market: int = 3,
         max_positions_per_desk: int = 2,
+        max_positions_per_asset_class: int = 3,
         max_total_risk_percent: float = 5.0,
+        min_volatility_bps: float = 1.0,
     ):
         self.min_expected_move_bps = float(min_expected_move_bps)
         self.max_spread_to_target_ratio = float(max_spread_to_target_ratio)
@@ -45,7 +47,9 @@ class BlumIntradayOpportunityEngine:
         self.max_open_positions = int(max_open_positions)
         self.max_positions_per_market = int(max_positions_per_market)
         self.max_positions_per_desk = int(max_positions_per_desk)
+        self.max_positions_per_asset_class = int(max_positions_per_asset_class)
         self.max_total_risk_percent = float(max_total_risk_percent)
+        self.min_volatility_bps = float(min_volatility_bps)
         self.cost_model = ReplayExecutionModel()
         self.sizer = ReplayPositionSizer(max_risk_fraction=0.01)
 
@@ -80,6 +84,8 @@ class BlumIntradayOpportunityEngine:
             return IntradayDecision(INTRADAY_BLOCKED, "MARKET_CONCENTRATION", "Market concentration limit reached.", **base)
         if portfolio.positions_by_desk.get(desk, 0) >= self.max_positions_per_desk:
             return IntradayDecision(INTRADAY_BLOCKED, "DESK_CONCENTRATION", "Desk concentration limit reached.", **base)
+        if portfolio.positions_by_asset_class.get(asset_type, 0) >= self.max_positions_per_asset_class:
+            return IntradayDecision(INTRADAY_BLOCKED, "ASSET_CLASS_CONCENTRATION", "Asset-class concentration limit reached.", **base)
         if portfolio.total_risk_percent >= self.max_total_risk_percent:
             return IntradayDecision(INTRADAY_BLOCKED, "TOTAL_RISK_LIMIT", "Portfolio paper-risk limit reached.", **base)
 
@@ -99,6 +105,8 @@ class BlumIntradayOpportunityEngine:
         true_ranges = [max(float(row.high or row.close) - float(row.low or row.close), abs(float(row.close) - float(row.open or row.close))) for row in trigger[-20:]]
         atr = max(0.0001, mean(true_ranges))
         volatility_bps = atr / entry * 10_000
+        if volatility_bps < self.min_volatility_bps:
+            return IntradayDecision(INTRADAY_BLOCKED, "VOLATILITY_TOO_LOW", "Observed one-minute volatility is too low for costs and execution risk.", volatility_bps=volatility_bps, regime=regime, **base)
         volumes = [float(row.volume or 0.0) for row in trigger[-20:]]
         latest_volume = volumes[-1]
         average_volume = max(1.0, mean(volumes))
@@ -125,8 +133,10 @@ class BlumIntradayOpportunityEngine:
         if cost.spread_bps / max(expected_move_bps, 0.01) > self.max_spread_to_target_ratio:
             return IntradayDecision(INTRADAY_BLOCKED, "SPREAD_TOO_WIDE", "Estimated spread is too large relative to the target.", costs=costs, **base)
 
-        confidence = max(strategy.minimum_confidence, min(95.0, strategy.walk_forward_score))
-        edge_score = max(strategy.minimum_edge_score, min(100.0, 50.0 + float(strategy.metrics.get("expectancy_r") or 0.0) * 100.0))
+        confidence = min(95.0, strategy.walk_forward_score)
+        edge_score = min(100.0, 50.0 + float(strategy.metrics.get("expectancy_r") or 0.0) * 100.0)
+        if confidence < strategy.minimum_confidence or edge_score < strategy.minimum_edge_score:
+            return IntradayDecision(INTRADAY_BLOCKED, "QUANT_EDGE_BELOW_THRESHOLD", "Promoted strategy does not meet current confidence or Quant Edge threshold.", confidence=confidence, edge_score=edge_score, regime=regime, session=session, costs=costs, **base)
         size = self.sizer.size(
             capital=portfolio.capital,
             entry=entry,

@@ -284,6 +284,7 @@ from app.services.trading_intelligence_lab import (
     TradingIntelligenceMetricsService,
 )
 from app.services.live_forward_paper_trading import LiveForwardPaperTradingService
+from app.services.intraday_paper_engine import BlumIntradayPaperEngine
 from app.services.paper_forward_opportunity_scanner import PaperForwardOpportunityScanner
 from app.services.performance import performance_recorder
 from app.services.trader_brain import TraderBrainService
@@ -1344,6 +1345,11 @@ def paper_forward_run_lifecycle(
     db: Session = Depends(get_db),
 ) -> dict:
     return LiveForwardPaperTradingService().run_lifecycle(db, override=override)
+
+
+@router.post("/api/paper-forward/run-intraday")
+def paper_forward_run_intraday(db: Session = Depends(get_db)) -> dict:
+    return BlumIntradayPaperEngine().run_once(db, trigger="manual")
 
 
 @router.post("/api/training/accelerate")
