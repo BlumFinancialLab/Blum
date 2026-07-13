@@ -6,7 +6,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from app.core.database import Base
-from app.models import Asset, LiveForwardPaperTrade, ReplayMarketBar, ReplayStrategyValidation
+from app.models import Asset, IntradayPaperRun, LiveForwardPaperGame, LiveForwardPaperTrade, ReplayMarketBar, ReplayStrategyValidation
 from app.services.intraday_contracts import PAPER_FORWARD_INTRADAY
 from app.services.intraday_market_data import StrictIntradayDataGateway
 from app.services.intraday_opportunity import IntradayPortfolioState, BlumIntradayOpportunityEngine
@@ -206,3 +206,44 @@ def test_opportunity_rejects_duplicate_open_ticker():
 def test_intraday_trade_evidence_constant_is_forward_only():
     assert PAPER_FORWARD_INTRADAY == "PAPER_FORWARD_INTRADAY"
     assert PAPER_FORWARD_INTRADAY != "REPLAY_EVIDENCE"
+
+
+def test_intraday_trade_persists_strategy_cost_and_lifecycle_metadata():
+    with setup_db() as db:
+        game = LiveForwardPaperGame(game_id="intraday-test", starting_capital=10_000, current_capital=10_000, cash=10_000)
+        db.add(game)
+        validation = seed_validation(db)
+        validation_id = validation.id
+        run = IntradayPaperRun(run_uid="intraday-run-test", trigger="test", status="RUNNING", started_at=NOW)
+        db.add(run)
+        db.flush()
+        trade = LiveForwardPaperTrade(
+            trade_uid="intraday-trade-test",
+            game_id=game.id,
+            ticker="NVDA",
+            setup_type="intraday_breakout",
+            status="OPEN",
+            decision_timestamp=NOW,
+            duplicate_key="intraday-test-key",
+            trading_mode="INTRADAY_PAPER_FORWARD",
+            evidence_type=PAPER_FORWARD_INTRADAY,
+            promoted_validation_id=validation.id,
+            intraday_run_id=run.id,
+            market="USA",
+            desk="NasdaqAgent",
+            session_name="regular",
+            timeframe_stack=["1d", "15m", "5m", "1m"],
+            data_timestamps={"1m": NOW.isoformat()},
+            execution_costs={"total_round_trip_bps": 5.0},
+            net_expectancy_bps=18.0,
+            sizing_reason="risk controlled",
+            last_managed_bar_at=NOW,
+        )
+        db.add(trade)
+        db.commit()
+        stored = db.scalar(select(LiveForwardPaperTrade).where(LiveForwardPaperTrade.trade_uid == "intraday-trade-test"))
+
+    assert stored is not None
+    assert stored.evidence_type == PAPER_FORWARD_INTRADAY
+    assert stored.timeframe_stack == ["1d", "15m", "5m", "1m"]
+    assert stored.promoted_validation_id == validation_id

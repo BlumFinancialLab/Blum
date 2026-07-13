@@ -2266,6 +2266,34 @@ class TradingIntelligenceMetric(Base):
     notes_json: Mapped[dict] = mapped_column(JsonType, default=dict)
 
 
+class IntradayPaperRun(Base):
+    __tablename__ = "intraday_paper_runs"
+    __table_args__ = (
+        Index("ix_intraday_paper_runs_status_started", "status", "started_at"),
+        Index("ix_intraday_paper_runs_trigger_started", "trigger", "started_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_uid: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    trigger: Mapped[str] = mapped_column(String(40), default="scheduled", index=True)
+    status: Mapped[str] = mapped_column(String(40), default="RUNNING", index=True)
+    markets_checked: Mapped[int] = mapped_column(Integer, default=0)
+    assets_checked: Mapped[int] = mapped_column(Integer, default=0)
+    candidates_found: Mapped[int] = mapped_column(Integer, default=0)
+    candidates_approved: Mapped[int] = mapped_column(Integer, default=0)
+    trades_opened: Mapped[int] = mapped_column(Integer, default=0)
+    trades_updated: Mapped[int] = mapped_column(Integer, default=0)
+    trades_closed: Mapped[int] = mapped_column(Integer, default=0)
+    rejected_due_to_costs: Mapped[int] = mapped_column(Integer, default=0)
+    rejected_due_to_risk: Mapped[int] = mapped_column(Integer, default=0)
+    rejected_due_to_concentration: Mapped[int] = mapped_column(Integer, default=0)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    duration_seconds: Mapped[float] = mapped_column(Float, default=0.0)
+    data_blockers: Mapped[list] = mapped_column(JsonType, default=list)
+    summary_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+
+
 class LiveForwardPaperGame(Base):
     __tablename__ = "live_forward_paper_games"
     __table_args__ = (Index("ix_live_forward_paper_games_status_started", "status", "started_at"),)
@@ -2346,6 +2374,26 @@ class LiveForwardPaperTrade(Base):
     strategy_memory_used: Mapped[dict] = mapped_column(JsonType, default=dict)
     research_priority_used: Mapped[dict] = mapped_column(JsonType, default=dict)
     frozen_decision_payload: Mapped[dict] = mapped_column(JsonType, default=dict)
+    trading_mode: Mapped[str | None] = mapped_column(String(60), index=True)
+    evidence_type: Mapped[str | None] = mapped_column(String(60), index=True)
+    promoted_validation_id: Mapped[int | None] = mapped_column(ForeignKey("replay_strategy_validations.id", ondelete="SET NULL"), index=True)
+    intraday_run_id: Mapped[int | None] = mapped_column(ForeignKey("intraday_paper_runs.id", ondelete="SET NULL"), index=True)
+    market: Mapped[str | None] = mapped_column(String(60), index=True)
+    desk: Mapped[str | None] = mapped_column(String(100), index=True)
+    session_name: Mapped[str | None] = mapped_column(String(60), index=True)
+    timeframe_stack: Mapped[list] = mapped_column(JsonType, default=list)
+    data_timestamps: Mapped[dict] = mapped_column(JsonType, default=dict)
+    execution_costs: Mapped[dict] = mapped_column(JsonType, default=dict)
+    spread_cost: Mapped[float] = mapped_column(Float, default=0.0)
+    slippage_cost: Mapped[float] = mapped_column(Float, default=0.0)
+    commission_cost: Mapped[float] = mapped_column(Float, default=0.0)
+    costs_paid: Mapped[float] = mapped_column(Float, default=0.0)
+    net_expectancy_bps: Mapped[float | None] = mapped_column(Float)
+    sizing_reason: Mapped[str | None] = mapped_column(Text)
+    trailing_stop: Mapped[float | None] = mapped_column(Float)
+    last_managed_bar_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    holding_minutes: Mapped[float | None] = mapped_column(Float)
+    intraday_metadata: Mapped[dict] = mapped_column(JsonType, default=dict)
     actionability_state: Mapped[str | None] = mapped_column(String(80), index=True)
     confidence: Mapped[float | None] = mapped_column(Float)
     sniper_score: Mapped[float | None] = mapped_column(Float, index=True)
@@ -2394,6 +2442,8 @@ class LiveForwardPaperTrade(Base):
     game = relationship("LiveForwardPaperGame")
     ledger_trade = relationship("TradingGameTrade")
     feedback_loop_audit = relationship("FeedbackLoopAudit")
+    promoted_validation = relationship("ReplayStrategyValidation")
+    intraday_run = relationship("IntradayPaperRun")
 
     @property
     def decision_payload_frozen(self) -> dict:
