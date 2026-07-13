@@ -78,7 +78,7 @@ The manual run reported:
 
 ```json
 {
-  "status": "COMPLETED",
+  "status": "DATA_BLOCKED",
   "assets_checked": 0,
   "trades_opened": 0,
   "data_blockers": [{"reason": "NO_DESK_ASSETS_WITH_INTRADAY_DATA"}],

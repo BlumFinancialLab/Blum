@@ -142,7 +142,7 @@ class BlumIntradayPaperEngine:
                         blockers.append({"ticker": trade.ticker, "reason": "DUPLICATE_INTRADAY_DECISION"})
 
             run.markets_checked = len(seen_markets)
-            run.status = "COMPLETED"
+            run.status = self._terminal_status(run=run, blockers=blockers, decisions=decisions)
             run.completed_at = now
             run.duration_seconds = round(monotonic() - started, 4)
             run.data_blockers = blockers
@@ -165,7 +165,7 @@ class BlumIntradayPaperEngine:
             failed = IntradayPaperRun(
                 run_uid=f"intraday-failed-{now.strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:8]}",
                 trigger=trigger,
-                status="FAILED",
+                status="ERROR",
                 started_at=now,
                 completed_at=self.now_provider(),
                 duration_seconds=round(monotonic() - started, 4),
@@ -530,6 +530,20 @@ class BlumIntradayPaperEngine:
             run.rejected_due_to_concentration += 1
         else:
             run.rejected_due_to_risk += 1
+
+    @staticmethod
+    def _terminal_status(*, run: IntradayPaperRun, blockers: list[dict], decisions: list[dict]) -> str:
+        blocker_reasons = {str(blocker.get("reason") or "") for blocker in blockers}
+        if "RUNTIME_BUDGET_EXHAUSTED" in blocker_reasons:
+            return "PAUSED_FOR_RUNTIME"
+        if run.trades_opened or run.trades_updated or run.trades_closed:
+            return "COMPLETED"
+        decision_reasons = {str(decision.get("reason_code") or "") for decision in decisions}
+        if decision_reasons and decision_reasons == {"SESSION_NOT_ALLOWED"}:
+            return "MARKET_CLOSED"
+        if blocker_reasons & {"NO_DESK_ASSETS_WITH_INTRADAY_DATA", "INTRADAY_DATA_BLOCKED"}:
+            return "DATA_BLOCKED"
+        return "COMPLETED"
 
     @staticmethod
     def _serialize_run(run: IntradayPaperRun, blockers: list[dict]) -> dict:

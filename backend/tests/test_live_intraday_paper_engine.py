@@ -402,6 +402,20 @@ def test_intraday_snapshot_is_read_only_and_reports_no_activity_truthfully():
     assert snapshot["trades_opened_today"] == 0
 
 
+def test_intraday_run_reports_data_blocked_when_no_eligible_market_data_exists():
+    with setup_db() as db:
+        result = BlumIntradayPaperEngine(
+            now_provider=lambda: NOW,
+            refresh_missing=False,
+        ).run_once(db, trigger="test", assets=[])
+        persisted = db.scalar(select(IntradayPaperRun).where(IntradayPaperRun.run_uid == result["run_id"]))
+
+    assert result["status"] == "DATA_BLOCKED"
+    assert persisted is not None
+    assert persisted.status == "DATA_BLOCKED"
+    assert result["blockers"][0]["reason"] == "NO_DESK_ASSETS_WITH_INTRADAY_DATA"
+
+
 def test_intraday_command_is_post_only_and_settings_are_bounded():
     methods = {
         method
