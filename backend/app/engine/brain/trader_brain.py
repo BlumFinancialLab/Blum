@@ -157,7 +157,10 @@ class TraderBrainService:
         }
 
     def training_ground(self, db: Session) -> dict:
+        from app.services.adaptive_replay_training import ReplayTrainingSnapshotService
+
         latest_run = latest_row(db, LearningRun)
+        replay = ReplayTrainingSnapshotService().snapshot(db)
         research_planner = AutonomousResearchPlanner().summary(db)
         lessons = dedupe_lessons(
             db.scalars(select(TradeLearningEvidence).order_by(desc(TradeLearningEvidence.created_at)).limit(80)).all()
@@ -199,6 +202,8 @@ class TraderBrainService:
             "latest_trade": trade_payload(latest_trade),
             "paper_forward_learning_blocker": paper_forward_learning_blocker(paper_actionability),
             "paper_forward_actionability_summary": paper_actionability,
+            **replay,
+            "hyperbolic_replay": replay,
             "policy": "Training Ground observes the autonomous Learning Loop. It does not start experiments from the frontend.",
         }
 

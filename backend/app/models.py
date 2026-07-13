@@ -3659,3 +3659,149 @@ class PaperCopyPortfolioSnapshot(Base):
 
     portfolio = relationship("PaperCopyPortfolio")
     strategy = relationship("PaperCopyStrategy")
+
+
+class ReplayMarketBar(Base):
+    __tablename__ = "replay_market_bars"
+    __table_args__ = (
+        UniqueConstraint("asset_id", "timeframe", "bar_timestamp", name="uq_replay_bar_timestamp"),
+        Index("ix_replay_bars_asset_timeframe_timestamp", "asset_id", "timeframe", "bar_timestamp"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("assets.id", ondelete="CASCADE"), index=True)
+    source_symbol: Mapped[str] = mapped_column(String(48), index=True)
+    normalized_symbol: Mapped[str] = mapped_column(String(48), index=True)
+    market: Mapped[str] = mapped_column(String(40), index=True)
+    timeframe: Mapped[str] = mapped_column(String(8), index=True)
+    bar_timestamp: Mapped[datetime] = mapped_column(DateTime, index=True)
+    open: Mapped[float | None] = mapped_column(Float)
+    high: Mapped[float | None] = mapped_column(Float)
+    low: Mapped[float | None] = mapped_column(Float)
+    close: Mapped[float] = mapped_column(Float)
+    volume: Mapped[float | None] = mapped_column(Float)
+    provider: Mapped[str] = mapped_column(String(48), index=True)
+    acquired_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    data_quality_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    source_metadata: Mapped[dict] = mapped_column(JsonType, default=dict)
+
+    asset = relationship("Asset")
+
+
+class ReplayDataCoverage(Base):
+    __tablename__ = "replay_data_coverages"
+    __table_args__ = (
+        UniqueConstraint("asset_id", "timeframe", "provider", name="uq_replay_coverage_asset_timeframe_provider"),
+        Index("ix_replay_coverage_status_updated", "status", "updated_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("assets.id", ondelete="CASCADE"), index=True)
+    source_symbol: Mapped[str] = mapped_column(String(48), index=True)
+    normalized_symbol: Mapped[str] = mapped_column(String(48), index=True)
+    market: Mapped[str] = mapped_column(String(40), index=True)
+    timeframe: Mapped[str] = mapped_column(String(8), index=True)
+    provider: Mapped[str] = mapped_column(String(48), index=True)
+    requested_start: Mapped[datetime | None] = mapped_column(DateTime)
+    requested_end: Mapped[datetime | None] = mapped_column(DateTime)
+    available_start: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    available_end: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    rows_available: Mapped[int] = mapped_column(Integer, default=0)
+    coverage_percent: Mapped[float] = mapped_column(Float, default=0.0)
+    data_quality_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    status: Mapped[str] = mapped_column(String(40), default="INITIALIZING", index=True)
+    missing_intervals: Mapped[list] = mapped_column(JsonType, default=list)
+    blockers: Mapped[list] = mapped_column(JsonType, default=list)
+    source_metadata: Mapped[dict] = mapped_column(JsonType, default=dict)
+    acquired_at: Mapped[datetime | None] = mapped_column(DateTime)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+    asset = relationship("Asset")
+
+
+class HyperbolicReplayRun(Base):
+    __tablename__ = "hyperbolic_replay_runs"
+    __table_args__ = (Index("ix_hyperbolic_replay_runs_status_started", "status", "started_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    trigger: Mapped[str] = mapped_column(String(40), default="scheduled", index=True)
+    status: Mapped[str] = mapped_column(String(40), default="RUNNING", index=True)
+    evidence_type: Mapped[str] = mapped_column(String(40), default="REPLAY_EVIDENCE", index=True)
+    adaptive_state: Mapped[str] = mapped_column(String(40), default="RUNNING", index=True)
+    assets_selected: Mapped[int] = mapped_column(Integer, default=0)
+    trades_generated: Mapped[int] = mapped_column(Integer, default=0)
+    trades_validated: Mapped[int] = mapped_column(Integer, default=0)
+    experiments_run: Mapped[int] = mapped_column(Integer, default=0)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    duration_seconds: Mapped[float] = mapped_column(Float, default=0.0)
+    markets_json: Mapped[list] = mapped_column(JsonType, default=list)
+    timeframes_json: Mapped[list] = mapped_column(JsonType, default=list)
+    cursor_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    resource_limits_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    blockers_json: Mapped[list] = mapped_column(JsonType, default=list)
+    summary_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+
+
+class HyperbolicReplayTrade(Base):
+    __tablename__ = "hyperbolic_replay_trades"
+    __table_args__ = (
+        UniqueConstraint("asset_id", "setup_type", "timeframe", "decision_timestamp", name="uq_replay_trade_decision"),
+        Index("ix_hyperbolic_replay_trades_run_state", "run_id", "state"),
+        Index("ix_hyperbolic_replay_trades_ticker_decision", "ticker", "decision_timestamp"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("hyperbolic_replay_runs.id", ondelete="CASCADE"), index=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("assets.id", ondelete="CASCADE"), index=True)
+    ticker: Mapped[str] = mapped_column(String(48), index=True)
+    market: Mapped[str] = mapped_column(String(40), index=True)
+    setup_type: Mapped[str] = mapped_column(String(80), index=True)
+    timeframe: Mapped[str] = mapped_column(String(16), index=True)
+    state: Mapped[str] = mapped_column(String(40), index=True)
+    evidence_type: Mapped[str] = mapped_column(String(40), default="REPLAY_EVIDENCE", index=True)
+    decision_timestamp: Mapped[datetime] = mapped_column(DateTime, index=True)
+    entry_timestamp: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    exit_timestamp: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    entry_price: Mapped[float | None] = mapped_column(Float)
+    exit_price: Mapped[float | None] = mapped_column(Float)
+    stop_price: Mapped[float | None] = mapped_column(Float)
+    target_price: Mapped[float | None] = mapped_column(Float)
+    position_size: Mapped[float] = mapped_column(Float, default=0.0)
+    gross_pnl: Mapped[float | None] = mapped_column(Float)
+    net_pnl: Mapped[float | None] = mapped_column(Float)
+    r_multiple: Mapped[float | None] = mapped_column(Float, index=True)
+    benchmark_excess: Mapped[float | None] = mapped_column(Float, index=True)
+    data_quality_score: Mapped[float] = mapped_column(Float, default=0.0)
+    decision_payload: Mapped[dict] = mapped_column(JsonType, default=dict)
+    execution_payload: Mapped[dict] = mapped_column(JsonType, default=dict)
+    outcome_payload: Mapped[dict] = mapped_column(JsonType, default=dict)
+    rejection_reason: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    run = relationship("HyperbolicReplayRun")
+    asset = relationship("Asset")
+
+
+class ReplayStrategyValidation(Base):
+    __tablename__ = "replay_strategy_validations"
+    __table_args__ = (
+        Index("ix_replay_strategy_validations_setup_verdict", "setup_type", "verdict"),
+        Index("ix_replay_strategy_validations_created", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    experiment_id: Mapped[int | None] = mapped_column(ForeignKey("blum_learning_experiments.id", ondelete="SET NULL"), index=True)
+    setup_type: Mapped[str] = mapped_column(String(80), index=True)
+    evidence_type: Mapped[str] = mapped_column(String(40), default="WALK_FORWARD_EVIDENCE", index=True)
+    sample_size: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    markets_json: Mapped[list] = mapped_column(JsonType, default=list)
+    windows_json: Mapped[list] = mapped_column(JsonType, default=list)
+    metrics_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    overfitting_score: Mapped[float] = mapped_column(Float, default=100.0)
+    verdict: Mapped[str] = mapped_column(String(60), default="NEEDS_MORE_EVIDENCE", index=True)
+    explanation: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    experiment = relationship("BlumLearningExperiment")

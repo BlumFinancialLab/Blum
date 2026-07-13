@@ -27,6 +27,7 @@ from app.services.pipeline import PipelineService
 from app.services.trading_game import TradingGameSimulator
 from app.services.live_forward_paper_trading import LiveForwardPaperTradingService
 from app.services.worker_runtime import runtime_worker_coordinator
+from app.services.adaptive_replay_training import BlumAdaptiveTrainingController
 from app.signals.engine import SignalEngine
 
 
@@ -77,6 +78,14 @@ def start_realtime_services() -> None:
     _add_interval_job(run_fundamentals_refresh, minutes=settings.fundamentals_refresh_minutes, job_id="fundamentals_refresh", delay_seconds=840, jitter_seconds=45)
     _add_interval_job(run_ipo_refresh, minutes=settings.ipo_refresh_minutes, job_id="ipo_refresh", delay_seconds=960, jitter_seconds=45)
     if settings.enable_learning_loop:
+        if settings.replay_training_enabled:
+            _add_interval_job(
+                run_hyperbolic_replay_training_job,
+                minutes=settings.replay_training_minutes,
+                job_id="hyperbolic_replay_training",
+                delay_seconds=210,
+                jitter_seconds=30,
+            )
         if settings.professional_learning_enabled:
             _add_interval_job(
                 run_professional_learning_cycle_job,
@@ -296,6 +305,10 @@ def run_professional_learning_cycle_job() -> None:
         }
 
     _run_job("blum_professional_learning_cycle", work)
+
+
+def run_hyperbolic_replay_training_job() -> None:
+    _run_job("hyperbolic_replay_training", lambda db: BlumAdaptiveTrainingController().run_once(db, trigger="scheduled"))
 
 
 def run_autonomous_engine_job() -> None:

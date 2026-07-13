@@ -12,6 +12,7 @@ from app.engine.contracts import (
 from app.engine.agents.registry import agent_boundaries, collect_agent_evidence
 from app.engine.brain.trader_brain import TraderBrainService
 from app.services.paper_forward_opportunity_scanner import PaperForwardOpportunityScanner
+from app.services.adaptive_replay_training import BlumAdaptiveTrainingController
 
 
 class BlumEngineFacade:
@@ -111,6 +112,9 @@ class BlumEngineFacade:
             "learning_acceleration": acceleration,
             "experiment_manager": experiments,
         }
+
+    def run_training_replay(self, db: Session) -> dict:
+        return BlumAdaptiveTrainingController().run_once(db, trigger="manual")
 
     def paper_trading_snapshot(self, db: Session, *, limit: int = 20) -> dict:
         return TraderBrainService().paper_trading(db, limit=limit)

@@ -1808,6 +1808,40 @@ The output is designed to answer:
 
 Paper Copy Trading Intelligence is a decision-audit layer and paper portfolio research surface, not an execution system. It never connects to a broker and never emits direct financial advice.
 
+## Hyperbolic Multi-Timeframe Replay Engine
+
+BLUM trains on persisted market history through a bounded, background-first replay pipeline. The replay engine checks the local `ReplayMarketBar` store first, imports compatible daily rows from `PriceHistory`, and then uses free Yahoo Chart, yfinance, Stooq and Nasdaq adapters only for missing coverage. Provider failures, unsupported timeframes, partial history and low-quality data are recorded as blockers; missing bars are never synthesized.
+
+Replay decisions are chronological. Features and multi-timeframe context contain only bars closed at or before the decision timestamp, while entry uses a later executable bar. Supported evidence paths include daily swing, pullback, mean-reversion, intraday trend and 1-minute breakout execution when the required `1d`, `15m`, `5m` and `1m` data actually exist. If a lower timeframe is unavailable, BLUM degrades to a compatible setup instead of claiming false precision.
+
+Execution applies market-, asset- and liquidity-sensitive spread, slippage, commission and gap assumptions. Position size is capped by stop distance, ATR, liquidity, confidence, edge, data quality and regime alignment. Replay outcomes update `StrategyMemory`, `SignalPerformance`, `LearningEvent`, `LearningFocusPriority` and `FeedbackLoopAudit` idempotently under the immutable `REPLAY_EVIDENCE` label.
+
+Operational boundaries:
+
+- `POST /api/training/run-replay` runs one explicit, time- and item-bounded replay slice.
+- `GET /api/training/snapshot` only reads the latest stored snapshot and never starts training.
+- The scheduler runs `hyperbolic_replay_training` independently and persists its asset cursor in `background_job_state`.
+- Runtime states are `RUNNING`, `THROTTLED`, `PAUSED_FOR_RUNTIME`, `BUDGET_WAIT` and `ERROR`.
+- Strategy promotion requires at least 300 trades, multiple chronological windows, more than one market, acceptable drawdown/overfitting, positive benchmark-relative evidence and measured out-of-sample improvement over the active baseline.
+- Replay, walk-forward and paper-forward evidence remain separate. Replay output is not live alpha.
+
+Key environment controls:
+
+```text
+BLUM_REPLAY_TRAINING_ENABLED=true
+BLUM_REPLAY_TRAINING_MINUTES=15
+BLUM_REPLAY_TARGET_VALIDATED_TRADES_PER_DAY=5000
+BLUM_REPLAY_MAX_SECONDS_PER_CYCLE=120
+BLUM_REPLAY_MAX_ASSETS_PER_CYCLE=20
+BLUM_REPLAY_MAX_TRADES_PER_CYCLE=500
+BLUM_REPLAY_MAX_EXPERIMENTS_PER_CYCLE=5
+BLUM_REPLAY_MIN_PROMOTION_SAMPLES=300
+BLUM_REPLAY_MARKETS=UNITED STATES,USA,ITALY,GERMANY,FRANCE,EUROPE
+BLUM_REPLAY_TIMEFRAMES=1d,15m,5m,1m
+```
+
+The 5,000-trade daily value is a target, not a claimed result. Training Ground exposes measured daily throughput and the exact reason whenever verified data, eligible setups or runtime budgets prevent reaching it.
+
 ## Limitations
 
 - Public RSS, Google News RSS search, Yahoo and Stooq are demo-grade public data sources, not licensed institutional feeds.
