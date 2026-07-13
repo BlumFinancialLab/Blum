@@ -2187,11 +2187,13 @@ def live_forward_evidence_split(rows: list[LiveForwardPaperTrade], game: LiveFor
 def intraday_paper_evidence_split(rows: list[LiveForwardPaperTrade], game: LiveForwardPaperGame | None) -> dict:
     closed = [row for row in rows if paper_forward_trade_is_closed(row)]
     if not closed:
-        return empty_alpha_evidence_split(
+        split = empty_alpha_evidence_split(
             "Intraday Paper-Forward Evidence",
             "live_forward_paper_trades:PAPER_FORWARD_INTRADAY",
             "No closed intraday paper-forward trades exist yet.",
         )
+        split.update({"evidence_type": "PAPER_FORWARD_INTRADAY", "average_holding_minutes": None, "costs_paid": None})
+        return split
     split = paper_forward_evidence_split(
         rows,
         game,

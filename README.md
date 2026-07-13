@@ -1842,6 +1842,26 @@ BLUM_REPLAY_TIMEFRAMES=1d,15m,5m,1m
 
 The 5,000-trade daily value is a target, not a claimed result. Training Ground exposes measured daily throughput and the exact reason whenever verified data, eligible setups or runtime budgets prevent reaching it.
 
+## Live Intraday Paper Scalping Engine
+
+BLUM can promote replay-validated strategies into a separate intraday paper-forward stream. Promotion requires `PROMOTED_TO_PAPER`, at least 300 validated trades, positive benchmark-relative expectancy, acceptable stability and overfitting risk, and the exact `1d -> 15m -> 5m -> 1m` stack.
+
+The scheduled `intraday_paper_trading` worker and explicit `POST /api/paper-forward/run-intraday` command:
+
+- discover supported USA and European assets through enabled market desk agents;
+- require fresh real bars on all four timeframes, with no interpolation or timeframe fallback;
+- apply regime, setup, confirmation, trigger, liquidity, volatility, session, execution-cost and concentration gates;
+- use volatility- and risk-adjusted fractional paper sizing;
+- model adverse spread, slippage and commission fills;
+- manage positions only from later one-minute bars and close on stop, invalidation, target, trailing stop, time stop or market close;
+- create forward-only learning evidence after a trade is closed, never while it is open.
+
+`GET /api/paper-forward/snapshot` is read-only and explains current activity or its exact blocker. `GET /api/alpha/snapshot` reports `intraday_paper_forward` separately from replay, walk-forward and generic paper-forward evidence. Empty streams return `NO_DATA` with null metrics; they are never backfilled from replay results.
+
+Key controls include `BLUM_INTRADAY_PAPER_ENABLED`, `BLUM_INTRADAY_PAPER_MINUTES`, `BLUM_INTRADAY_MAX_ASSETS_PER_RUN`, `BLUM_INTRADAY_MAX_RUNTIME_SECONDS`, `BLUM_INTRADAY_MAX_OPEN_POSITIONS`, `BLUM_INTRADAY_MAX_HOLDING_MINUTES`, `BLUM_INTRADAY_MIN_EXPECTED_MOVE_BPS`, `BLUM_INTRADAY_MIN_LIQUIDITY_SCORE` and `BLUM_INTRADAY_MAX_ONE_MINUTE_AGE_MINUTES`.
+
+This engine is paper-only. It has no broker integration, performs no real-money execution and does not force trades when promotion, data or execution-quality gates fail.
+
 ## Limitations
 
 - Public RSS, Google News RSS search, Yahoo and Stooq are demo-grade public data sources, not licensed institutional feeds.
