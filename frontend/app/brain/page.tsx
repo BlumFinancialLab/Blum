@@ -44,7 +44,7 @@ export default function BrainPage() {
         ]}
       />
 
-      <section className="terminal-command-grid">
+      <section className="terminal-command-grid brain-command-grid">
         <MetricCard label="Brain Score" value={`${formatNumber(data.brain_score)}/100`} subvalue={data.brain_classification} icon={<Brain size={15} />} tone={toneForScore(data.brain_score)} />
         <MetricCard label="Decision Quality" value={`${formatNumber(data.decision_quality)}/100`} subvalue="Process quality, not just outcome" icon={<Target size={15} />} tone={toneForScore(data.decision_quality)} />
         <MetricCard label="Alpha Readiness" value={`${formatNumber(data.alpha_readiness)}/100`} subvalue={data.readiness?.alpha ?? "benchmark evidence pending"} icon={<TrendingUp size={15} />} tone={toneForScore(data.alpha_readiness)} />

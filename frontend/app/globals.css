@@ -1651,6 +1651,14 @@ p { color: var(--muted); line-height: 1.55; }
   gap: 8px;
   margin-bottom: 12px;
 }
+.brain-command-grid {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+.brain-command-grid .terminal-metric strong {
+  font-size: 24px;
+  overflow-wrap: normal;
+  white-space: nowrap;
+}
 .terminal-metric {
   min-height: 104px;
   border: 1px solid rgba(255,255,255,.1);

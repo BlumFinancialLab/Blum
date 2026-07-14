@@ -505,10 +505,14 @@ def test_product_surface_is_reduced_to_four_primary_pages():
 def test_brain_page_renders_learning_profit_and_copy_readiness_from_one_snapshot():
     frontend = Path(__file__).resolve().parents[2] / "frontend"
     page_text = (frontend / "app" / "brain" / "page.tsx").read_text()
+    styles_text = (frontend / "app" / "globals.css").read_text()
     charts_path = frontend / "components" / "BrainEvidenceCharts.tsx"
 
     assert page_text.count("api.traderBrain()") == 1
     assert "BrainEvidenceCharts" in page_text
+    assert 'className="terminal-command-grid brain-command-grid"' in page_text
+    assert ".brain-command-grid" in styles_text
+    assert "repeat(6, minmax(0, 1fr))" in styles_text
     assert "safeNumber(data?.brain_score) + 1" not in page_text
     assert charts_path.exists()
 
