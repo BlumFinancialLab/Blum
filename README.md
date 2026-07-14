@@ -1862,6 +1862,24 @@ Key controls include `BLUM_INTRADAY_PAPER_ENABLED`, `BLUM_INTRADAY_PAPER_MINUTES
 
 This engine is paper-only. It has no broker integration, performs no real-money execution and does not force trades when promotion, data or execution-quality gates fail.
 
+## Evidence, Trust and Copy Readiness Engine
+
+BLUM measures whether a strategy has enough reproducible evidence to be copied in paper research. The engine keeps four evidence classes strictly separate: `REPLAY_EVIDENCE`, `WALK_FORWARD_EVIDENCE`, `PAPER_FORWARD_EVIDENCE` and `INTRADAY_FORWARD_EVIDENCE`. Replay results can support research, but cannot by themselves promote a strategy to copy-ready status.
+
+The background/command path appends immutable evidence cards, readiness history and lifecycle events. Read paths never recalculate:
+
+- `GET /api/copy-readiness/strategies` returns a paginated latest-state projection.
+- `GET /api/copy-readiness/strategies/{strategy_id}` returns readiness plus separated evidence cards.
+- `GET /api/copy-readiness/strategies/{strategy_id}/timeline` returns a bounded audit timeline.
+- `POST /api/copy-readiness/recalculate` is the explicit, bounded projection command and refreshes compact Paper Forward and Alpha snapshots.
+- `GET /api/alpha/snapshot` and `GET /api/paper-forward/snapshot` consume stored readiness projections; neither starts learning, lifecycle work or recalculation.
+
+Default paper-copy promotion requires at least 100 global terminal forward trades, 30 terminal trades for the strategy, 90 observation days, positive net expectancy and benchmark excess, drawdown at or below 15%, replay-to-forward decay at or below 35%, five tickers, two regimes and controlled concentration. High-confidence and limited-external-validation classifications use stricter thresholds (300/100/180 and 500/150/270 respectively). Every threshold is configurable with the `COPY_READINESS_*`, `COPY_READINESS_HIGH_CONFIDENCE_*` and `LIMITED_EXTERNAL_VALIDATION_*` environment variables.
+
+Trade snapshots expose the evidence status, forward sample, net edge after measured costs, benchmark context, concentration, invalidation and paper-risk ceiling. Missing benchmark, cost or data-quality evidence remains `null` and blocks promotion where required; it is never converted to a favorable zero.
+
+`ELIGIBLE_FOR_LIMITED_EXTERNAL_VALIDATION` is an autonomous research classification only. The engine has no broker adapter, order submission path or real-money execution. It does not promise alpha, does not blend replay with forward results and does not modify a trade's frozen decision payload.
+
 ## Limitations
 
 - Public RSS, Google News RSS search, Yahoo and Stooq are demo-grade public data sources, not licensed institutional feeds.
