@@ -38,12 +38,20 @@ def backup_embedded_postgres_if_configured(reason: str = "manual") -> dict:
 
     os.makedirs(os.path.dirname(backup_file), exist_ok=True)
     tmp_file = f"{backup_file}.tmp"
-    args, env = pg_dump_command()
+    custom_format = backup_file.endswith(".dump")
+    args, env = pg_dump_command(custom_format=custom_format)
     started_at = datetime.utcnow().isoformat()
     os.environ["BLUM_LAST_BACKUP_ATTEMPT"] = started_at
     try:
         with open(tmp_file, "wb") as handle:
-            result = subprocess.run(args, stdout=handle, stderr=subprocess.PIPE, env=env, timeout=120, check=False)
+            result = subprocess.run(
+                args,
+                stdout=handle,
+                stderr=subprocess.PIPE,
+                env=env,
+                timeout=safe_int(os.getenv("BLUM_DB_BACKUP_TIMEOUT_SECONDS"), 900),
+                check=False,
+            )
         if result.returncode != 0:
             safe_unlink(tmp_file)
             return {
@@ -65,7 +73,7 @@ def backup_embedded_postgres_if_configured(reason: str = "manual") -> dict:
         return {"status": "error", "reason": reason, "started_at": started_at, "error": f"{type(exc).__name__}: {exc}"}
 
 
-def pg_dump_command() -> tuple[list[str], dict[str, str]]:
+def pg_dump_command(*, custom_format: bool = False) -> tuple[list[str], dict[str, str]]:
     settings = get_settings()
     raw_url = settings.database_url.replace("postgresql+psycopg2://", "postgresql://", 1)
     parsed = urlparse(raw_url)
@@ -81,6 +89,8 @@ def pg_dump_command() -> tuple[list[str], dict[str, str]]:
         "-d",
         database,
     ]
+    if custom_format:
+        args.extend(["--format=custom", "--compress=1"])
     env = dict(os.environ)
     if parsed.password:
         env["PGPASSWORD"] = unquote(parsed.password)

@@ -3,12 +3,12 @@ set -euo pipefail
 
 export PORT="${PORT:-7860}"
 export BLUM_PERSIST_DIR="${BLUM_PERSIST_DIR:-/data/blum}"
-export BLUM_DB_BACKUP_SECONDS="${BLUM_DB_BACKUP_SECONDS:-300}"
+export BLUM_DB_BACKUP_SECONDS="${BLUM_DB_BACKUP_SECONDS:-1800}"
 
 backup_embedded_postgres() {
   if [[ -n "${BLUM_EMBEDDED_POSTGRES_BACKUP_FILE:-}" ]]; then
     mkdir -p "$(dirname "${BLUM_EMBEDDED_POSTGRES_BACKUP_FILE}")" || true
-    if su postgres -c "pg_dump blum" > "${BLUM_EMBEDDED_POSTGRES_BACKUP_FILE}.tmp"; then
+    if su postgres -c "pg_dump -Fc -Z1 blum" > "${BLUM_EMBEDDED_POSTGRES_BACKUP_FILE}.tmp"; then
       mv "${BLUM_EMBEDDED_POSTGRES_BACKUP_FILE}.tmp" "${BLUM_EMBEDDED_POSTGRES_BACKUP_FILE}"
       echo "Embedded PostgreSQL backup updated at ${BLUM_EMBEDDED_POSTGRES_BACKUP_FILE}."
     else
@@ -35,12 +35,25 @@ if [[ -z "${DATABASE_URL:-}" ]]; then
   service postgresql start
   su postgres -c "psql -tc \"SELECT 1 FROM pg_database WHERE datname='blum'\" | grep -q 1 || createdb blum"
   su postgres -c "psql -c \"ALTER USER postgres PASSWORD 'postgres';\""
-  export BLUM_EMBEDDED_POSTGRES_BACKUP_FILE="${BLUM_PERSIST_DIR}/embedded_postgres_blum.sql"
+  export BLUM_EMBEDDED_POSTGRES_BACKUP_FILE="${BLUM_PERSIST_DIR}/embedded_postgres_blum.dump"
+  export BLUM_COMPRESSED_POSTGRES_BACKUP_FILE="${BLUM_PERSIST_DIR}/embedded_postgres_blum.sql.gz"
+  export BLUM_COMPRESSED_POSTGRES_PART_PREFIX="${BLUM_PERSIST_DIR}/embedded_postgres_blum.sql.gz"
+  export BLUM_COMPRESSED_POSTGRES_PARTS_READY_FILE="${BLUM_PERSIST_DIR}/embedded_postgres_blum.sql.gz.parts-ready"
+  export BLUM_LEGACY_POSTGRES_BACKUP_FILE="${BLUM_PERSIST_DIR}/embedded_postgres_blum.sql"
   TABLE_COUNT="$(su postgres -c "psql -d blum -tAc \"SELECT count(*) FROM information_schema.tables WHERE table_schema='public';\"" | tr -d '[:space:]')"
   if [[ "${TABLE_COUNT:-0}" == "0" && -s "${BLUM_EMBEDDED_POSTGRES_BACKUP_FILE}" ]]; then
     echo "Restoring embedded PostgreSQL backup from ${BLUM_EMBEDDED_POSTGRES_BACKUP_FILE}."
-    su postgres -c "psql -d blum" < "${BLUM_EMBEDDED_POSTGRES_BACKUP_FILE}" || echo "Backup restore failed; continuing with migrations."
-  elif [[ ! -s "${BLUM_EMBEDDED_POSTGRES_BACKUP_FILE}" ]]; then
+    su postgres -c "pg_restore -d blum" < "${BLUM_EMBEDDED_POSTGRES_BACKUP_FILE}" || echo "Custom backup restore failed; continuing with migrations."
+  elif [[ "${TABLE_COUNT:-0}" == "0" && -s "${BLUM_COMPRESSED_POSTGRES_BACKUP_FILE}" ]]; then
+    echo "Restoring compressed PostgreSQL bootstrap from ${BLUM_COMPRESSED_POSTGRES_BACKUP_FILE}."
+    gzip -dc "${BLUM_COMPRESSED_POSTGRES_BACKUP_FILE}" | su postgres -c "psql -d blum" || echo "Compressed backup restore failed; continuing with migrations."
+  elif [[ "${TABLE_COUNT:-0}" == "0" && -s "${BLUM_COMPRESSED_POSTGRES_PARTS_READY_FILE}" ]]; then
+    echo "Restoring segmented PostgreSQL bootstrap from ${BLUM_COMPRESSED_POSTGRES_PART_PREFIX}.part-* ."
+    cat "${BLUM_COMPRESSED_POSTGRES_PART_PREFIX}".part-* | gzip -dc | su postgres -c "psql -d blum" || echo "Segmented backup restore failed; continuing with migrations."
+  elif [[ "${TABLE_COUNT:-0}" == "0" && -s "${BLUM_LEGACY_POSTGRES_BACKUP_FILE}" ]]; then
+    echo "Restoring legacy PostgreSQL backup from ${BLUM_LEGACY_POSTGRES_BACKUP_FILE}."
+    su postgres -c "psql -d blum < \"${BLUM_LEGACY_POSTGRES_BACKUP_FILE}\"" || echo "Legacy backup restore failed; continuing with migrations."
+  elif [[ ! -s "${BLUM_EMBEDDED_POSTGRES_BACKUP_FILE}" && ! -s "${BLUM_COMPRESSED_POSTGRES_BACKUP_FILE}" && ! -s "${BLUM_LEGACY_POSTGRES_BACKUP_FILE}" ]]; then
     echo "No embedded PostgreSQL backup found yet. A new backup will be written periodically."
   else
     echo "Embedded PostgreSQL already contains tables; skipping restore."
