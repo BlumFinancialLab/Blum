@@ -25,3 +25,12 @@ def test_embedded_postgres_restore_supports_custom_and_bootstrap_fallbacks() -> 
     assert 'embedded_postgres_blum.sql"' in source
     assert 'Restoring legacy PostgreSQL backup' in source
     assert "BLUM_LEGACY_POSTGRES_BACKUP_FILE" in source
+
+
+def test_restore_exposes_a_non_blank_status_page_before_the_api_is_ready() -> None:
+    source = START_SCRIPT.read_text()
+
+    assert "start_restore_status_server" in source
+    assert 'python3 -m http.server "${PORT}"' in source
+    assert "BLUM is restoring its learning memory" in source
+    assert "stop_restore_status_server" in source
