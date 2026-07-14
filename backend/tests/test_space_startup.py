@@ -34,5 +34,7 @@ def test_restore_exposes_a_non_blank_status_page_before_the_api_is_ready() -> No
 
     assert "start_restore_status_server" in source
     assert 'python3 -m http.server "${PORT}"' in source
+    assert '--directory "${status_dir}"' in source
+    assert '(cd "${status_dir}" && python3 -m http.server' not in source
     assert "BLUM is restoring its learning memory" in source
     assert "stop_restore_status_server" in source

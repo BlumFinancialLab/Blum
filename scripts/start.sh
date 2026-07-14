@@ -18,7 +18,7 @@ start_restore_status_server() {
   </body>
 </html>
 EOF
-  (cd "${status_dir}" && python3 -m http.server "${PORT}" --bind 0.0.0.0 >/tmp/blum-restore-status.log 2>&1) &
+  python3 -m http.server "${PORT}" --bind 0.0.0.0 --directory "${status_dir}" >/tmp/blum-restore-status.log 2>&1 &
   RESTORE_STATUS_PID=$!
 }
 
