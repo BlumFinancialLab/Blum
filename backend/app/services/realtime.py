@@ -20,6 +20,7 @@ from app.services.fundamentals import update_fundamentals
 from app.services.financial_brain_learning import run_learning_cycle
 from app.services.ipo import update_ipo_radar
 from app.services.learning_loop import LearningLoopService
+from app.services.learning_intelligence import BlumTradingPowerScoreService
 from app.services.macro import update_macro_snapshots
 from app.services.market_data import MarketDataService
 from app.services.performance import performance_recorder
@@ -67,6 +68,7 @@ def start_realtime_services() -> None:
         threading.Thread(target=run_startup_snapshot_warmup, daemon=True).start()
     _add_interval_job(run_runtime_snapshot_watchdog, minutes=5, job_id="runtime_snapshot_watchdog", delay_seconds=45, jitter_seconds=10)
     _add_interval_job(run_snapshot_refresh_job, minutes=10, job_id="snapshot_producer", delay_seconds=105, jitter_seconds=20)
+    _add_interval_job(run_brain_evidence_projection_job, minutes=10, job_id="brain_evidence_projector", delay_seconds=195, jitter_seconds=20)
     if settings.enable_autonomous_engine:
         _add_interval_job(run_autonomous_engine_job, minutes=settings.autonomous_cycle_minutes, job_id="autonomous_research_engine", delay_seconds=180, jitter_seconds=45)
     _add_interval_job(run_news_refresh, minutes=settings.news_refresh_minutes, job_id="news_refresh", delay_seconds=240, jitter_seconds=30)
@@ -273,13 +275,27 @@ def run_trading_game_job() -> None:
 
 
 def run_live_forward_paper_trading_job() -> None:
-    def work(db):
-        service = LiveForwardPaperTradingService()
-        if settings.paper_forward_lifecycle_enabled:
-            return service.run_lifecycle(db)
-        return service.run_once(db)
+    _run_job("live_forward_paper_trading", lambda db: advance_live_forward_paper_trading(db))
 
-    _run_job("live_forward_paper_trading", work)
+
+def advance_live_forward_paper_trading(db, service: LiveForwardPaperTradingService | None = None) -> dict:
+    service = service or LiveForwardPaperTradingService()
+    scan = service.run_once(db)
+    if not settings.paper_forward_lifecycle_enabled:
+        return {"status": scan.get("status", "ok"), "scan": scan, "lifecycle": {"status": "disabled"}}
+    lifecycle = service.run_lifecycle(db)
+    return {
+        "status": "ok" if scan.get("status") != "error" and lifecycle.get("status") != "error" else "degraded",
+        "scan": scan,
+        "lifecycle": lifecycle,
+    }
+
+
+def run_brain_evidence_projection_job() -> None:
+    _run_job(
+        "brain_evidence_projector",
+        lambda db: BlumTradingPowerScoreService().persist_if_evidence_changed(db),
+    )
 
 
 def run_intraday_paper_trading_job() -> None:
@@ -300,6 +316,7 @@ def run_professional_learning_cycle_job() -> None:
         )
         trading_game = TradingGameSimulator().run(db, batch_size=trading_batch) if settings.trading_game_enabled else {"status": "disabled"}
         snapshots = SnapshotProducerService().produce_many(db, max_items=settings.blum_autonomous_max_items_per_job)
+        brain_evidence = BlumTradingPowerScoreService().persist_if_evidence_changed(db)
         return {
             "mode": "professional_continuous_learning",
             "batch_size": batch_size,
@@ -308,6 +325,7 @@ def run_professional_learning_cycle_job() -> None:
             "blum_learning_loop": point_in_time_learning,
             "trading_game": trading_game,
             "snapshots": snapshots,
+            "brain_evidence": brain_evidence,
             "policy": "Bounded server-side learning cycle. Frontend pages observe snapshots only and never trigger this work on render.",
         }
 
@@ -315,7 +333,12 @@ def run_professional_learning_cycle_job() -> None:
 
 
 def run_hyperbolic_replay_training_job() -> None:
-    _run_job("hyperbolic_replay_training", lambda db: BlumAdaptiveTrainingController().run_once(db, trigger="scheduled"))
+    def work(db):
+        training = BlumAdaptiveTrainingController().run_once(db, trigger="scheduled")
+        brain_evidence = BlumTradingPowerScoreService().persist_if_evidence_changed(db)
+        return {"training": training, "brain_evidence": brain_evidence}
+
+    _run_job("hyperbolic_replay_training", work)
 
 
 def run_autonomous_engine_job() -> None:

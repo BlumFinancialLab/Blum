@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+import math
+import re
 from typing import Any
 from uuid import uuid4
 
@@ -651,6 +653,7 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
         data_blocked: list[dict] = []
 
         for trade in rows:
+            self.ensure_trade_expiration(db, trade)
             latest = latest_market_price_after(db, trade.ticker, trade.decision_timestamp)
             if latest is None:
                 if trade.expires_at and datetime.utcnow() >= trade.expires_at and trade.current_price:
@@ -1068,6 +1071,7 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
         trade.entry_price = latest_price
         trade.entry_date = latest_date
         trade.opened_at = now
+        trade.expires_at = now + timedelta(days=self.expected_holding_days(trade))
         trade.current_price = latest_price
         trade.notional_value = round(safe_float(trade.position_size) * latest_price, 4)
         if trade.stop_loss:
@@ -1145,6 +1149,35 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
             price_used=latest_price,
         )
         return serialize_paper_forward_trade(trade, compact=True)
+
+    def expected_holding_days(self, trade: LiveForwardPaperTrade) -> int:
+        plan = (trade.frozen_decision_payload or {}).get("trade_plan") or {}
+        raw = plan.get("expected_holding_days") or plan.get("expected_holding_period")
+        values: list[float] = []
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            values = [float(raw)]
+        elif isinstance(raw, str):
+            values = [float(value) for value in re.findall(r"\d+(?:\.\d+)?", raw)]
+        requested = max(values) if values else float(settings.paper_forward_max_holding_days)
+        return max(1, min(int(settings.paper_forward_max_holding_days), int(math.ceil(requested))))
+
+    def ensure_trade_expiration(self, db: Session, trade: LiveForwardPaperTrade) -> datetime:
+        if trade.expires_at is not None:
+            return trade.expires_at
+        base = trade.opened_at or trade.decision_timestamp or trade.created_at or datetime.utcnow()
+        trade.expires_at = base + timedelta(days=self.expected_holding_days(trade))
+        self.append_event_once(
+            db,
+            trade,
+            "TIME_STOP_ASSIGNED",
+            "A bounded paper-forward time stop was assigned from the frozen plan.",
+            payload={
+                "expires_at": trade.expires_at.isoformat(),
+                "holding_days": self.expected_holding_days(trade),
+                "backfilled": trade.opened_at is not None,
+            },
+        )
+        return trade.expires_at
 
     def entry_condition_status(self, trade: LiveForwardPaperTrade, latest_price: float) -> dict:
         plan = (trade.frozen_decision_payload or {}).get("trade_plan") or {}

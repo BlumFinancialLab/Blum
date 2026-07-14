@@ -25,6 +25,7 @@ class WorkerDefinition:
 WORKER_DEFINITIONS: dict[str, WorkerDefinition] = {
     "runtime_snapshot_watchdog": WorkerDefinition("runtime_snapshot_watchdog", "runtime", "5m", 30, 10),
     "snapshot_producer": WorkerDefinition("snapshot_producer", "snapshots", "10m", 120, settings.blum_autonomous_max_items_per_job),
+    "brain_evidence_projector": WorkerDefinition("brain_evidence_projector", "learning_evidence", "10m", 120, 1),
     "autonomous_research_engine": WorkerDefinition("autonomous_research_engine", "research", "configured", settings.blum_autonomous_max_seconds_per_job, settings.blum_autonomous_max_items_per_job),
     "news_refresh": WorkerDefinition("news_refresh", "news", "configured", 120, 35),
     "market_refresh": WorkerDefinition("market_refresh", "market", "configured", settings.blum_autonomous_max_seconds_per_job, settings.max_update_assets),

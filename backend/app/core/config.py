@@ -115,6 +115,7 @@ class Settings(BaseSettings):
     intraday_min_volatility_bps: float = Field(default=1.0, alias="BLUM_INTRADAY_MIN_VOLATILITY_BPS")
     intraday_max_one_minute_age_minutes: int = Field(default=3, alias="BLUM_INTRADAY_MAX_ONE_MINUTE_AGE_MINUTES")
     paper_forward_lifecycle_enabled: bool = Field(default=False, alias="PAPER_FORWARD_LIFECYCLE_ENABLED")
+    paper_forward_max_holding_days: int = Field(default=10, alias="PAPER_FORWARD_MAX_HOLDING_DAYS")
     paper_forward_min_confidence: float = Field(default=50.0, alias="PAPER_FORWARD_MIN_CONFIDENCE")
     paper_forward_min_risk_reward: float = Field(default=1.0, alias="PAPER_FORWARD_MIN_RISK_REWARD")
     paper_forward_min_data_quality: float = Field(default=50.0, alias="PAPER_FORWARD_MIN_DATA_QUALITY")

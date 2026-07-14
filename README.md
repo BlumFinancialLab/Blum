@@ -1893,6 +1893,14 @@ The snapshot and UI expose four compact evidence views:
 
 Missing values remain unavailable and short samples are marked `Insufficient evidence`. Charts never synthesize an improving line from one observation. Historical replay, walk-forward and paper-forward evidence remain separate.
 
+### Evidence acceleration
+
+BLUM projects a new Brain Score snapshot only when the stored learning or trading evidence changes. A stable evidence fingerprint prevents scheduler retries from creating duplicate history, while productive professional and replay cycles publish their result in the background. The five-snapshot directional threshold is unchanged: the chart becomes populated faster through real learning events, not synthetic points.
+
+The scheduled paper-forward worker now performs two bounded phases in order: candidate scouting with frozen point-in-time evidence, followed by lifecycle advancement. Every opened position receives a deterministic time stop derived from the frozen trade plan and capped by `PAPER_FORWARD_MAX_HOLDING_DAYS` (10 days by default). Existing open positions without an expiration are backfilled from their original open timestamp, so they cannot remain unresolved indefinitely.
+
+These changes do not lower the 30 closed-trade copy-readiness threshold and do not turn replay outcomes into forward evidence. Stops, targets, invalidations and time exits still require stored market prices after the frozen decision timestamp.
+
 BLUM does not target an impossible 100% winning-trade rate. A robust trading-research system can have controlled losing trades; professional evidence requires positive net expectancy after costs, acceptable drawdown, benchmark-relative performance, calibration, reproducibility and enough forward observations. Copy readiness is an evidence-maturity status, not a guarantee of future profit or permission to deploy real capital.
 
 ## Limitations

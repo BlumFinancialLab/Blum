@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from datetime import date, datetime
+import hashlib
+import json
 from statistics import mean, median, pstdev
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -13,7 +15,9 @@ from app.models import (
     BlumTradingPowerScore,
     LearningBenchmarkComparison,
     LearningProgressSnapshot,
+    LearningRun,
     LearningStrengthWeaknessMap,
+    LiveForwardPaperTrade,
     PriceHistory,
     SelfImprovementAction,
     TradingGame,
@@ -59,6 +63,85 @@ class BlumTradingPowerScoreService:
 
     def recalculate(self, db: Session) -> dict:
         return self.calculate(db, persist=True)
+
+    def persist_if_evidence_changed(self, db: Session) -> dict:
+        """Persist one score projection for each distinct productive evidence state."""
+
+        source = self._evidence_source(db)
+        if source is None:
+            return {"status": "skipped", "reason": "no_productive_learning_evidence"}
+
+        fingerprint = hashlib.sha256(
+            json.dumps(source, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        latest = db.scalar(
+            select(BlumTradingPowerScore)
+            .order_by(desc(BlumTradingPowerScore.calculated_at), desc(BlumTradingPowerScore.id))
+            .limit(1)
+        )
+        latest_fingerprint = (latest.warnings_json or {}).get("evidence_fingerprint") if latest else None
+        if latest_fingerprint == fingerprint:
+            return {
+                "status": "unchanged",
+                "reason": "evidence_state_already_projected",
+                "row_id": latest.id,
+                "evidence_fingerprint": fingerprint,
+            }
+
+        payload = self.calculate(db, persist=True)
+        row = db.get(BlumTradingPowerScore, payload["row_id"])
+        row.warnings_json = {
+            **(row.warnings_json or {}),
+            "evidence_fingerprint": fingerprint,
+            "evidence_source": source,
+        }
+        db.commit()
+        return {
+            **payload,
+            "status": "persisted",
+            "evidence_fingerprint": fingerprint,
+            "evidence_source": source,
+        }
+
+    def _evidence_source(self, db: Session) -> dict | None:
+        productive_run = db.scalar(
+            select(LearningRun)
+            .where(
+                or_(
+                    LearningRun.predictions_created > 0,
+                    LearningRun.outcomes_evaluated > 0,
+                    LearningRun.memory_updates > 0,
+                )
+            )
+            .order_by(desc(LearningRun.started_at), desc(LearningRun.id))
+            .limit(1)
+        )
+        if productive_run is None:
+            return None
+
+        closed_statuses = ("CLOSED", "EXITED", "EXPIRED", "INVALIDATED")
+        last_closed_at = db.scalar(
+            select(func.max(LiveForwardPaperTrade.closed_at)).where(
+                LiveForwardPaperTrade.status.in_(closed_statuses)
+            )
+        )
+        return {
+            "learning_run_pk": productive_run.id,
+            "learning_run_id": productive_run.run_id,
+            "predictions_created": int(productive_run.predictions_created or 0),
+            "outcomes_evaluated": int(productive_run.outcomes_evaluated or 0),
+            "memory_updates": int(productive_run.memory_updates or 0),
+            "historical_trade_count": int(db.scalar(select(func.count(TradingGameTrade.id))) or 0),
+            "paper_forward_closed_count": int(
+                db.scalar(
+                    select(func.count(LiveForwardPaperTrade.id)).where(
+                        LiveForwardPaperTrade.status.in_(closed_statuses)
+                    )
+                )
+                or 0
+            ),
+            "paper_forward_last_closed_at": last_closed_at.isoformat() if last_closed_at else None,
+        }
 
     def calculate(self, db: Session, persist: bool = False) -> dict:
         game = latest_trading_game(db)

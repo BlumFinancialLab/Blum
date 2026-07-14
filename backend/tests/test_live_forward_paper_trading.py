@@ -862,11 +862,12 @@ def test_paper_forward_lifecycle_calculates_benchmark_excess_when_available():
         assert closed.benchmark_excess > 0
 
 
-def test_paper_forward_scheduler_uses_foundation_run_once_not_lifecycle_run_cycle():
+def test_paper_forward_scheduler_scans_then_advances_lifecycle_without_legacy_run_cycle():
     source = (Path(__file__).resolve().parents[1] / "app" / "services" / "realtime.py").read_text()
-    start = source.index("def run_live_forward_paper_trading_job")
+    start = source.index("def advance_live_forward_paper_trading")
     block = source[start : source.index("\n\ndef ", start + 1)]
 
     assert ".run_once(db)" in block
+    assert ".run_lifecycle(db)" in block
     assert "paper_forward_lifecycle_enabled" in block
     assert ".run_cycle(db)" not in block
