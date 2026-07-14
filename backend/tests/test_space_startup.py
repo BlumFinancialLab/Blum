@@ -25,6 +25,8 @@ def test_embedded_postgres_restore_supports_custom_and_bootstrap_fallbacks() -> 
     assert 'embedded_postgres_blum.sql"' in source
     assert 'Restoring legacy PostgreSQL backup' in source
     assert "BLUM_LEGACY_POSTGRES_BACKUP_FILE" in source
+    assert 'su postgres -c "psql -d blum" < "${BLUM_LEGACY_POSTGRES_BACKUP_FILE}"' in source
+    assert 'psql -d blum < \\"${BLUM_LEGACY_POSTGRES_BACKUP_FILE}\\"' not in source
 
 
 def test_restore_exposes_a_non_blank_status_page_before_the_api_is_ready() -> None:

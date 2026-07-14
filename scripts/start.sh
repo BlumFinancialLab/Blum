@@ -80,7 +80,7 @@ if [[ -z "${DATABASE_URL:-}" ]]; then
     cat "${BLUM_COMPRESSED_POSTGRES_PART_PREFIX}".part-* | gzip -dc | su postgres -c "psql -d blum" || echo "Segmented backup restore failed; continuing with migrations."
   elif [[ "${TABLE_COUNT:-0}" == "0" && -s "${BLUM_LEGACY_POSTGRES_BACKUP_FILE}" ]]; then
     echo "Restoring legacy PostgreSQL backup from ${BLUM_LEGACY_POSTGRES_BACKUP_FILE}."
-    su postgres -c "psql -d blum < \"${BLUM_LEGACY_POSTGRES_BACKUP_FILE}\"" || echo "Legacy backup restore failed; continuing with migrations."
+    su postgres -c "psql -d blum" < "${BLUM_LEGACY_POSTGRES_BACKUP_FILE}" || echo "Legacy backup restore failed; continuing with migrations."
   elif [[ ! -s "${BLUM_EMBEDDED_POSTGRES_BACKUP_FILE}" && ! -s "${BLUM_COMPRESSED_POSTGRES_BACKUP_FILE}" && ! -s "${BLUM_LEGACY_POSTGRES_BACKUP_FILE}" ]]; then
     echo "No embedded PostgreSQL backup found yet. A new backup will be written periodically."
   else
