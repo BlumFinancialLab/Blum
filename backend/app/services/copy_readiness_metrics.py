@@ -189,7 +189,8 @@ def evaluate_decay(replay: dict | None, forward: dict | None, thresholds: Readin
 
     decay_pct = None
     if replay_expectancy is not None and forward_expectancy is not None and replay_expectancy > 0:
-        decay_pct = (replay_expectancy - forward_expectancy) / abs(replay_expectancy) * 100
+        # Stabilize boundary comparisons such as an exact 25% decay.
+        decay_pct = round((replay_expectancy - forward_expectancy) / abs(replay_expectancy) * 100, 10)
 
     if forward_expectancy is not None and forward_expectancy <= 0:
         status = "FORWARD_FAILURE"
@@ -323,9 +324,15 @@ def _paper_gate_results(context: ReadinessContext, thresholds: ReadinessThreshol
             "market_concentration_unavailable" if context.market_concentration is None else "market_concentration",
             context.market_concentration is not None and context.market_concentration <= thresholds.max_market_concentration,
         ),
-        ("costs_unavailable", context.costs_available),
-        ("slippage_unavailable", context.slippage_available),
-        ("data_quality_unavailable", context.data_quality_available),
+        ("costs_available" if context.costs_available else "costs_unavailable", context.costs_available),
+        (
+            "slippage_available" if context.slippage_available else "slippage_unavailable",
+            context.slippage_available,
+        ),
+        (
+            "data_quality_available" if context.data_quality_available else "data_quality_unavailable",
+            context.data_quality_available,
+        ),
     )
 
 

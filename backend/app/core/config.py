@@ -134,6 +134,178 @@ class Settings(BaseSettings):
     paper_forward_max_assets_per_market: int = Field(default=25, alias="PAPER_FORWARD_MAX_ASSETS_PER_MARKET")
     paper_forward_scan_stale_data_max_age_hours: float = Field(default=72.0, alias="PAPER_FORWARD_SCAN_STALE_DATA_MAX_AGE_HOURS")
     paper_forward_cross_market_ranking_enabled: bool = Field(default=True, alias="PAPER_FORWARD_CROSS_MARKET_RANKING_ENABLED")
+    copy_readiness_threshold_version: str = Field(
+        default="copy-readiness-v1",
+        validation_alias=AliasChoices("COPY_READINESS_THRESHOLD_VERSION", "BLUM_COPY_READINESS_THRESHOLD_VERSION"),
+    )
+    copy_readiness_global_forward_trades: int = Field(
+        default=100,
+        validation_alias=AliasChoices("COPY_READINESS_GLOBAL_FORWARD_TRADES", "BLUM_COPY_READINESS_GLOBAL_FORWARD_TRADES"),
+    )
+    copy_readiness_strategy_forward_trades: int = Field(
+        default=30,
+        validation_alias=AliasChoices("COPY_READINESS_STRATEGY_FORWARD_TRADES", "BLUM_COPY_READINESS_STRATEGY_FORWARD_TRADES"),
+    )
+    copy_readiness_observation_days: int = Field(
+        default=90,
+        validation_alias=AliasChoices("COPY_READINESS_OBSERVATION_DAYS", "BLUM_COPY_READINESS_OBSERVATION_DAYS"),
+    )
+    copy_readiness_max_drawdown: float = Field(
+        default=15.0,
+        validation_alias=AliasChoices("COPY_READINESS_MAX_DRAWDOWN", "BLUM_COPY_READINESS_MAX_DRAWDOWN"),
+    )
+    copy_readiness_max_decay_pct: float = Field(
+        default=35.0,
+        validation_alias=AliasChoices("COPY_READINESS_MAX_DECAY_PCT", "BLUM_COPY_READINESS_MAX_DECAY_PCT"),
+    )
+    copy_readiness_min_tickers: int = Field(
+        default=5,
+        validation_alias=AliasChoices("COPY_READINESS_MIN_TICKERS", "BLUM_COPY_READINESS_MIN_TICKERS"),
+    )
+    copy_readiness_min_regimes: int = Field(
+        default=2,
+        validation_alias=AliasChoices("COPY_READINESS_MIN_REGIMES", "BLUM_COPY_READINESS_MIN_REGIMES"),
+    )
+    copy_readiness_max_ticker_concentration: float = Field(
+        default=0.35,
+        validation_alias=AliasChoices(
+            "COPY_READINESS_MAX_TICKER_CONCENTRATION",
+            "BLUM_COPY_READINESS_MAX_TICKER_CONCENTRATION",
+        ),
+    )
+    copy_readiness_max_market_concentration: float = Field(
+        default=0.70,
+        validation_alias=AliasChoices(
+            "COPY_READINESS_MAX_MARKET_CONCENTRATION",
+            "BLUM_COPY_READINESS_MAX_MARKET_CONCENTRATION",
+        ),
+    )
+    copy_readiness_high_confidence_global_forward_trades: int = Field(
+        default=300,
+        validation_alias=AliasChoices(
+            "COPY_READINESS_HIGH_CONFIDENCE_GLOBAL_FORWARD_TRADES",
+            "BLUM_COPY_READINESS_HIGH_CONFIDENCE_GLOBAL_FORWARD_TRADES",
+        ),
+    )
+    copy_readiness_high_confidence_strategy_forward_trades: int = Field(
+        default=100,
+        validation_alias=AliasChoices(
+            "COPY_READINESS_HIGH_CONFIDENCE_STRATEGY_FORWARD_TRADES",
+            "BLUM_COPY_READINESS_HIGH_CONFIDENCE_STRATEGY_FORWARD_TRADES",
+        ),
+    )
+    copy_readiness_high_confidence_observation_days: int = Field(
+        default=180,
+        validation_alias=AliasChoices(
+            "COPY_READINESS_HIGH_CONFIDENCE_OBSERVATION_DAYS",
+            "BLUM_COPY_READINESS_HIGH_CONFIDENCE_OBSERVATION_DAYS",
+        ),
+    )
+    copy_readiness_high_confidence_max_drawdown: float = Field(
+        default=12.0,
+        validation_alias=AliasChoices(
+            "COPY_READINESS_HIGH_CONFIDENCE_MAX_DRAWDOWN",
+            "BLUM_COPY_READINESS_HIGH_CONFIDENCE_MAX_DRAWDOWN",
+        ),
+    )
+    copy_readiness_high_confidence_max_decay_pct: float = Field(
+        default=25.0,
+        validation_alias=AliasChoices(
+            "COPY_READINESS_HIGH_CONFIDENCE_MAX_DECAY_PCT",
+            "BLUM_COPY_READINESS_HIGH_CONFIDENCE_MAX_DECAY_PCT",
+        ),
+    )
+    copy_readiness_high_confidence_min_tickers: int = Field(
+        default=8,
+        validation_alias=AliasChoices(
+            "COPY_READINESS_HIGH_CONFIDENCE_MIN_TICKERS",
+            "BLUM_COPY_READINESS_HIGH_CONFIDENCE_MIN_TICKERS",
+        ),
+    )
+    copy_readiness_high_confidence_min_regimes: int = Field(
+        default=3,
+        validation_alias=AliasChoices(
+            "COPY_READINESS_HIGH_CONFIDENCE_MIN_REGIMES",
+            "BLUM_COPY_READINESS_HIGH_CONFIDENCE_MIN_REGIMES",
+        ),
+    )
+    copy_readiness_high_confidence_max_ticker_concentration: float = Field(
+        default=0.30,
+        validation_alias=AliasChoices(
+            "COPY_READINESS_HIGH_CONFIDENCE_MAX_TICKER_CONCENTRATION",
+            "BLUM_COPY_READINESS_HIGH_CONFIDENCE_MAX_TICKER_CONCENTRATION",
+        ),
+    )
+    copy_readiness_high_confidence_max_market_concentration: float = Field(
+        default=0.60,
+        validation_alias=AliasChoices(
+            "COPY_READINESS_HIGH_CONFIDENCE_MAX_MARKET_CONCENTRATION",
+            "BLUM_COPY_READINESS_HIGH_CONFIDENCE_MAX_MARKET_CONCENTRATION",
+        ),
+    )
+    limited_external_validation_global_forward_trades: int = Field(
+        default=500,
+        validation_alias=AliasChoices(
+            "LIMITED_EXTERNAL_VALIDATION_GLOBAL_FORWARD_TRADES",
+            "BLUM_LIMITED_EXTERNAL_VALIDATION_GLOBAL_FORWARD_TRADES",
+        ),
+    )
+    limited_external_validation_strategy_forward_trades: int = Field(
+        default=150,
+        validation_alias=AliasChoices(
+            "LIMITED_EXTERNAL_VALIDATION_STRATEGY_FORWARD_TRADES",
+            "BLUM_LIMITED_EXTERNAL_VALIDATION_STRATEGY_FORWARD_TRADES",
+        ),
+    )
+    limited_external_validation_observation_days: int = Field(
+        default=270,
+        validation_alias=AliasChoices(
+            "LIMITED_EXTERNAL_VALIDATION_OBSERVATION_DAYS",
+            "BLUM_LIMITED_EXTERNAL_VALIDATION_OBSERVATION_DAYS",
+        ),
+    )
+    limited_external_validation_max_drawdown: float = Field(
+        default=10.0,
+        validation_alias=AliasChoices(
+            "LIMITED_EXTERNAL_VALIDATION_MAX_DRAWDOWN",
+            "BLUM_LIMITED_EXTERNAL_VALIDATION_MAX_DRAWDOWN",
+        ),
+    )
+    limited_external_validation_max_decay_pct: float = Field(
+        default=20.0,
+        validation_alias=AliasChoices(
+            "LIMITED_EXTERNAL_VALIDATION_MAX_DECAY_PCT",
+            "BLUM_LIMITED_EXTERNAL_VALIDATION_MAX_DECAY_PCT",
+        ),
+    )
+    limited_external_validation_min_tickers: int = Field(
+        default=10,
+        validation_alias=AliasChoices(
+            "LIMITED_EXTERNAL_VALIDATION_MIN_TICKERS",
+            "BLUM_LIMITED_EXTERNAL_VALIDATION_MIN_TICKERS",
+        ),
+    )
+    limited_external_validation_min_regimes: int = Field(
+        default=3,
+        validation_alias=AliasChoices(
+            "LIMITED_EXTERNAL_VALIDATION_MIN_REGIMES",
+            "BLUM_LIMITED_EXTERNAL_VALIDATION_MIN_REGIMES",
+        ),
+    )
+    limited_external_validation_max_ticker_concentration: float = Field(
+        default=0.30,
+        validation_alias=AliasChoices(
+            "LIMITED_EXTERNAL_VALIDATION_MAX_TICKER_CONCENTRATION",
+            "BLUM_LIMITED_EXTERNAL_VALIDATION_MAX_TICKER_CONCENTRATION",
+        ),
+    )
+    limited_external_validation_max_market_concentration: float = Field(
+        default=0.60,
+        validation_alias=AliasChoices(
+            "LIMITED_EXTERNAL_VALIDATION_MAX_MARKET_CONCENTRATION",
+            "BLUM_LIMITED_EXTERNAL_VALIDATION_MAX_MARKET_CONCENTRATION",
+        ),
+    )
     blum_enabled_market_desk_agents: str = Field(
         default=(
             "FTSEMIBAgent,DAXAgent,CAC40Agent,IBEX35Agent,SMIAgent,EuroStoxx50Agent,"

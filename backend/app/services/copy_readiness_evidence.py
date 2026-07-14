@@ -1,27 +1,40 @@
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime
+import hashlib
+import json
 import math
 import re
 from statistics import fmean, pstdev
 
 from sqlalchemy import and_, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
+from app.core.config import Settings, get_settings
 from app.models import (
+    EvidenceTimelineEvent,
     HyperbolicReplayTrade,
     LiveForwardPaperTrade,
     ReplayStrategyValidation,
     StrategyEvidenceSnapshot,
+    StrategyReadinessHistory,
 )
 from app.services.copy_readiness_metrics import (
+    EvidenceProvenance,
+    ForwardEvidenceProvenance,
     INTRADAY_FORWARD_EVIDENCE,
     PAPER_FORWARD_EVIDENCE,
     REPLAY_EVIDENCE,
+    ReadinessContext,
+    ReadinessThresholds,
     WALK_FORWARD_EVIDENCE,
     concentration,
+    evaluate_capital_eligibility,
+    evaluate_copy_readiness,
+    evaluate_decay,
     wilson_interval,
 )
 
@@ -30,6 +43,10 @@ TERMINAL_FORWARD_STATUSES = frozenset({"CLOSED", "EXPIRED", "INVALIDATED"})
 TERMINAL_REPLAY_STATES = frozenset({"CLOSED", "COMPLETED", "EXITED", "SETTLED"})
 MAX_PROJECT_ITEMS = 500
 MAX_QUERY_LIMIT = 100
+MAX_READINESS_STRATEGIES = 100
+FORWARD_EVIDENCE_CLASSES = frozenset({PAPER_FORWARD_EVIDENCE, INTRADAY_FORWARD_EVIDENCE})
+REPLAY_EVIDENCE_CLASSES = frozenset({REPLAY_EVIDENCE, WALK_FORWARD_EVIDENCE})
+READY_STATUSES = frozenset({"COPY_READY_PAPER_ONLY", "COPY_READY_HIGH_CONFIDENCE"})
 
 
 @dataclass(frozen=True)
@@ -355,6 +372,300 @@ class StrategyEvidenceQuery:
         }
 
 
+class EvidenceTimelineService:
+    """Append immutable timeline events while treating only event-key conflicts as idempotent."""
+
+    def append_once(
+        self,
+        db: Session,
+        *,
+        event_key: str,
+        event_type: str,
+        strategy_id: str | None,
+        trade_id: int | None,
+        payload: dict,
+    ) -> EvidenceTimelineEvent:
+        with db.no_autoflush:
+            existing = db.scalar(
+                select(EvidenceTimelineEvent)
+                .where(EvidenceTimelineEvent.event_key == event_key)
+                .limit(1)
+            )
+        if existing is not None:
+            return existing
+
+        event = EvidenceTimelineEvent(
+            event_key=event_key,
+            event_type=event_type,
+            strategy_id=strategy_id,
+            trade_id=trade_id,
+            payload_json=dict(payload),
+        )
+        try:
+            with db.begin_nested():
+                db.add(event)
+                db.flush()
+        except IntegrityError:
+            with db.no_autoflush:
+                existing = db.scalar(
+                    select(EvidenceTimelineEvent)
+                    .where(EvidenceTimelineEvent.event_key == event_key)
+                    .limit(1)
+                )
+            if existing is not None:
+                return existing
+            raise
+        return event
+
+
+class BlumCopyReadinessEngine:
+    """Evaluate the newest immutable evidence projections and append readiness history."""
+
+    def __init__(
+        self,
+        *,
+        settings: Settings | None = None,
+        timeline: EvidenceTimelineService | None = None,
+    ) -> None:
+        self.settings = settings or get_settings()
+        self.timeline = timeline or EvidenceTimelineService()
+
+    def recalculate(self, db: Session, *, max_strategies: int = MAX_READINESS_STRATEGIES) -> dict:
+        bounded_max = _bounded_strategy_limit(max_strategies)
+        thresholds = _readiness_thresholds(self.settings)
+        cards = _latest_evidence_cards(db, max_strategies=bounded_max)
+        cards_by_strategy: dict[str, list[StrategyEvidenceSnapshot]] = defaultdict(list)
+        strategy_order: list[str] = []
+        for card in cards:
+            if card.strategy_id not in cards_by_strategy:
+                strategy_order.append(card.strategy_id)
+            cards_by_strategy[card.strategy_id].append(card)
+
+        previous_history = _latest_readiness_by_strategy(db, strategy_order)
+        global_forward_cards = [card for card in cards if card.evidence_class in FORWARD_EVIDENCE_CLASSES]
+        global_forward_evidence = tuple(_forward_provenance(card, compatible=True) for card in global_forward_cards)
+        global_forward_sample = _sum_closed_counts(global_forward_cards)
+        strategies: list[dict] = []
+        timeline_events_created = 0
+
+        for strategy_id in strategy_order:
+            strategy_cards = cards_by_strategy[strategy_id]
+            replay_card = _newest_card(
+                card for card in strategy_cards if card.evidence_class in REPLAY_EVIDENCE_CLASSES
+            )
+            forward_card = _newest_card(
+                card for card in strategy_cards if card.evidence_class in FORWARD_EVIDENCE_CLASSES
+            )
+            prior = previous_history.get(strategy_id)
+            replay_provenance = _replay_provenance(replay_card) if replay_card is not None else None
+            compatible = _cards_are_compatible(replay_card, forward_card)
+            forward_provenance = (
+                _forward_provenance(forward_card, compatible=compatible)
+                if forward_card is not None
+                else None
+            )
+            decay = evaluate_decay(
+                _decay_payload(replay_card, replay_provenance),
+                _decay_payload(forward_card, forward_provenance),
+                thresholds,
+            )
+            context = _readiness_context(
+                replay_card=replay_card,
+                forward_card=forward_card,
+                replay_provenance=replay_provenance,
+                forward_provenance=forward_provenance,
+                global_forward_evidence=global_forward_evidence,
+                global_forward_sample=global_forward_sample,
+                decay=decay,
+                previous_status=prior.copy_readiness_status if prior is not None else None,
+            )
+            decision = evaluate_copy_readiness(context, thresholds)
+            eligibility = evaluate_capital_eligibility(context, decision, thresholds)
+            history = StrategyReadinessHistory(
+                strategy_id=strategy_id,
+                previous_copy_readiness_status=prior.copy_readiness_status if prior is not None else None,
+                copy_readiness_status=decision.status,
+                maturity_score=decision.maturity_score,
+                global_forward_trades=global_forward_sample,
+                strategy_forward_trades=forward_card.closed_trades if forward_card is not None else None,
+                observation_days=_observation_days(forward_card),
+                passed_gates_json=list(decision.passed_gates),
+                failed_gates_json=list(decision.failed_gates),
+                blockers_json=list(decision.blockers),
+                reasons_json=_decision_reasons(decision.status, decision.blockers, decay["status"]),
+                decay_status=decay["status"],
+                real_capital_eligibility=eligibility,
+                threshold_version=self.settings.copy_readiness_threshold_version,
+            )
+            db.add(history)
+            db.flush()
+
+            evidence_ids = sorted(card.id for card in strategy_cards)
+            transition_payload = {
+                "strategy_id": strategy_id,
+                "readiness_history_id": history.id,
+                "evidence_snapshot_ids": evidence_ids,
+                "threshold_version": self.settings.copy_readiness_threshold_version,
+            }
+            previous_status = prior.copy_readiness_status if prior is not None else None
+            if previous_status != decision.status:
+                timeline_events_created += self._append_transition(
+                    db,
+                    transition_kind="copy-readiness",
+                    event_type="copy_readiness_change",
+                    strategy_id=strategy_id,
+                    previous_value=previous_status,
+                    new_value=decision.status,
+                    payload=transition_payload,
+                )
+            previous_eligibility = prior.real_capital_eligibility if prior is not None else None
+            if previous_eligibility != eligibility:
+                timeline_events_created += self._append_transition(
+                    db,
+                    transition_kind="capital-eligibility",
+                    event_type="capital_eligibility_change",
+                    strategy_id=strategy_id,
+                    previous_value=previous_eligibility,
+                    new_value=eligibility,
+                    payload=transition_payload,
+                )
+
+            strategies.append(
+                {
+                    "strategy_id": strategy_id,
+                    "copy_readiness_status": decision.status,
+                    "previous_copy_readiness_status": previous_status,
+                    "maturity_score": decision.maturity_score,
+                    "global_forward_trades": global_forward_sample,
+                    "strategy_forward_trades": forward_card.closed_trades if forward_card is not None else None,
+                    "observation_days": context.observation_days,
+                    "decay_status": decay["status"],
+                    "performance_decay_pct": decay["performance_decay_pct"],
+                    "real_capital_eligibility": eligibility,
+                    "blockers": list(decision.blockers),
+                    "next_milestone": decision.next_milestone,
+                    "replay_evidence_snapshot_id": replay_card.id if replay_card is not None else None,
+                    "forward_evidence_snapshot_id": forward_card.id if forward_card is not None else None,
+                    "threshold_version": self.settings.copy_readiness_threshold_version,
+                }
+            )
+
+        db.flush()
+        return {
+            "strategies_evaluated": len(strategies),
+            "timeline_events_created": timeline_events_created,
+            "max_strategies": bounded_max,
+            "threshold_version": self.settings.copy_readiness_threshold_version,
+            "strategies": strategies,
+        }
+
+    def _append_transition(
+        self,
+        db: Session,
+        *,
+        transition_kind: str,
+        event_type: str,
+        strategy_id: str,
+        previous_value: str | None,
+        new_value: str,
+        payload: dict,
+    ) -> int:
+        transition = {
+            "kind": transition_kind,
+            "strategy_id": strategy_id,
+            "previous": previous_value,
+            "new": new_value,
+            "evidence_snapshot_ids": payload["evidence_snapshot_ids"],
+            "threshold_version": payload["threshold_version"],
+        }
+        digest = hashlib.sha256(json.dumps(transition, sort_keys=True).encode("utf-8")).hexdigest()
+        event_key = f"{transition_kind}:{digest}"
+        with db.no_autoflush:
+            existed = db.scalar(
+                select(EvidenceTimelineEvent.id)
+                .where(EvidenceTimelineEvent.event_key == event_key)
+                .limit(1)
+            )
+        self.timeline.append_once(
+            db,
+            event_key=event_key,
+            event_type=event_type,
+            strategy_id=strategy_id,
+            trade_id=None,
+            payload={**payload, "previous": previous_value, "new": new_value},
+        )
+        return 0 if existed is not None else 1
+
+
+class CopyReadinessSummaryService:
+    """Return a compact aggregate from the latest persisted readiness row per strategy."""
+
+    def __init__(self, *, settings: Settings | None = None) -> None:
+        self.settings = settings or get_settings()
+
+    def summary(self, db: Session) -> dict:
+        rows = _all_latest_readiness(db)
+        thresholds = _readiness_thresholds(self.settings)
+        if not rows:
+            return {
+                "copy_readiness_status": "NOT_READY",
+                "real_capital_eligibility": "NOT_ELIGIBLE",
+                "maturity_score": None,
+                "global_forward_trades": None,
+                "strategy_forward_trades": None,
+                "observation_days": None,
+                "required_global_forward_trades": thresholds.global_forward_trades,
+                "required_strategy_forward_trades": thresholds.strategy_forward_trades,
+                "required_observation_days": thresholds.observation_days,
+                "total_strategies": 0,
+                "ready_strategies": 0,
+                "not_ready_strategies": 0,
+                "decay_summary": {},
+                "blockers": [],
+                "next_milestone": "Collect compatible replay and terminal forward evidence.",
+                "threshold_version": self.settings.copy_readiness_threshold_version,
+                "evaluated_at": None,
+            }
+
+        statuses = [row.copy_readiness_status for row in rows]
+        eligibilities = [row.real_capital_eligibility for row in rows]
+        ready_count = sum(status in READY_STATUSES for status in statuses)
+        blockers = sorted({blocker for row in rows for blocker in (row.blockers_json or [])})
+        decay_summary = dict(sorted(Counter(row.decay_status or "INSUFFICIENT_EVIDENCE" for row in rows).items()))
+        evaluated_at = max((row.evaluated_at for row in rows if row.evaluated_at is not None), default=None)
+        return {
+            "copy_readiness_status": _aggregate_readiness_status(statuses),
+            "real_capital_eligibility": _aggregate_eligibility(eligibilities),
+            "maturity_score": max(
+                (row.maturity_score for row in rows if row.maturity_score is not None),
+                default=None,
+            ),
+            "global_forward_trades": max(
+                (row.global_forward_trades for row in rows if row.global_forward_trades is not None),
+                default=None,
+            ),
+            "strategy_forward_trades": max(
+                (row.strategy_forward_trades for row in rows if row.strategy_forward_trades is not None),
+                default=None,
+            ),
+            "observation_days": max(
+                (row.observation_days for row in rows if row.observation_days is not None),
+                default=None,
+            ),
+            "required_global_forward_trades": thresholds.global_forward_trades,
+            "required_strategy_forward_trades": thresholds.strategy_forward_trades,
+            "required_observation_days": thresholds.observation_days,
+            "total_strategies": len(rows),
+            "ready_strategies": ready_count,
+            "not_ready_strategies": len(rows) - ready_count,
+            "decay_summary": decay_summary,
+            "blockers": blockers,
+            "next_milestone": None if ready_count else (f"Satisfy {blockers[0]}." if blockers else "Collect more forward evidence."),
+            "threshold_version": self.settings.copy_readiness_threshold_version,
+            "evaluated_at": evaluated_at.isoformat() if evaluated_at is not None else None,
+        }
+
+
 def _serialize_snapshot(row: StrategyEvidenceSnapshot) -> dict:
     return {
         "id": row.id,
@@ -386,6 +697,307 @@ def _serialize_snapshot(row: StrategyEvidenceSnapshot) -> dict:
         "confidence_interval": row.confidence_interval_json,
         "evaluated_at": row.evaluated_at.isoformat() if row.evaluated_at else None,
     }
+
+
+def _readiness_thresholds(settings: Settings) -> ReadinessThresholds:
+    return ReadinessThresholds(
+        global_forward_trades=settings.copy_readiness_global_forward_trades,
+        strategy_forward_trades=settings.copy_readiness_strategy_forward_trades,
+        observation_days=settings.copy_readiness_observation_days,
+        max_drawdown=settings.copy_readiness_max_drawdown,
+        max_decay_pct=settings.copy_readiness_max_decay_pct,
+        min_tickers=settings.copy_readiness_min_tickers,
+        min_regimes=settings.copy_readiness_min_regimes,
+        max_ticker_concentration=settings.copy_readiness_max_ticker_concentration,
+        max_market_concentration=settings.copy_readiness_max_market_concentration,
+        high_confidence_global_forward_trades=settings.copy_readiness_high_confidence_global_forward_trades,
+        high_confidence_strategy_forward_trades=settings.copy_readiness_high_confidence_strategy_forward_trades,
+        high_confidence_observation_days=settings.copy_readiness_high_confidence_observation_days,
+        high_confidence_max_drawdown=settings.copy_readiness_high_confidence_max_drawdown,
+        high_confidence_max_decay_pct=settings.copy_readiness_high_confidence_max_decay_pct,
+        high_confidence_min_tickers=settings.copy_readiness_high_confidence_min_tickers,
+        high_confidence_min_regimes=settings.copy_readiness_high_confidence_min_regimes,
+        high_confidence_max_ticker_concentration=settings.copy_readiness_high_confidence_max_ticker_concentration,
+        high_confidence_max_market_concentration=settings.copy_readiness_high_confidence_max_market_concentration,
+        capital_global_forward_trades=settings.limited_external_validation_global_forward_trades,
+        capital_strategy_forward_trades=settings.limited_external_validation_strategy_forward_trades,
+        capital_observation_days=settings.limited_external_validation_observation_days,
+        capital_max_drawdown=settings.limited_external_validation_max_drawdown,
+        capital_max_decay_pct=settings.limited_external_validation_max_decay_pct,
+        capital_min_tickers=settings.limited_external_validation_min_tickers,
+        capital_min_regimes=settings.limited_external_validation_min_regimes,
+        capital_max_ticker_concentration=settings.limited_external_validation_max_ticker_concentration,
+        capital_max_market_concentration=settings.limited_external_validation_max_market_concentration,
+    )
+
+
+def _latest_evidence_cards(db: Session, *, max_strategies: int) -> list[StrategyEvidenceSnapshot]:
+    if max_strategies <= 0:
+        return []
+    later = aliased(StrategyEvidenceSnapshot)
+    later_snapshot_exists = select(later.id).where(
+        later.strategy_id == StrategyEvidenceSnapshot.strategy_id,
+        later.evidence_class == StrategyEvidenceSnapshot.evidence_class,
+        or_(
+            later.evaluated_at > StrategyEvidenceSnapshot.evaluated_at,
+            and_(
+                later.evaluated_at == StrategyEvidenceSnapshot.evaluated_at,
+                later.id > StrategyEvidenceSnapshot.id,
+            ),
+        ),
+    ).exists()
+    candidates = db.scalars(
+        select(StrategyEvidenceSnapshot)
+        .where(~later_snapshot_exists)
+        .order_by(StrategyEvidenceSnapshot.evaluated_at.desc(), StrategyEvidenceSnapshot.id.desc())
+        .limit(max_strategies * 4)
+    ).all()
+    selected_ids: list[str] = []
+    for card in candidates:
+        if card.strategy_id not in selected_ids:
+            selected_ids.append(card.strategy_id)
+            if len(selected_ids) == max_strategies:
+                break
+    selected = set(selected_ids)
+    return [card for card in candidates if card.strategy_id in selected]
+
+
+def _latest_readiness_by_strategy(
+    db: Session,
+    strategy_ids: list[str],
+) -> dict[str, StrategyReadinessHistory]:
+    if not strategy_ids:
+        return {}
+    later = aliased(StrategyReadinessHistory)
+    later_history_exists = select(later.id).where(
+        later.strategy_id == StrategyReadinessHistory.strategy_id,
+        or_(
+            later.evaluated_at > StrategyReadinessHistory.evaluated_at,
+            and_(
+                later.evaluated_at == StrategyReadinessHistory.evaluated_at,
+                later.id > StrategyReadinessHistory.id,
+            ),
+        ),
+    ).exists()
+    rows = db.scalars(
+        select(StrategyReadinessHistory).where(
+            StrategyReadinessHistory.strategy_id.in_(strategy_ids),
+            ~later_history_exists,
+        )
+    ).all()
+    return {row.strategy_id: row for row in rows}
+
+
+def _all_latest_readiness(db: Session) -> list[StrategyReadinessHistory]:
+    later = aliased(StrategyReadinessHistory)
+    later_history_exists = select(later.id).where(
+        later.strategy_id == StrategyReadinessHistory.strategy_id,
+        or_(
+            later.evaluated_at > StrategyReadinessHistory.evaluated_at,
+            and_(
+                later.evaluated_at == StrategyReadinessHistory.evaluated_at,
+                later.id > StrategyReadinessHistory.id,
+            ),
+        ),
+    ).exists()
+    return db.scalars(
+        select(StrategyReadinessHistory)
+        .where(~later_history_exists)
+        .order_by(StrategyReadinessHistory.evaluated_at.desc(), StrategyReadinessHistory.id.desc())
+    ).all()
+
+
+def _newest_card(cards) -> StrategyEvidenceSnapshot | None:
+    return max(cards, key=lambda card: (card.evaluated_at or datetime.min, card.id), default=None)
+
+
+def _replay_provenance(card: StrategyEvidenceSnapshot) -> EvidenceProvenance:
+    return EvidenceProvenance(
+        canonical_evidence_class=card.evidence_class,
+        source_projection_id=f"strategy_evidence_snapshot:{card.id}",
+        strategy_identity=card.strategy_id,
+        horizon=_card_horizon(card),
+        terminal=_closed_count(card) is not None,
+        closed_count=_closed_count(card),
+    )
+
+
+def _forward_provenance(
+    card: StrategyEvidenceSnapshot,
+    *,
+    compatible: bool,
+) -> ForwardEvidenceProvenance:
+    return ForwardEvidenceProvenance(
+        canonical_evidence_class=card.evidence_class,
+        source_projection_id=f"strategy_evidence_snapshot:{card.id}",
+        strategy_identity=card.strategy_id,
+        horizon=_card_horizon(card),
+        terminal=_closed_count(card) is not None,
+        closed_count=_closed_count(card),
+        compatible_with_replay=compatible,
+    )
+
+
+def _cards_are_compatible(
+    replay_card: StrategyEvidenceSnapshot | None,
+    forward_card: StrategyEvidenceSnapshot | None,
+) -> bool:
+    if replay_card is None or forward_card is None:
+        return False
+    replay_horizon = _card_horizon(replay_card)
+    forward_horizon = _card_horizon(forward_card)
+    return (
+        replay_card.strategy_id == forward_card.strategy_id
+        and replay_horizon is not None
+        and replay_horizon == forward_horizon
+    )
+
+
+def _card_horizon(card: StrategyEvidenceSnapshot) -> str | None:
+    horizons = sorted({str(value).strip() for value in (card.timeframes_json or []) if str(value or "").strip()})
+    return horizons[0] if len(horizons) == 1 else None
+
+
+def _closed_count(card: StrategyEvidenceSnapshot) -> int | None:
+    value = card.closed_trades
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def _sum_closed_counts(cards: list[StrategyEvidenceSnapshot]) -> int | None:
+    counts = [_closed_count(card) for card in cards]
+    return sum(counts) if counts and all(value is not None for value in counts) else None
+
+
+def _decay_payload(
+    card: StrategyEvidenceSnapshot | None,
+    provenance: EvidenceProvenance | ForwardEvidenceProvenance | None,
+) -> dict | None:
+    if card is None:
+        return None
+    return {
+        "provenance": provenance,
+        "net_expectancy": card.net_expectancy,
+        "profit_factor": card.profit_factor,
+        "sharpe_proxy": card.sharpe_proxy,
+        "max_drawdown": card.max_drawdown,
+        "total_costs": card.total_costs,
+        "signal_failure_rate": (card.metrics_json or {}).get("signal_failure_rate"),
+    }
+
+
+def _readiness_context(
+    *,
+    replay_card: StrategyEvidenceSnapshot | None,
+    forward_card: StrategyEvidenceSnapshot | None,
+    replay_provenance: EvidenceProvenance | None,
+    forward_provenance: ForwardEvidenceProvenance | None,
+    global_forward_evidence: tuple[ForwardEvidenceProvenance, ...],
+    global_forward_sample: int | None,
+    decay: dict,
+    previous_status: str | None,
+) -> ReadinessContext:
+    concentration_values = forward_card.concentration_json if forward_card is not None else {}
+    ticker_concentration = (concentration_values or {}).get("tickers") or {}
+    market_concentration = (concentration_values or {}).get("markets") or {}
+    return ReadinessContext(
+        replay_sample=_closed_count(replay_card) if replay_card is not None else None,
+        global_forward_sample=global_forward_sample,
+        forward_sample=_closed_count(forward_card) if forward_card is not None else None,
+        replay_evidence=replay_provenance,
+        strategy_forward_evidence=forward_provenance,
+        global_forward_evidence=global_forward_evidence,
+        observation_days=_observation_days(forward_card),
+        net_expectancy=forward_card.net_expectancy if forward_card is not None else None,
+        benchmark_excess=forward_card.benchmark_excess if forward_card is not None else None,
+        max_drawdown=forward_card.max_drawdown if forward_card is not None else None,
+        decay_status=str(decay["status"]),
+        decay_pct=decay["performance_decay_pct"],
+        ticker_count=_optional_non_negative_int(ticker_concentration.get("distinct_count")),
+        regime_count=len(forward_card.regimes_json or []) if forward_card is not None else None,
+        ticker_concentration=_number(ticker_concentration.get("top_share")),
+        market_concentration=_number(market_concentration.get("top_share")),
+        costs_available=forward_card is not None and forward_card.total_costs is not None,
+        slippage_available=forward_card is not None and forward_card.average_slippage is not None,
+        data_quality_available=_data_quality_available(forward_card),
+        previous_status=previous_status,
+    )
+
+
+def _observation_days(card: StrategyEvidenceSnapshot | None) -> int | None:
+    if card is None:
+        return None
+    dates = []
+    for source in card.source_rows_json or []:
+        if not isinstance(source, dict):
+            continue
+        timestamp = source.get("timestamp")
+        if not timestamp:
+            continue
+        try:
+            dates.append(datetime.fromisoformat(str(timestamp).replace("Z", "+00:00")).date())
+        except ValueError:
+            continue
+    if not dates:
+        return None
+    return (max(dates) - min(dates)).days
+
+
+def _data_quality_available(card: StrategyEvidenceSnapshot | None) -> bool:
+    if card is None:
+        return False
+    blockers = {
+        "data_quality_unavailable",
+        "strategy_identity_conflict",
+    }
+    return not blockers.intersection(str(value) for value in (card.warnings_json or []))
+
+
+def _decision_reasons(status: str, blockers: tuple[str, ...], decay_status: str) -> list[str]:
+    reasons = [f"decay_status:{decay_status}"]
+    if blockers:
+        reasons.extend(f"blocked_by:{blocker}" for blocker in blockers)
+    else:
+        reasons.append(f"readiness_status:{status}")
+    return reasons
+
+
+def _aggregate_readiness_status(statuses: list[str]) -> str:
+    for status in ("SUSPENDED", "DEGRADED"):
+        if status in statuses:
+            return status
+    for status in (
+        "COPY_READY_HIGH_CONFIDENCE",
+        "COPY_READY_PAPER_ONLY",
+        "FORWARD_EVIDENCE_GROWING",
+        "FORWARD_EVIDENCE_LOW",
+        "REPLAY_ONLY",
+        "NOT_READY",
+    ):
+        if status in statuses:
+            return status
+    return "NOT_READY"
+
+
+def _aggregate_eligibility(values: list[str | None]) -> str:
+    for value in (
+        "ELIGIBLE_FOR_LIMITED_EXTERNAL_VALIDATION",
+        "PAPER_ONLY",
+        "OBSERVE_ONLY",
+        "NOT_ELIGIBLE",
+    ):
+        if value in values:
+            return value
+    return "NOT_ELIGIBLE"
+
+
+def _optional_non_negative_int(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value if value >= 0 else None
+
+
+def _bounded_strategy_limit(value: int) -> int:
+    return min(MAX_READINESS_STRATEGIES, max(0, _integer(value)))
 
 
 def _bounded_limit(value: int, *, maximum: int) -> int:
