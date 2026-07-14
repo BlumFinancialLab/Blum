@@ -45,6 +45,7 @@ from app.services.alpha_operating_system import (
 )
 from app.services.learning_summary import LearningSummaryService
 from app.services.copy_readiness_evidence import CopyReadinessSummaryService
+from app.services.brain_learning_proof import BrainLearningProofService
 from app.services.research_planner import AutonomousResearchPlanner
 from app.services.trading_intelligence_lab import paper_forward_actionability_summary
 
@@ -63,6 +64,7 @@ class TraderBrainService:
     """
 
     def brain(self, db: Session) -> dict:
+        proof = BrainLearningProofService().snapshot(db)
         latest_power = latest_row(db, BlumTradingPowerScore)
         latest_decision = latest_row(db, DecisionSuperiorityScore)
         latest_metric = latest_row(db, TradingIntelligenceMetric)
@@ -146,6 +148,7 @@ class TraderBrainService:
             "last_learning_cycle": run_payload(latest_run),
             "next_planned_experiment": focus_payload(focus),
             "learning_chart": learning_chart(db),
+            **proof,
             "truth": truth_lines(brain_score, learning, alpha, benchmarks),
             "component_scores": components,
             "readiness": {

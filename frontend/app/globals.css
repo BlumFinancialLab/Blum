@@ -1791,6 +1791,176 @@ p { color: var(--muted); line-height: 1.55; }
   margin-bottom: 12px;
   border-color: rgba(255,176,0,.24);
 }
+.brain-proof-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.brain-evidence-chart {
+  min-height: 230px;
+  border: 1px solid rgba(255,255,255,.07);
+  border-radius: 6px;
+  padding: 6px 8px 8px;
+  background: #05080d;
+}
+.brain-evidence-chart svg {
+  display: block;
+  width: 100%;
+  height: 190px;
+  overflow: visible;
+}
+.brain-chart-gridline {
+  stroke: rgba(255,255,255,.08);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.brain-chart-axis {
+  fill: #657287;
+  font-size: 9px;
+}
+.brain-chart-legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  min-height: 22px;
+  color: #8d9aae;
+  font-size: 10px;
+}
+.brain-chart-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.brain-chart-legend i {
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+}
+.brain-chart-legend time {
+  margin-left: auto;
+  color: #647186;
+}
+.brain-proof-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 8px;
+}
+.brain-proof-metrics div,
+.copy-gate-status div {
+  min-width: 0;
+  border: 1px solid rgba(255,255,255,.07);
+  border-radius: 5px;
+  padding: 8px;
+  background: #05080d;
+}
+.brain-proof-metrics span,
+.copy-gate-status span {
+  display: block;
+  color: #748196;
+  font-size: 9px;
+  text-transform: uppercase;
+}
+.brain-proof-metrics strong,
+.copy-gate-status strong {
+  display: block;
+  margin-top: 5px;
+  color: #eef4fb;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.brain-evidence-footer {
+  display: grid;
+  grid-template-columns: 14px 1fr auto;
+  align-items: center;
+  gap: 7px;
+  margin-top: 8px;
+  min-height: 30px;
+  border-top: 1px solid rgba(255,255,255,.06);
+  padding-top: 8px;
+  color: #8e9bae;
+  font-size: 10px;
+}
+.brain-evidence-footer.is-warning { color: var(--amber); }
+.brain-evidence-footer.is-valid { color: var(--green); }
+.brain-evidence-footer b { color: inherit; }
+.brain-evidence-empty {
+  min-height: 230px;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 7px;
+  border: 1px dashed rgba(255,176,0,.28);
+  border-radius: 6px;
+  color: var(--amber);
+  text-align: center;
+}
+.brain-evidence-empty strong { color: #e8eef7; font-size: 12px; }
+.brain-evidence-empty span { max-width: 360px; color: #8390a3; font-size: 10px; }
+.brain-trend {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--amber);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+.brain-trend.trend-improving { color: var(--green); }
+.brain-trend.trend-deteriorating { color: var(--red); }
+.brain-trend.trend-stable { color: var(--cyan); }
+.value-positive { color: var(--green); }
+.value-negative { color: var(--red); }
+.copy-gate-status {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  margin-bottom: 10px;
+}
+.copy-gate-progress { display: grid; gap: 10px; }
+.copy-progress-row div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #8b98aa;
+  font-size: 10px;
+}
+.copy-progress-row strong { color: #e7edf6; }
+.copy-progress-row i {
+  display: block;
+  height: 7px;
+  margin-top: 5px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: rgba(255,255,255,.07);
+}
+.copy-progress-row i b {
+  display: block;
+  height: 100%;
+  min-width: 1px;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--amber), var(--green));
+}
+.copy-gate-blockers {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin-top: 12px;
+  border-left: 2px solid var(--amber);
+  padding: 7px 9px;
+  color: var(--amber);
+  background: rgba(255,176,0,.06);
+  font-size: 10px;
+}
+.copy-gate-next,
+.brain-sparkline-empty {
+  margin: 9px 0 0;
+  color: #7f8b9d;
+  font-size: 10px;
+  line-height: 1.4;
+}
 .brain-level-layout {
   display: grid;
   grid-template-columns: minmax(380px, 1.1fr) minmax(300px, .8fr) minmax(320px, .9fr);
@@ -3291,7 +3461,7 @@ p { color: var(--muted); line-height: 1.55; }
   .alpha-verdict-panel { flex-direction: column; }
   .alpha-grade { min-width: 0; }
   .header-actions { justify-content: flex-start; }
-  .hero, .grid-2, .grid-3, .grid-4, .live-grid, .realtime-strip, .deployment-banner, .diagnostic-grid, .diagnostic-metric-grid, .truth-summary-grid, .diagnostic-key-values, .instrument-card, .market-strip, .market-strip.compact, .brain-hero, .scenario-grid, .evidence-grid, .method-grid, .event-graph, .financial-brain-grid, .quality-lists, .macro-list, .executive-hero, .executive-command, .executive-grid, .narrative-grid, .sentiment-columns, .opportunity-card, .score-stack, .allocation-list div, .brain-status-grid, .brain-two-col, .chart-snapshot-panel .brain-status-grid, .key-level-grid, .evidence-columns, .terminal-header, .terminal-status-grid, .terminal-command-grid, .market-command-layout, .market-pulse-grid, .pulse-chart-grid, .asset-command-card, .signal-note-grid, .professional-grid-2, .professional-grid-3, .professional-grid-4, .desk-layout, .market-brain-system-grid, .chat-command-layout, .chat-prompt-grid, .chat-answer-grid, .chat-candidate-row, .chatgpt-shell, .chat-evidence-columns, .scenario-mini-grid, .compact-candidate, .asset-context-pill, .context-coverage, .paper-journal-layout, .paper-forward-grid, .paper-forward-card-grid, .paper-blocker-list, .research-planner-lists, .alpha-evidence-ladder, .alpha-split-grid { grid-template-columns: 1fr; }
+  .hero, .grid-2, .grid-3, .grid-4, .live-grid, .realtime-strip, .deployment-banner, .diagnostic-grid, .diagnostic-metric-grid, .truth-summary-grid, .diagnostic-key-values, .instrument-card, .market-strip, .market-strip.compact, .brain-hero, .scenario-grid, .evidence-grid, .method-grid, .event-graph, .financial-brain-grid, .quality-lists, .macro-list, .executive-hero, .executive-command, .executive-grid, .narrative-grid, .sentiment-columns, .opportunity-card, .score-stack, .allocation-list div, .brain-status-grid, .brain-two-col, .chart-snapshot-panel .brain-status-grid, .key-level-grid, .evidence-columns, .terminal-header, .terminal-status-grid, .terminal-command-grid, .market-command-layout, .market-pulse-grid, .pulse-chart-grid, .asset-command-card, .signal-note-grid, .professional-grid-2, .professional-grid-3, .professional-grid-4, .desk-layout, .market-brain-system-grid, .chat-command-layout, .chat-prompt-grid, .chat-answer-grid, .chat-candidate-row, .chatgpt-shell, .chat-evidence-columns, .scenario-mini-grid, .compact-candidate, .asset-context-pill, .context-coverage, .paper-journal-layout, .paper-forward-grid, .paper-forward-card-grid, .paper-blocker-list, .research-planner-lists, .alpha-evidence-ladder, .alpha-split-grid, .brain-proof-grid { grid-template-columns: 1fr; }
   .chat-context-rail { position: static; }
   .chat-thread { max-height: none; }
   .tape-row { grid-template-columns: 1fr; }
@@ -3311,4 +3481,5 @@ p { color: var(--muted); line-height: 1.55; }
     grid-template-columns: 1fr;
   }
   .brain-level-ring { max-width: 160px; }
+  .brain-proof-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

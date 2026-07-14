@@ -1880,6 +1880,21 @@ Trade snapshots expose the evidence status, forward sample, net edge after measu
 
 `ELIGIBLE_FOR_LIMITED_EXTERNAL_VALIDATION` is an autonomous research classification only. The engine has no broker adapter, order submission path or real-money execution. It does not promise alpha, does not blend replay with forward results and does not modify a trade's frozen decision payload.
 
+## Brain Learning Proof
+
+The Brain page measures whether BLUM is learning and whether stored paper decisions are improving. It still performs one read-only call to `GET /api/brain/snapshot`; no training, lifecycle work or benchmark recalculation runs during page render.
+
+The snapshot and UI expose four compact evidence views:
+
+- **Brain Improvement**: Brain Score, Decision Quality and Learning Velocity over timestamped stored snapshots.
+- **P/L vs Benchmark**: cumulative paper-forward net P/L, matched holding-period benchmark contribution, wins, losses, expectancy R and drawdown.
+- **Learning Throughput**: predictions, evaluated outcomes and persistent memory updates per bounded learning cycle.
+- **Copy Trading Gate**: forward sample, observation time, maturity, readiness, capital eligibility, blockers and the next evidence milestone.
+
+Missing values remain unavailable and short samples are marked `Insufficient evidence`. Charts never synthesize an improving line from one observation. Historical replay, walk-forward and paper-forward evidence remain separate.
+
+BLUM does not target an impossible 100% winning-trade rate. A robust trading-research system can have controlled losing trades; professional evidence requires positive net expectancy after costs, acceptable drawdown, benchmark-relative performance, calibration, reproducibility and enough forward observations. Copy readiness is an evidence-maturity status, not a guarantee of future profit or permission to deploy real capital.
+
 ## Limitations
 
 - Public RSS, Google News RSS search, Yahoo and Stooq are demo-grade public data sources, not licensed institutional feeds.

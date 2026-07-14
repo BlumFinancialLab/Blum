@@ -1,11 +1,13 @@
 from datetime import date, datetime
 from pathlib import Path
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.core.database import Base
 from app.models import (
+    BlumTradingPowerScore,
     HistoricalPrediction,
     LearningBenchmarkComparison,
     LearningFocusPriority,
@@ -14,6 +16,7 @@ from app.models import (
     LiveForwardPaperTrade,
     PredictionOutcome,
     SelfImprovementAction,
+    StrategyReadinessHistory,
     TradeLearningEvidence,
     TradingGame,
     TradingGameTrade,
@@ -64,6 +67,133 @@ def test_trader_brain_is_read_only_truth_first_summary():
     assert "brain_score" in payload
     assert payload["policy"].startswith("Trader Brain is read-only")
     assert any("BLUM vs SPY" in line for line in payload["truth"])
+
+
+def test_brain_snapshot_exposes_measurable_learning_trading_and_copy_readiness_proof():
+    with setup_db() as db:
+        db.add_all(
+            [
+                LearningRun(
+                    run_id="brain-proof-1",
+                    status="completed",
+                    trigger="scheduled",
+                    predictions_created=8,
+                    outcomes_evaluated=5,
+                    memory_updates=2,
+                    started_at=datetime(2026, 7, 1, 8, 0, 0),
+                ),
+                LearningRun(
+                    run_id="brain-proof-2",
+                    status="completed",
+                    trigger="scheduled",
+                    predictions_created=12,
+                    outcomes_evaluated=9,
+                    memory_updates=4,
+                    started_at=datetime(2026, 7, 2, 8, 0, 0),
+                ),
+                BlumTradingPowerScore(
+                    calculated_at=datetime(2026, 7, 1, 9, 0, 0),
+                    score=42.0,
+                    decision_quality_score=45.0,
+                    learning_velocity_score=38.0,
+                ),
+                BlumTradingPowerScore(
+                    calculated_at=datetime(2026, 7, 2, 9, 0, 0),
+                    score=48.0,
+                    decision_quality_score=53.0,
+                    learning_velocity_score=57.0,
+                ),
+            ]
+        )
+        game = LiveForwardPaperGame(
+            game_id="brain-proof-game",
+            starting_capital=100.0,
+            current_capital=105.0,
+        )
+        db.add(game)
+        db.flush()
+        db.add_all(
+            [
+                LiveForwardPaperTrade(
+                    trade_uid="brain-proof-win",
+                    duplicate_key="brain-proof-win",
+                    game_id=game.id,
+                    ticker="NVDA",
+                    setup_type="momentum_breakout",
+                    status="CLOSED",
+                    decision_timestamp=datetime(2026, 7, 1, 10, 0, 0),
+                    closed_at=datetime(2026, 7, 1, 16, 0, 0),
+                    entry_price=100.0,
+                    position_size=1.0,
+                    notional_value=100.0,
+                    net_pnl_eur=8.0,
+                    r_multiple=2.0,
+                    benchmark_return_same_period=2.0,
+                    excess_return_vs_benchmark=6.0,
+                    outcome_label="target_hit",
+                ),
+                LiveForwardPaperTrade(
+                    trade_uid="brain-proof-loss",
+                    duplicate_key="brain-proof-loss",
+                    game_id=game.id,
+                    ticker="AMD",
+                    setup_type="pullback_to_trend",
+                    status="CLOSED",
+                    decision_timestamp=datetime(2026, 7, 2, 10, 0, 0),
+                    closed_at=datetime(2026, 7, 2, 16, 0, 0),
+                    entry_price=100.0,
+                    position_size=1.0,
+                    notional_value=100.0,
+                    net_pnl_eur=-3.0,
+                    r_multiple=-0.75,
+                    benchmark_return_same_period=1.0,
+                    excess_return_vs_benchmark=-4.0,
+                    outcome_label="stopped_out",
+                ),
+            ]
+        )
+        db.add(
+            StrategyReadinessHistory(
+                strategy_id="setup:momentum_breakout",
+                copy_readiness_status="FORWARD_EVIDENCE_LOW",
+                maturity_score=18.0,
+                global_forward_trades=2,
+                strategy_forward_trades=2,
+                observation_days=10,
+                blockers_json=["strategy_forward_trades", "observation_days"],
+                real_capital_eligibility="NOT_ELIGIBLE",
+                evaluated_at=datetime(2026, 7, 2, 18, 0, 0),
+            )
+        )
+        db.commit()
+
+        payload = TraderBrainService().brain(db)
+
+    learning = payload["learning_proof"]
+    assert learning["productive_cycles"] == 2
+    assert learning["predictions_created"] == 20
+    assert learning["outcomes_evaluated"] == 14
+    assert learning["memory_updates"] == 6
+    assert learning["outcome_conversion_rate"] == 0.7
+    assert [point["predictions"] for point in learning["series"]] == [8, 12]
+
+    trading = payload["trading_proof"]
+    assert trading["evidence_class"] == "PAPER_FORWARD_EVIDENCE"
+    assert trading["closed_trades"] == 2
+    assert trading["wins"] == 1
+    assert trading["losses"] == 1
+    assert trading["realized_pnl_eur"] == 5.0
+    assert trading["expectancy_r"] == 0.625
+    assert trading["equity_series"][-1]["blum_equity"] == 105.0
+    assert trading["equity_series"][-1]["benchmark_equity"] == 103.0
+    assert trading["sample_warning"]
+
+    readiness = payload["copy_readiness"]
+    assert readiness["copy_readiness_status"] == "FORWARD_EVIDENCE_LOW"
+    assert readiness["real_capital_eligibility"] == "NOT_ELIGIBLE"
+    assert readiness["strategy_forward_progress"] == pytest.approx(2 / 30, abs=0.0001)
+    assert readiness["observation_progress"] == pytest.approx(10 / 90, abs=0.0001)
+    assert readiness["blockers"] == ["observation_days", "strategy_forward_trades"]
 
 
 def test_training_ground_exposes_hypothesis_validation_and_lessons():
@@ -370,6 +500,25 @@ def test_product_surface_is_reduced_to_four_primary_pages():
     assert 'label: "Radar"' not in text
     assert 'label: "Signals"' not in text
     assert 'label: "Performance"' not in text
+
+
+def test_brain_page_renders_learning_profit_and_copy_readiness_from_one_snapshot():
+    frontend = Path(__file__).resolve().parents[2] / "frontend"
+    page_text = (frontend / "app" / "brain" / "page.tsx").read_text()
+    charts_path = frontend / "components" / "BrainEvidenceCharts.tsx"
+
+    assert page_text.count("api.traderBrain()") == 1
+    assert "BrainEvidenceCharts" in page_text
+    assert "safeNumber(data?.brain_score) + 1" not in page_text
+    assert charts_path.exists()
+
+    charts_text = charts_path.read_text()
+    assert "Brain Improvement" in charts_text
+    assert "P/L vs Benchmark" in charts_text
+    assert "Learning Throughput" in charts_text
+    assert "Copy Trading Gate" in charts_text
+    assert "Insufficient evidence" in charts_text
+    assert "COPY_READY_PAPER_ONLY" in charts_text
 
 
 def test_legacy_pages_are_lightweight_aliases():

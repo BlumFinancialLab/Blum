@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Brain, Gauge, ShieldAlert, Target, TrendingUp, Zap } from "lucide-react";
 import { api } from "@/lib/api";
-import { BloombergPanel, ConfidenceMeter, MetricCard, MiniSparkline, ScoreBadge, TerminalHeader } from "@/components/FinancialTerminal";
+import { BloombergPanel, MetricCard, MiniSparkline, ScoreBadge, TerminalHeader } from "@/components/FinancialTerminal";
+import { BrainEvidenceCharts } from "@/components/BrainEvidenceCharts";
 import { LoadingState } from "@/components/LoadingState";
 import { StatusBadge } from "@/components/StatusBadge";
 
@@ -21,16 +22,13 @@ export default function BrainPage() {
     };
   }, []);
 
-  const chartValues = useMemo(() => {
-    const rows = data?.learning_chart ?? [];
-    const values = rows.map((row: any) => Number(row.brain_score)).filter((value: number) => Number.isFinite(value));
-    return values.length > 1 ? values : [safeNumber(data?.brain_score), safeNumber(data?.brain_score) + 1].filter(Number.isFinite);
-  }, [data]);
-
   if (error) return <div className="terminal-empty">Trader Brain error: {error}</div>;
   if (!data) return <LoadingState label="Loading Trader Brain" />;
 
   const evidenceTone = evidenceToneFor(data?.readiness?.evidence_grade);
+  const chartValues = (data?.brain_progress?.series ?? [])
+    .map((row: any) => Number(row.brain_score))
+    .filter((value: number) => Number.isFinite(value));
 
   return (
     <>
@@ -55,6 +53,8 @@ export default function BrainPage() {
         <MetricCard label="Knowledge Quality" value={`${formatNumber(data.knowledge_quality)}/100`} subvalue="Validated lessons, not raw volume" icon={<Gauge size={15} />} tone={toneForScore(data.knowledge_quality)} />
       </section>
 
+      <BrainEvidenceCharts data={data} />
+
       <section className="grid-2">
         <BloombergPanel title="Brain Status" value={<ScoreBadge value={data.brain_score} label="brain" />} subtitle="The master KPI combines decision quality, evidence, calibration, risk, reproducibility and explainability.">
           <div className="brain-level-layout">
@@ -63,7 +63,11 @@ export default function BrainPage() {
                 <strong>{formatNumber(data.brain_score, 0)}</strong>
                 <span>{data.brain_classification}</span>
               </div>
-              <MiniSparkline values={chartValues as number[]} tone={toneForScore(data.brain_score)} />
+              {chartValues.length > 1 ? (
+                <MiniSparkline values={chartValues as number[]} tone={toneForScore(data.brain_score)} />
+              ) : (
+                <div className="brain-sparkline-empty">Waiting for a second validated Brain snapshot.</div>
+              )}
             </div>
             <div className="brain-list dense">
               <LearningFact label="Current learning objective" value={data.current_learning_objective?.target ?? "No focused objective stored yet"} detail={data.current_learning_objective?.reason ?? "Broad autonomous coverage continues."} />
