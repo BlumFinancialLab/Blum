@@ -67,6 +67,7 @@ CRITICAL_SNAPSHOT_TYPES = [
     "alpha_gates_summary",
     "paper_copy_summary",
     "paper_forward_snapshot",
+    "copy_readiness_summary",
     "trader_brain_summary",
     "trader_training_ground_summary",
     "trader_paper_trading_summary",
@@ -315,6 +316,10 @@ class SnapshotProducerService:
             from app.services.live_forward_paper_trading import LiveForwardPaperTradingService
 
             return LiveForwardPaperTradingService().snapshot_payload(db)
+        if snapshot_type == "copy_readiness_summary":
+            from app.services.copy_readiness_evidence import CopyReadinessSummaryService
+
+            return CopyReadinessSummaryService().summary(db)
         if snapshot_type == "trading_game_summary":
             game = db.scalar(select(TradingGame).order_by(desc(TradingGame.updated_at)).limit(1))
             if game is None:

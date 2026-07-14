@@ -49,6 +49,7 @@ from app.services.paper_forward_opportunity_scanner import (
     WATCHLIST_CANDIDATE,
     PaperForwardOpportunityScanner,
 )
+from app.services.copy_readiness_evidence import CopyReadinessSummaryService
 
 
 settings = get_settings()
@@ -843,6 +844,16 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
 
         payload["intraday"] = intraday_snapshot_summary(db)
         payload.update({key: value for key, value in payload["intraday"].items() if key.startswith("intraday_") or key in {"open_positions_by_market", "open_positions_by_desk", "open_positions_by_ticker", "distinct_markets_traded_today", "distinct_tickers_traded_today", "average_holding_minutes", "avg_holding_minutes", "average_r", "avg_net_r", "realized_pnl", "realized_intraday_pnl", "benchmark_excess", "costs_paid", "rejected_due_to_costs", "rejected_due_to_concentration", "reason_if_no_intraday_trades", "next_intraday_action"}})
+        payload["copy_readiness"] = CopyReadinessSummaryService().summary(db)
+        readiness_rows = [*(payload.get("candidates") or []), *(payload.get("open_positions") or [])]
+        payload["copy_ready_open_candidates"] = [
+            row for row in readiness_rows
+            if row.get("copy_readiness_status") in {"COPY_READY_PAPER_ONLY", "COPY_READY_HIGH_CONFIDENCE"}
+        ][:8]
+        payload["not_copy_ready_open_candidates"] = [
+            row for row in readiness_rows
+            if row.get("copy_readiness_status") not in {"COPY_READY_PAPER_ONLY", "COPY_READY_HIGH_CONFIDENCE"}
+        ][:8]
         game = self.active_game(db)
         if not game:
             return payload

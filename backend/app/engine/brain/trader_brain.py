@@ -44,6 +44,7 @@ from app.services.alpha_operating_system import (
     TradingGameReadinessService,
 )
 from app.services.learning_summary import LearningSummaryService
+from app.services.copy_readiness_evidence import CopyReadinessSummaryService
 from app.services.research_planner import AutonomousResearchPlanner
 from app.services.trading_intelligence_lab import paper_forward_actionability_summary
 
@@ -247,6 +248,7 @@ class TraderBrainService:
 
     def alpha(self, db: Session) -> dict:
         alpha_readiness = AlphaReadinessEngine().readiness(db)
+        copy_readiness = CopyReadinessSummaryService().summary(db)
         gates = AlphaGateService().gates(db)
         live_game = latest_row(db, LiveForwardPaperGame)
         benchmarks = latest_benchmarks(db)
@@ -341,6 +343,7 @@ class TraderBrainService:
             "intraday_paper_forward": intraday_split,
             "live_forward": live_split,
             "current_alpha_readiness": alpha_readiness,
+            "copy_readiness": copy_readiness,
             "edge_map": alpha_edge_map(paper_rows),
             "weakness_map": alpha_weakness_map(paper_rows, closed_rows, benchmarks, paper_summary),
             "current_blockers": blocker_rows,

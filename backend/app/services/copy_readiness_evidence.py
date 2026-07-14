@@ -687,6 +687,75 @@ class CopyReadinessSummaryService:
         }
 
 
+class CopyReadinessQueryService:
+    """Bounded read model for strategy readiness and evidence timeline APIs."""
+
+    def strategies(self, db: Session, *, limit: int = 25, offset: int = 0) -> dict:
+        bounded_limit = _bounded_limit(limit, maximum=MAX_QUERY_LIMIT)
+        bounded_offset = max(0, int(offset or 0))
+        later = aliased(StrategyReadinessHistory)
+        rows = db.scalars(
+            select(StrategyReadinessHistory)
+            .where(
+                ~select(later.id)
+                .where(
+                    later.strategy_id == StrategyReadinessHistory.strategy_id,
+                    or_(
+                        later.evaluated_at > StrategyReadinessHistory.evaluated_at,
+                        and_(
+                            later.evaluated_at == StrategyReadinessHistory.evaluated_at,
+                            later.id > StrategyReadinessHistory.id,
+                        ),
+                    ),
+                )
+                .exists()
+            )
+            .order_by(StrategyReadinessHistory.evaluated_at.desc(), StrategyReadinessHistory.id.desc())
+            .offset(bounded_offset)
+            .limit(bounded_limit + 1)
+        ).all()
+        has_more = len(rows) > bounded_limit
+        return {
+            "rows": [_serialize_readiness(row) for row in rows[:bounded_limit]],
+            "limit": bounded_limit,
+            "offset": bounded_offset,
+            "has_more": has_more,
+            "next_offset": bounded_offset + bounded_limit if has_more else None,
+        }
+
+    def strategy(self, db: Session, strategy_id: str) -> dict | None:
+        history = db.scalar(
+            select(StrategyReadinessHistory)
+            .where(StrategyReadinessHistory.strategy_id == strategy_id)
+            .order_by(StrategyReadinessHistory.evaluated_at.desc(), StrategyReadinessHistory.id.desc())
+            .limit(1)
+        )
+        if history is None:
+            return None
+        cards = StrategyEvidenceQuery().latest_cards(db, limit=8, offset=0, strategy_id=strategy_id)
+        return {"readiness": _serialize_readiness(history), "evidence": cards}
+
+    def timeline(self, db: Session, strategy_id: str, *, limit: int = 50, offset: int = 0) -> dict:
+        bounded_limit = _bounded_limit(limit, maximum=MAX_QUERY_LIMIT)
+        bounded_offset = max(0, int(offset or 0))
+        rows = db.scalars(
+            select(EvidenceTimelineEvent)
+            .where(EvidenceTimelineEvent.strategy_id == strategy_id)
+            .order_by(EvidenceTimelineEvent.event_timestamp.desc(), EvidenceTimelineEvent.id.desc())
+            .offset(bounded_offset)
+            .limit(bounded_limit + 1)
+        ).all()
+        has_more = len(rows) > bounded_limit
+        return {
+            "strategy_id": strategy_id,
+            "rows": [_serialize_timeline_event(row) for row in rows[:bounded_limit]],
+            "limit": bounded_limit,
+            "offset": bounded_offset,
+            "has_more": has_more,
+            "next_offset": bounded_offset + bounded_limit if has_more else None,
+        }
+
+
 def copy_readiness_projections(
     db: Session,
     trades: list[LiveForwardPaperTrade],
@@ -867,6 +936,39 @@ def _serialize_snapshot(row: StrategyEvidenceSnapshot) -> dict:
         "regimes": row.regimes_json or [],
         "confidence_interval": row.confidence_interval_json,
         "evaluated_at": row.evaluated_at.isoformat() if row.evaluated_at else None,
+    }
+
+
+def _serialize_readiness(row: StrategyReadinessHistory) -> dict:
+    return {
+        "id": row.id,
+        "strategy_id": row.strategy_id,
+        "previous_copy_readiness_status": row.previous_copy_readiness_status,
+        "copy_readiness_status": row.copy_readiness_status,
+        "maturity_score": row.maturity_score,
+        "global_forward_trades": row.global_forward_trades,
+        "strategy_forward_trades": row.strategy_forward_trades,
+        "observation_days": row.observation_days,
+        "passed_gates": row.passed_gates_json or [],
+        "failed_gates": row.failed_gates_json or [],
+        "blockers": row.blockers_json or [],
+        "reasons": row.reasons_json or [],
+        "decay_status": row.decay_status,
+        "real_capital_eligibility": row.real_capital_eligibility,
+        "threshold_version": row.threshold_version,
+        "evaluated_at": row.evaluated_at.isoformat() if row.evaluated_at else None,
+    }
+
+
+def _serialize_timeline_event(row: EvidenceTimelineEvent) -> dict:
+    return {
+        "id": row.id,
+        "event_key": row.event_key,
+        "event_type": row.event_type,
+        "strategy_id": row.strategy_id,
+        "trade_id": row.trade_id,
+        "payload": row.payload_json or {},
+        "event_timestamp": row.event_timestamp.isoformat() if row.event_timestamp else None,
     }
 
 

@@ -1,6 +1,7 @@
 from app.api.routers.alpha import router as alpha_router
 from app.api.routers.analyst import router as analyst_router
 from app.api.routers.brain import router as brain_router
+from app.api.routers.copy_readiness import router as copy_readiness_router
 from app.api.routers.legacy import router as legacy_router
 from app.api.routers.paper_trading import router as paper_trading_router
 from app.api.routers.runtime import router as runtime_router
@@ -10,6 +11,7 @@ __all__ = [
     "alpha_router",
     "analyst_router",
     "brain_router",
+    "copy_readiness_router",
     "legacy_router",
     "paper_trading_router",
     "runtime_router",

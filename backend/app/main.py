@@ -13,6 +13,7 @@ from app.api.routers import (
     alpha_router,
     analyst_router,
     brain_router,
+    copy_readiness_router,
     legacy_router,
     paper_trading_router,
     runtime_router,
@@ -47,6 +48,7 @@ app.add_middleware(
 )
 
 app.include_router(brain_router)
+app.include_router(copy_readiness_router)
 app.include_router(training_router)
 app.include_router(paper_trading_router)
 app.include_router(alpha_router)
