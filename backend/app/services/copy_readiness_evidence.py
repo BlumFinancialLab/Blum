@@ -18,6 +18,7 @@ from app.models import (
     EvidenceTimelineEvent,
     HyperbolicReplayTrade,
     LiveForwardPaperTrade,
+    LiveForwardPaperTradeEvent,
     ReplayStrategyValidation,
     StrategyEvidenceSnapshot,
     StrategyReadinessHistory,
@@ -31,6 +32,7 @@ from app.services.copy_readiness_metrics import (
     ReadinessContext,
     ReadinessThresholds,
     WALK_FORWARD_EVIDENCE,
+    canonical_evidence_class,
     concentration,
     evaluate_capital_eligibility,
     evaluate_copy_readiness,
@@ -47,6 +49,25 @@ MAX_READINESS_STRATEGIES = 100
 FORWARD_EVIDENCE_CLASSES = frozenset({PAPER_FORWARD_EVIDENCE, INTRADAY_FORWARD_EVIDENCE})
 REPLAY_EVIDENCE_CLASSES = frozenset({REPLAY_EVIDENCE, WALK_FORWARD_EVIDENCE})
 READY_STATUSES = frozenset({"COPY_READY_PAPER_ONLY", "COPY_READY_HIGH_CONFIDENCE"})
+
+LIFECYCLE_EVENT_TYPES = {
+    "DECISION_CREATED": "signal_created",
+    "TRADE_CANDIDATE_CREATED": "signal_created",
+    "INTRADAY_TRADE_CANDIDATE": "signal_created",
+    "POSITION_OPENED": "trade_opened",
+    "INTRADAY_TRADE_OPENED": "trade_opened",
+    "POSITION_UPDATED": "trade_updated",
+    "POSITION_CLOSED": "trade_closed",
+    "STOP_HIT": "trade_closed",
+    "TARGET_HIT": "trade_closed",
+    "TARGET_1_HIT": "trade_closed",
+    "TARGET_2_HIT": "trade_closed",
+    "INVALIDATION_HIT": "trade_closed",
+    "TIME_EXIT": "trade_closed",
+    "OUTCOME_EVALUATED": "outcome_evaluated",
+    "LESSON_CREATED": "lesson_created",
+    "MEMORY_UPDATED": "memory_updated",
+}
 
 
 @dataclass(frozen=True)
@@ -664,6 +685,156 @@ class CopyReadinessSummaryService:
             "threshold_version": self.settings.copy_readiness_threshold_version,
             "evaluated_at": evaluated_at.isoformat() if evaluated_at is not None else None,
         }
+
+
+def copy_readiness_projections(
+    db: Session,
+    trades: list[LiveForwardPaperTrade],
+) -> dict[int, dict]:
+    """Batch-load evidence projections for serialized paper trades.
+
+    The function performs bounded projection reads only. It never recalculates
+    readiness and deliberately leaves unavailable financial evidence as null.
+    """
+
+    identified = {
+        trade.id: strategy_identity(trade.setup_type, trade.promoted_validation_id)[0]
+        for trade in trades
+        if trade.id is not None
+    }
+    strategy_ids = sorted(set(identified.values()))
+    if not strategy_ids:
+        return {}
+
+    histories = _latest_readiness_by_strategy(db, strategy_ids)
+    later = aliased(StrategyEvidenceSnapshot)
+    cards = db.scalars(
+        select(StrategyEvidenceSnapshot)
+        .where(
+            StrategyEvidenceSnapshot.strategy_id.in_(strategy_ids),
+            ~select(later.id)
+            .where(
+                later.strategy_id == StrategyEvidenceSnapshot.strategy_id,
+                later.evidence_class == StrategyEvidenceSnapshot.evidence_class,
+                or_(
+                    later.evaluated_at > StrategyEvidenceSnapshot.evaluated_at,
+                    and_(
+                        later.evaluated_at == StrategyEvidenceSnapshot.evaluated_at,
+                        later.id > StrategyEvidenceSnapshot.id,
+                    ),
+                ),
+            )
+            .exists(),
+        )
+        .order_by(StrategyEvidenceSnapshot.evaluated_at.desc(), StrategyEvidenceSnapshot.id.desc())
+        .limit(min(MAX_QUERY_LIMIT * 4, len(strategy_ids) * 4))
+    ).all()
+    cards_by_strategy: dict[str, list[StrategyEvidenceSnapshot]] = defaultdict(list)
+    for card in cards:
+        cards_by_strategy[card.strategy_id].append(card)
+
+    return {
+        trade.id: _trade_readiness_projection(
+            trade,
+            identified[trade.id],
+            histories.get(identified[trade.id]),
+            cards_by_strategy.get(identified[trade.id], []),
+        )
+        for trade in trades
+        if trade.id in identified
+    }
+
+
+def append_trade_evidence_event(
+    db: Session,
+    trade: LiveForwardPaperTrade,
+    source_event: LiveForwardPaperTradeEvent,
+) -> EvidenceTimelineEvent | None:
+    """Mirror a persisted paper lifecycle event into the canonical timeline."""
+
+    canonical_type = LIFECYCLE_EVENT_TYPES.get(str(source_event.event_type or "").upper())
+    if canonical_type is None:
+        return None
+    strategy_id = strategy_identity(trade.setup_type, trade.promoted_validation_id)[0]
+    return EvidenceTimelineService().append_once(
+        db,
+        event_key=f"paper-forward-event:{source_event.id}:{canonical_type}",
+        event_type=canonical_type,
+        strategy_id=strategy_id,
+        trade_id=trade.id,
+        payload={
+            "source_event_id": source_event.id,
+            "source_event_type": source_event.event_type,
+            "ticker": trade.ticker,
+            "status": trade.status,
+            "price_used": source_event.price_used,
+            "reason": source_event.reason,
+            "evidence_class": canonical_evidence_class(trade.evidence_type, trade.trading_mode),
+            "event_payload": dict(source_event.payload or {}),
+        },
+    )
+
+
+def _trade_readiness_projection(
+    trade: LiveForwardPaperTrade,
+    strategy_id: str,
+    history: StrategyReadinessHistory | None,
+    cards: list[StrategyEvidenceSnapshot],
+) -> dict:
+    forward_card = _newest_card(card for card in cards if card.evidence_class in FORWARD_EVIDENCE_CLASSES)
+    replay_card = _newest_card(card for card in cards if card.evidence_class in REPLAY_EVIDENCE_CLASSES)
+    strategy_status = history.copy_readiness_status if history is not None else "INSUFFICIENT_EVIDENCE"
+    copy_status = strategy_status if strategy_status in READY_STATUSES else "NOT_COPY_READY"
+    blockers = list(history.blockers_json or []) if history is not None else ["readiness_not_evaluated"]
+    reasons = list(history.reasons_json or []) if history is not None else []
+    warnings = sorted(
+        {
+            *(forward_card.warnings_json or [] if forward_card is not None else []),
+            *(replay_card.warnings_json or [] if replay_card is not None else []),
+            *blockers,
+        }
+    )
+    regime_payload = (trade.frozen_decision_payload or {}).get("market_regime")
+    if regime_payload is None:
+        regime_payload = (trade.frozen_decision_payload or {}).get("regime")
+    concentration_payload = forward_card.concentration_json or {} if forward_card is not None else {}
+    ticker_concentration = (concentration_payload.get("tickers") or {}).get("top_share")
+    invalidation = trade.invalidation_level or trade.stop_loss
+    eligibility = history.real_capital_eligibility if history is not None else "NOT_ELIGIBLE"
+    reason_to_copy = (
+        "Evidence gates passed. This remains an autonomous research classification, not a real-money instruction."
+        if copy_status in READY_STATUSES
+        else None
+    )
+    reason_not_to_copy = None if copy_status in READY_STATUSES else (
+        reasons[0] if reasons else f"Strategy evidence status is {strategy_status}."
+    )
+    maximum_paper_risk = 1.0 if strategy_status == "COPY_READY_HIGH_CONFIDENCE" else 0.5 if strategy_status == "COPY_READY_PAPER_ONLY" else 0.0
+    return {
+        "strategy_id": strategy_id,
+        "copy_readiness_status": copy_status,
+        "strategy_readiness_status": strategy_status,
+        "quant_edge_score": history.maturity_score if history is not None else None,
+        "sample_size": (replay_card.closed_trades if replay_card is not None else None),
+        "forward_sample_size": (history.strategy_forward_trades if history is not None else None),
+        "expected_net_edge": (forward_card.net_expectancy if forward_card is not None else None),
+        "estimated_costs": (forward_card.total_costs if forward_card is not None else None),
+        "evidence_confidence": (forward_card.confidence_interval_json if forward_card is not None else None),
+        "benchmark_context": {
+            "benchmark_ticker": trade.benchmark_ticker,
+            "benchmark_return": forward_card.benchmark_return if forward_card is not None else None,
+            "benchmark_excess": forward_card.benchmark_excess if forward_card is not None else None,
+        },
+        "current_regime": regime_payload,
+        "concentration_risk": ticker_concentration,
+        "reason_to_copy": reason_to_copy,
+        "reason_not_to_copy": reason_not_to_copy,
+        "invalidation_condition": invalidation,
+        "maximum_suggested_paper_risk": maximum_paper_risk,
+        "evidence_warning": "; ".join(warnings) if warnings else None,
+        "real_capital_eligibility": eligibility,
+        "paper_trading_actionability": trade.actionability_state,
+    }
 
 
 def _serialize_snapshot(row: StrategyEvidenceSnapshot) -> dict:

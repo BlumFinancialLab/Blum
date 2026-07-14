@@ -28,6 +28,7 @@ from app.services.intraday_market_data import StrictIntradayDataGateway
 from app.services.intraday_opportunity import BlumIntradayOpportunityEngine, IntradayPortfolioState
 from app.services.live_forward_paper_trading import LiveForwardPaperTradingService
 from app.services.cross_market_orchestrator import enabled_agents, parse_names
+from app.services.copy_readiness_evidence import EvidenceTimelineService, strategy_identity
 from app.services.market_desks import MarketDeskRegistry
 from app.services.promoted_strategy_registry import BlumPromotedStrategyRegistry, normalize_market
 from app.services.trading_intelligence_lab import ensure_live_trade_game
@@ -634,6 +635,24 @@ class IntradayPaperLearningService:
         db.add(audit)
         db.add(LearningEvent(event_type="intraday_paper_trade_closed", severity="Info", title=f"{trade.ticker} intraday paper outcome", description=observation, payload={"paper_forward_trade_id": trade.id, "evidence_type": PAPER_FORWARD_INTRADAY, "r_multiple": trade.r_multiple}))
         db.flush()
+        strategy_id = strategy_identity(trade.setup_type, trade.promoted_validation_id)[0]
+        timeline = EvidenceTimelineService()
+        timeline.append_once(
+            db,
+            event_key=f"intraday-lesson:{trade.id}",
+            event_type="lesson_created",
+            strategy_id=strategy_id,
+            trade_id=trade.id,
+            payload={"evidence_id": evidence.id, "lesson_type": lesson_type, "observation": observation},
+        )
+        timeline.append_once(
+            db,
+            event_key=f"intraday-memory:{trade.id}",
+            event_type="memory_updated",
+            strategy_id=strategy_id,
+            trade_id=trade.id,
+            payload={"strategy_memory_key": memory_key, "signal_name": signal_name, "sample_size": signal.sample_count},
+        )
         return {"status": "applied", "trade_id": trade.id, "evidence_id": evidence.id, "memory_key": memory_key}
 
 

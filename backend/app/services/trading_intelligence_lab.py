@@ -30,6 +30,7 @@ from app.models import (
     TradingGameTrade,
     TradingIntelligenceMetric,
 )
+from app.services.copy_readiness_evidence import append_trade_evidence_event, copy_readiness_projections
 from app.services.dashboard_snapshots import DashboardSnapshotService
 from app.services.learning_loop import active_weight_context, learning_mode_metadata
 from app.services.trade_transparency import (
@@ -912,6 +913,19 @@ class LiveForwardPaperTradingService:
         memory.reliability_score = round(clamp(35 + (memory.positive_count / max(1, memory.sample_count)) * 55), 2)
         memory.evidence = {"latest_paper_trade_id": paper_trade.id, "latest_outcome": paper_trade.outcome_label, "latest_r_multiple": paper_trade.r_multiple}
         memory.last_seen_at = datetime.utcnow()
+        self.add_event(
+            db,
+            paper_trade,
+            "MEMORY_UPDATED",
+            paper_trade.exit_price,
+            "Paper-forward signal reliability and strategy memory updated from the terminal outcome.",
+            {
+                "signal_name": signal_name,
+                "signal_sample_count": signal.sample_count,
+                "strategy_memory_key": key,
+                "strategy_sample_count": memory.sample_count,
+            },
+        )
 
     def has_open_position(self, db: Session, game: LiveForwardPaperGame, ticker: str | None) -> bool:
         if not ticker:
@@ -947,6 +961,8 @@ class LiveForwardPaperTradingService:
             payload=payload or {},
         )
         db.add(event)
+        db.flush()
+        append_trade_evidence_event(db, paper_trade, event)
         return event
 
     def refresh_live_game_counts(self, db: Session, game: LiveForwardPaperGame) -> None:
@@ -996,9 +1012,9 @@ class LiveForwardPaperTradingService:
                 "closed_total": len(all_closed),
                 "data_blocked": sum(1 for row in candidate_rows if row.status == "DATA_BLOCKED"),
             },
-            "candidates": [serialize_paper_forward_trade(row, compact=True) for row in candidate_rows],
-            "open_positions": [serialize_paper_forward_trade(row, compact=True) for row in open_rows],
-            "recently_closed": [serialize_paper_forward_trade(row, compact=True) for row in closed_rows],
+            "candidates": serialize_paper_forward_trades(db, candidate_rows, compact=True),
+            "open_positions": serialize_paper_forward_trades(db, open_rows, compact=True),
+            "recently_closed": serialize_paper_forward_trades(db, closed_rows, compact=True),
             "equity_curve": self.equity_curve_points(db, game),
             "metrics": {
                 "realized_pnl": round(realized, 4),
@@ -1030,14 +1046,14 @@ class LiveForwardPaperTradingService:
         if status:
             query = query.where(LiveForwardPaperTrade.status == status.upper())
         rows = db.scalars(query.limit(max(1, min(limit, 200)))).all()
-        return {"status": "ok", "rows": [serialize_paper_forward_trade(row, compact=True) for row in rows], "limit": limit, "policy": LAB_POLICY}
+        return {"status": "ok", "rows": serialize_paper_forward_trades(db, rows, compact=True), "limit": limit, "policy": LAB_POLICY}
 
     def trade_detail(self, db: Session, trade_id: int) -> dict:
         row = db.get(LiveForwardPaperTrade, trade_id)
         if row is None:
             return {"status": "not_found", "trade_id": trade_id}
         events = db.scalars(select(LiveForwardPaperTradeEvent).where(LiveForwardPaperTradeEvent.paper_trade_id == row.id).order_by(LiveForwardPaperTradeEvent.event_timestamp)).all()
-        return {"status": "ok", "trade": serialize_paper_forward_trade(row, compact=False), "events": [serialize_live_event(event) for event in events], "policy": LAB_POLICY}
+        return {"status": "ok", "trade": serialize_paper_forward_trades(db, [row], compact=False)[0], "events": [serialize_live_event(event) for event in events], "policy": LAB_POLICY}
 
     def events(self, db: Session, trade_id: int) -> dict:
         row = db.get(LiveForwardPaperTrade, trade_id)
@@ -1807,7 +1823,12 @@ def live_position_for_paper_trade(db: Session, game: LiveForwardPaperGame, paper
     )
 
 
-def serialize_paper_forward_trade(row: LiveForwardPaperTrade, *, compact: bool = False) -> dict:
+def serialize_paper_forward_trade(
+    row: LiveForwardPaperTrade,
+    *,
+    compact: bool = False,
+    readiness: dict | None = None,
+) -> dict:
     diagnosis = actionability_diagnosis_from_trade(row)
     frozen_payload = row.frozen_decision_payload or {}
     frozen_asset = frozen_payload.get("asset") if isinstance(frozen_payload, dict) else {}
@@ -1870,6 +1891,8 @@ def serialize_paper_forward_trade(row: LiveForwardPaperTrade, *, compact: bool =
         "created_at": iso(row.created_at),
         "updated_at": iso(row.updated_at),
     }
+    if readiness is not None:
+        payload.update(readiness)
     if compact:
         return payload
     payload.update(
@@ -1899,6 +1922,23 @@ def serialize_paper_forward_trade(row: LiveForwardPaperTrade, *, compact: bool =
         }
     )
     return payload
+
+
+def serialize_paper_forward_trades(
+    db: Session,
+    rows: list[LiveForwardPaperTrade],
+    *,
+    compact: bool,
+) -> list[dict]:
+    readiness_by_trade = copy_readiness_projections(db, rows)
+    return [
+        serialize_paper_forward_trade(
+            row,
+            compact=compact,
+            readiness=readiness_by_trade.get(row.id),
+        )
+        for row in rows
+    ]
 
 
 def serialize_live_event(row: LiveForwardPaperTradeEvent) -> dict:

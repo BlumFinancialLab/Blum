@@ -39,6 +39,7 @@ from app.services.trading_intelligence_lab import (
     safe_float,
     serialize_live_event,
     serialize_paper_forward_trade,
+    serialize_paper_forward_trades,
     serialize_trade_lesson,
 )
 from app.services.paper_forward_opportunity_scanner import (
@@ -909,8 +910,8 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
                 "error_count": total_counts["error_count"],
                 "opened_today": opened_today,
                 "closed_today": closed_today,
-                "latest_open_trades": [serialize_paper_forward_trade(row, compact=True) for row in latest_open_trades],
-                "latest_closed_trades": [serialize_paper_forward_trade(row, compact=True) for row in latest_closed_trades],
+                "latest_open_trades": serialize_paper_forward_trades(db, latest_open_trades, compact=True),
+                "latest_closed_trades": serialize_paper_forward_trades(db, latest_closed_trades, compact=True),
                 "latest_lifecycle_events": [serialize_live_event(row) for row in latest_events],
                 "reason_if_no_open_trades": total_counts["open_count"] == 0 and paper_forward_open_count_reason(total_counts["open_count"], total_counts["candidate_count"], total_counts["waiting_for_trigger_count"]) or None,
                 "reason_if_no_closed_trades": total_counts["closed_count"] == 0 and paper_forward_closed_count_reason(
