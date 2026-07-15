@@ -2294,6 +2294,41 @@ class IntradayPaperRun(Base):
     summary_json: Mapped[dict] = mapped_column(JsonType, default=dict)
 
 
+class IntradayNoTradeDecision(Base):
+    __tablename__ = "intraday_no_trade_decisions"
+    __table_args__ = (
+        UniqueConstraint("decision_uid", name="uq_intraday_no_trade_decision_uid"),
+        Index("ix_intraday_no_trade_status_due", "status", "evaluation_due_at"),
+        Index("ix_intraday_no_trade_ticker_time", "ticker", "decision_timestamp"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    decision_uid: Mapped[str] = mapped_column(String(220), unique=True, index=True)
+    run_id: Mapped[int | None] = mapped_column(ForeignKey("intraday_paper_runs.id", ondelete="SET NULL"), index=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("assets.id", ondelete="CASCADE"), index=True)
+    ticker: Mapped[str] = mapped_column(String(48), index=True)
+    setup_type: Mapped[str] = mapped_column(String(100), index=True)
+    market: Mapped[str] = mapped_column(String(60), index=True)
+    desk: Mapped[str | None] = mapped_column(String(100), index=True)
+    benchmark_ticker: Mapped[str | None] = mapped_column(String(32), index=True)
+    reason_code: Mapped[str] = mapped_column(String(100), index=True)
+    status: Mapped[str] = mapped_column(String(40), default="PENDING", index=True)
+    decision_timestamp: Mapped[datetime] = mapped_column(DateTime, index=True)
+    evaluation_due_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    evaluated_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    theoretical_price: Mapped[float] = mapped_column(Float)
+    expected_move_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    expected_cost_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    future_return: Mapped[float | None] = mapped_column(Float)
+    benchmark_return: Mapped[float | None] = mapped_column(Float)
+    capital_preserved: Mapped[float] = mapped_column(Float, default=0.0)
+    opportunity_cost: Mapped[float] = mapped_column(Float, default=0.0)
+    outcome_label: Mapped[str | None] = mapped_column(String(100), index=True)
+    decision_payload: Mapped[dict] = mapped_column(JsonType, default=dict)
+    evaluation_payload: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
 class LiveForwardPaperGame(Base):
     __tablename__ = "live_forward_paper_games"
     __table_args__ = (Index("ix_live_forward_paper_games_status_started", "status", "started_at"),)

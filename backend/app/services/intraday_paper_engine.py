@@ -14,6 +14,7 @@ from app.models import (
     Asset,
     FeedbackLoopAudit,
     IntradayPaperRun,
+    IntradayNoTradeDecision,
     LearningEvent,
     LiveForwardPaperGame,
     LiveForwardPaperTrade,
@@ -27,6 +28,7 @@ from app.models import (
 from app.services.intraday_contracts import INTRADAY_TRADE_CANDIDATE, PAPER_FORWARD_INTRADAY, IntradayDecision
 from app.services.intraday_market_data import StrictIntradayDataGateway
 from app.services.intraday_opportunity import BlumIntradayOpportunityEngine, IntradayPortfolioState
+from app.services.intraday_no_trade_learning import IntradayNoTradeLearningService
 from app.services.live_forward_paper_trading import LiveForwardPaperTradingService
 from app.services.cross_market_orchestrator import enabled_agents, parse_names
 from app.services.copy_readiness_evidence import EvidenceTimelineService, strategy_identity
@@ -56,6 +58,8 @@ class BlumIntradayPaperEngine:
         max_assets: int | None = None,
         max_runtime_seconds: float | None = None,
         max_holding_minutes: int | None = None,
+        account_currency: str | None = None,
+        allow_overnight: bool | None = None,
     ):
         self.registry = registry or BlumPromotedStrategyRegistry()
         self.gateway = gateway or StrictIntradayDataGateway(
@@ -77,9 +81,12 @@ class BlumIntradayPaperEngine:
         self.max_assets = max(1, int(max_assets if max_assets is not None else settings.intraday_max_assets_per_run))
         self.max_runtime_seconds = max(1.0, float(max_runtime_seconds if max_runtime_seconds is not None else settings.intraday_max_runtime_seconds))
         self.max_holding_minutes = max(1, int(max_holding_minutes if max_holding_minutes is not None else settings.intraday_max_holding_minutes))
+        self.account_currency = str(account_currency or settings.paper_execution_account_currency).upper()
+        self.allow_overnight = settings.intraday_allow_overnight if allow_overnight is None else bool(allow_overnight)
         self.paper = LiveForwardPaperTradingService()
         self.execution = PaperOrderLifecycleService()
         self.learning = IntradayPaperLearningService()
+        self.no_trade_learning = IntradayNoTradeLearningService(evaluation_minutes=settings.intraday_no_trade_evaluation_minutes)
         self._desk_context: dict[int, tuple[str, str]] = {}
 
     def run_once(self, db: Session, *, trigger: str = "manual", assets: Iterable[Asset] | None = None) -> dict:
@@ -101,7 +108,8 @@ class BlumIntradayPaperEngine:
             game = self.paper.active_or_create_live_game(db)
             order_lifecycle = self._manage_pending_orders(db, game=game, now=now)
             trade_lifecycle = self._manage_open_trades(db, game=game, now=now)
-            lifecycle = {"orders": order_lifecycle, "positions": trade_lifecycle}
+            no_trade_lifecycle = self.no_trade_learning.evaluate_due(db, now=now)
+            lifecycle = {"orders": order_lifecycle, "positions": trade_lifecycle, "no_trade": no_trade_lifecycle}
             run.trades_opened = order_lifecycle["trades_opened"]
             run.trades_updated = trade_lifecycle["trades_updated"]
             run.trades_closed = trade_lifecycle["trades_closed"]
@@ -140,6 +148,7 @@ class BlumIntradayPaperEngine:
                     decisions.append(json_safe(decision.to_dict()))
                     if decision.status != INTRADAY_TRADE_CANDIDATE:
                         self._count_rejection(run, decision.reason_code)
+                        self.no_trade_learning.record(db, run=run, asset=asset, decision=decision)
                         continue
                     run.candidates_found += 1
                     trade, created = self._open_trade(db, game=game, run=run, asset=asset, decision=decision)
@@ -191,6 +200,7 @@ class BlumIntradayPaperEngine:
         now = self.now_provider()
         orders = self._manage_pending_orders(db, game=game, now=now)
         positions = self._manage_open_trades(db, game=game, now=now)
+        no_trade = self.no_trade_learning.evaluate_due(db, now=now)
         self.paper.refresh_live_game_counts(db, game)
         db.commit()
         return {
@@ -199,6 +209,7 @@ class BlumIntradayPaperEngine:
             "evidence_type": PAPER_FORWARD_INTRADAY,
             "orders": orders,
             "positions": positions,
+            "no_trade": no_trade,
             "policy": "Execution advances from stored future bars only; candidate discovery is not run.",
         }
 
@@ -355,8 +366,16 @@ class BlumIntradayPaperEngine:
             commission_bps=float(costs.get("commission_bps") or 0.0),
             latency_bars=1,
             currency=asset.currency or "USD",
-            account_currency=asset.currency or "USD",
-            fx_rate=1.0,
+            account_currency=self.account_currency,
+            fx_rate=point_in_time_fx_rate(
+                db,
+                asset_currency=asset.currency or "USD",
+                account_currency=self.account_currency,
+                at=decision.decision_timestamp,
+            ),
+            fx_spread_bps=settings.paper_execution_fx_spread_bps,
+            liquidity_score=decision.liquidity_score,
+            allowed_sessions=(decision.session,),
         )
         self.execution.submit(
             db,
@@ -394,21 +413,7 @@ class BlumIntradayPaperEngine:
                 .limit(100)
             ).all()
             cost_profile = trade.execution_costs or {}
-            bars = [
-                ExecutionMarketBar(
-                    timestamp=row.bar_timestamp,
-                    open=float(row.open if row.open is not None else row.close),
-                    high=float(row.high if row.high is not None else row.close),
-                    low=float(row.low if row.low is not None else row.close),
-                    close=float(row.close),
-                    volume=float(row.volume or 0.0),
-                    spread_bps=float(cost_profile.get("spread_bps") or 0.0),
-                    volatility_bps=abs(float(row.high or row.close) - float(row.low or row.close)) / max(float(row.close), 0.0001) * 10_000,
-                    session=trade.session_name or "regular",
-                    is_halted=False,
-                )
-                for row in stored_bars
-            ]
+            bars = [execution_bar_from_replay(row, spread_bps=float(cost_profile.get("spread_bps") or 0.0), fallback_session=trade.session_name or "regular") for row in stored_bars]
             result = self.execution.process_order(db, order, bars, now=now)
             processed += 1
             new_fills += int(result.get("new_fills") or 0)
@@ -416,12 +421,17 @@ class BlumIntradayPaperEngine:
                 self._account_filled_order(db, game=game, trade=trade, order=order)
                 opened += 1
             elif result["status"] in {"EXPIRED", "REJECTED"}:
+                unfilled_outcome = classify_unfilled_order(
+                    theoretical_price=float(order.theoretical_price or 0.0),
+                    target_price=float(order.target_price) if order.target_price is not None else None,
+                    bars=stored_bars,
+                )
                 trade.status = "EXPIRED"
                 trade.close_reason = "ORDER_NOT_FILLED" if result["status"] == "EXPIRED" else (result.get("rejection_reason") or "ORDER_REJECTED")
                 trade.closed_at = now
                 trade.exit_date = now.date()
-                trade.outcome_label = "order_not_filled"
-                trade.lesson_learned = "Approved signal did not produce an executable fill before expiry."
+                trade.outcome_label = unfilled_outcome
+                trade.lesson_learned = f"Approved signal did not fill; post-decision classification={unfilled_outcome}."
                 self.paper.append_event(db, trade.id, "INTRADAY_ORDER_NOT_FILLED", trade.lesson_learned, result, trade.current_price)
                 self.learning.apply_closed_trade(db, trade)
                 expired += 1
@@ -541,7 +551,7 @@ class BlumIntradayPaperEngine:
             return "TRAILING_STOP", float(trade.trailing_stop)
         opened_at = trade.opened_at or trade.decision_timestamp
         holding = (bar.bar_timestamp - opened_at).total_seconds() / 60
-        if bar.bar_timestamp.date() > opened_at.date():
+        if bar.bar_timestamp.date() > opened_at.date() and not self.allow_overnight:
             return "MARKET_CLOSE", float(bar.open or bar.close)
         if holding >= self.max_holding_minutes:
             return "TIME_STOP", float(bar.close)
@@ -690,8 +700,19 @@ class IntradayPaperLearningService:
         existing = db.scalar(select(TradeLearningEvidence).where(TradeLearningEvidence.action_taken == identity).limit(1))
         if existing:
             return {"status": "duplicate", "trade_id": trade.id, "evidence_id": existing.id}
-        positive = float(trade.net_pnl_eur or 0.0) > 0
-        lesson_type = "setup_confirmed" if positive else "setup_failed"
+        outcome = str(trade.outcome_label or "").upper()
+        positive = float(trade.net_pnl_eur or 0.0) > 0 or outcome in {
+            "CORRECT_NO_TRADE",
+            "EDGE_DESTROYED_BY_COSTS",
+            "SIGNAL_DECAY_BEFORE_ENTRY",
+        }
+        lesson_type = {
+            "MISSED_OPPORTUNITY": "entry_timing_bad",
+            "ORDER_NOT_FILLED": "entry_timing_bad",
+            "SIGNAL_DECAY_BEFORE_ENTRY": "entry_timing_bad",
+            "EDGE_DESTROYED_BY_COSTS": "no_trade_filter_confirmed",
+            "CORRECT_NO_TRADE": "no_trade_filter_confirmed",
+        }.get(outcome, "setup_confirmed" if positive else "setup_failed")
         observation = intraday_lesson(trade)
         evidence = TradeLearningEvidence(
             trade_id=trade.ledger_trade_id,
@@ -792,6 +813,15 @@ def intraday_snapshot_summary(db: Session, *, now: datetime | None = None) -> di
         "rejected_due_to_costs": int(latest_run.rejected_due_to_costs or 0) if latest_run else 0,
         "rejected_due_to_concentration": int(latest_run.rejected_due_to_concentration or 0) if latest_run else 0,
     }
+    no_trade_rows = db.execute(
+        select(IntradayNoTradeDecision.outcome_label, func.count(IntradayNoTradeDecision.id))
+        .where(IntradayNoTradeDecision.status == "EVALUATED")
+        .group_by(IntradayNoTradeDecision.outcome_label)
+    ).all()
+    no_trade_evidence = {str(label): int(count) for label, count in no_trade_rows if label}
+    no_trade_pending = int(
+        db.scalar(select(func.count(IntradayNoTradeDecision.id)).where(IntradayNoTradeDecision.status == "PENDING")) or 0
+    )
     if not latest_run:
         inactivity_reason = "No intraday run has completed."
         next_action = "Wait for the bounded backend worker or invoke the explicit manual POST."
@@ -830,6 +860,8 @@ def intraday_snapshot_summary(db: Session, *, now: datetime | None = None) -> di
         "realized_intraday_pnl": round(sum(float(row.net_pnl_eur or 0.0) for row in closed), 4) if closed else None,
         "intraday_benchmark_excess": average_present([row.excess_return_vs_benchmark for row in closed]),
         "costs_paid": round(costs, 4) if closed else None,
+        "no_trade_evidence": no_trade_evidence,
+        "no_trade_pending": no_trade_pending,
         **rejection_counts,
         "reason_if_no_intraday_trades": inactivity_reason,
         "next_intraday_action": next_action,
@@ -877,6 +909,65 @@ def minimum_quality_from_trade(trade: LiveForwardPaperTrade) -> float | None:
 def average_present(values: list[float | None]) -> float | None:
     present = [float(value) for value in values if value is not None]
     return round(sum(present) / len(present), 4) if present else None
+
+
+def classify_unfilled_order(*, theoretical_price: float, target_price: float | None, bars: Iterable) -> str:
+    rows = list(bars)
+    if theoretical_price <= 0 or not rows:
+        return "ORDER_NOT_FILLED"
+    if target_price is not None and any(float(row.high if row.high is not None else row.close) >= target_price for row in rows):
+        return "MISSED_OPPORTUNITY"
+    latest = rows[-1]
+    if float(latest.close) < theoretical_price:
+        return "SIGNAL_DECAY_BEFORE_ENTRY"
+    return "ORDER_NOT_FILLED"
+
+
+def execution_bar_from_replay(row: ReplayMarketBar, *, spread_bps: float, fallback_session: str = "regular") -> ExecutionMarketBar:
+    metadata = dict(row.source_metadata or {})
+    session = str(metadata.get("market_session") or metadata.get("session") or fallback_session)
+    halted = bool(metadata.get("is_halted") or metadata.get("market_halt") or metadata.get("halted"))
+    close = float(row.close)
+    high = float(row.high if row.high is not None else close)
+    low = float(row.low if row.low is not None else close)
+    return ExecutionMarketBar(
+        timestamp=row.bar_timestamp,
+        open=float(row.open if row.open is not None else close),
+        high=high,
+        low=low,
+        close=close,
+        volume=float(row.volume or 0.0),
+        spread_bps=float(spread_bps),
+        volatility_bps=abs(high - low) / max(close, 0.0001) * 10_000,
+        session=session,
+        is_halted=halted,
+    )
+
+
+def point_in_time_fx_rate(db: Session, *, asset_currency: str, account_currency: str, at: datetime) -> float | None:
+    asset_code = str(asset_currency or "").upper()
+    account_code = str(account_currency or "").upper()
+    if not asset_code or not account_code:
+        return None
+    if asset_code == account_code:
+        return 1.0
+    direct_symbols = (f"{account_code}{asset_code}=X", f"{account_code}{asset_code}")
+    inverse_symbols = (f"{asset_code}{account_code}=X", f"{asset_code}{account_code}")
+    for symbols, invert in ((direct_symbols, False), (inverse_symbols, True)):
+        fx_asset = db.scalar(select(Asset).where(func.upper(Asset.ticker).in_(symbols)).limit(1))
+        if fx_asset is None:
+            continue
+        row = db.scalar(
+            select(ReplayMarketBar)
+            .where(ReplayMarketBar.asset_id == fx_asset.id, ReplayMarketBar.bar_timestamp <= at)
+            .order_by(desc(ReplayMarketBar.bar_timestamp))
+            .limit(1)
+        )
+        if row is None or float(row.close or 0.0) <= 0:
+            continue
+        rate = float(row.close)
+        return round(1.0 / rate if invert else rate, 8)
+    return None
 
 
 def json_safe(value):

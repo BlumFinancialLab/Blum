@@ -24,6 +24,11 @@ class ExecutionOrderRequest:
     currency: str = "USD"
     account_currency: str = "USD"
     fx_rate: float | None = 1.0
+    fx_spread_bps: float = 0.0
+    liquidity_score: float = 100.0
+    allowed_sessions: tuple[str, ...] = ("regular",)
+    borrow_rate_bps: float | None = None
+    expected_holding_days: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -84,7 +89,16 @@ class RealisticExecutionEngine:
             return self._empty(request, "REJECTED", "INVALID_ORDER")
         if request.currency != request.account_currency and (request.fx_rate is None or request.fx_rate <= 0):
             return self._empty(request, "REJECTED", "FX_RATE_UNAVAILABLE")
-        eligible = [bar for bar in sorted(bars, key=lambda item: item.timestamp) if bar.timestamp > request.decision_timestamp and not bar.is_halted]
+        if request.side.upper() in {"SHORT", "SELL_SHORT"} and request.borrow_rate_bps is None:
+            return self._empty(request, "REJECTED", "BORROW_RATE_UNAVAILABLE")
+        later = [bar for bar in sorted(bars, key=lambda item: item.timestamp) if bar.timestamp > request.decision_timestamp]
+        if later and all(bar.is_halted for bar in later):
+            return self._empty(request, "SUBMITTED", "MARKET_HALTED")
+        non_halted = [bar for bar in later if not bar.is_halted]
+        allowed_sessions = {str(session).lower() for session in request.allowed_sessions}
+        if non_halted and not any(str(bar.session).lower() in allowed_sessions for bar in non_halted):
+            return self._empty(request, "SUBMITTED", "NO_ALLOWED_SESSION_BAR")
+        eligible = [bar for bar in non_halted if str(bar.session).lower() in allowed_sessions]
         latency = max(0, int(request.latency_bars))
         eligible = eligible[latency:]
         if not eligible:
@@ -97,12 +111,13 @@ class RealisticExecutionEngine:
                 break
             if not self._is_triggered(request, market_bar):
                 continue
-            capacity = max(0.0, float(market_bar.volume)) * max(0.0, min(0.25, float(request.max_participation_rate)))
+            liquidity_capacity = max(0.05, min(1.0, float(request.liquidity_score) / 100.0))
+            capacity = max(0.0, float(market_bar.volume)) * max(0.0, min(0.25, float(request.max_participation_rate))) * liquidity_capacity
             quantity = min(remaining, capacity)
             if quantity <= 0:
                 continue
             participation = quantity / max(1.0, float(market_bar.volume))
-            slippage_bps = self.dynamic_slippage_bps(market_bar.volatility_bps, participation)
+            slippage_bps = self.dynamic_slippage_bps(market_bar.volatility_bps, participation, request.liquidity_score)
             reference = self._reference_price(request, market_bar)
             adverse_bps = max(0.0, float(market_bar.spread_bps)) / 2.0 + slippage_bps
             direction = 1.0 if request.side.upper() == "BUY" else -1.0
@@ -174,14 +189,25 @@ class RealisticExecutionEngine:
             direction = 1.0 if exit_side == "BUY" else -1.0
             executed = reference * (1.0 + direction * adverse / 10_000.0)
             fill = ExecutionFill(market_bar.timestamp, quantity, reference, executed, market_bar.spread_bps, slippage, commission_bps, participation)
-            return ExecutionDecision("CLOSED", reason, entry_price, round(executed, 8), quantity, 0.0, (fill,), self._costs([fill], request))
+            costs = self._costs([fill], request)
+            gap_cost = abs(float(stop_price) - float(trigger)) * float(quantity) if stop_hit and trigger != stop_price else 0.0
+            costs = ExecutionCostBreakdown(
+                spread_cost=costs.spread_cost,
+                slippage_cost=costs.slippage_cost,
+                commission_cost=costs.commission_cost,
+                fx_cost=costs.fx_cost,
+                borrow_cost=costs.borrow_cost,
+                gap_cost=round(gap_cost, 8),
+            )
+            return ExecutionDecision("CLOSED", reason, entry_price, round(executed, 8), quantity, 0.0, (fill,), costs)
         request = ExecutionOrderRequest("exit", "position", "SELL", "MARKET", decision_timestamp, entry_price, quantity)
         return self._empty(request, "OPEN", "NO_EXIT_TRIGGER")
 
     @staticmethod
-    def dynamic_slippage_bps(volatility_bps: float, participation_rate: float) -> float:
+    def dynamic_slippage_bps(volatility_bps: float, participation_rate: float, liquidity_score: float = 100.0) -> float:
         participation = max(0.0, min(1.0, float(participation_rate)))
-        return round(max(0.25, max(0.0, float(volatility_bps)) * sqrt(participation) * 0.12 + participation * 8.0), 8)
+        liquidity_penalty = max(0.0, 100.0 - max(0.0, min(100.0, float(liquidity_score)))) * 0.04
+        return round(max(0.25, max(0.0, float(volatility_bps)) * sqrt(participation) * 0.12 + participation * 8.0 + liquidity_penalty), 8)
 
     @staticmethod
     def _is_triggered(request: ExecutionOrderRequest, market_bar: ExecutionMarketBar) -> bool:
@@ -207,16 +233,25 @@ class RealisticExecutionEngine:
 
     @staticmethod
     def _costs(fills: Sequence[ExecutionFill], request: ExecutionOrderRequest) -> ExecutionCostBreakdown:
-        spread = slippage = commission = 0.0
+        spread = slippage = commission = fx_cost = borrow_cost = 0.0
         fx_rate = float(request.fx_rate or 1.0)
         for fill in fills:
             notional = abs(fill.executed_price * fill.quantity) / fx_rate
             spread += notional * fill.spread_bps / 20_000.0
             slippage += notional * fill.slippage_bps / 10_000.0
             commission += notional * fill.commission_bps / 10_000.0
-        return ExecutionCostBreakdown(round(spread, 8), round(slippage, 8), round(commission, 8))
+            if request.currency != request.account_currency:
+                fx_cost += notional * max(0.0, request.fx_spread_bps) / 10_000.0
+            if request.side.upper() in {"SHORT", "SELL_SHORT"}:
+                borrow_cost += notional * max(0.0, float(request.borrow_rate_bps or 0.0)) / 10_000.0 * max(0.0, request.expected_holding_days) / 365.0
+        return ExecutionCostBreakdown(
+            spread_cost=round(spread, 8),
+            slippage_cost=round(slippage, 8),
+            commission_cost=round(commission, 8),
+            fx_cost=round(fx_cost, 8),
+            borrow_cost=round(borrow_cost, 8),
+        )
 
     @staticmethod
     def _empty(request: ExecutionOrderRequest, status: str, reason: str) -> ExecutionDecision:
         return ExecutionDecision(status, reason, request.theoretical_price, None, 0.0, max(0.0, request.quantity), (), ExecutionCostBreakdown())
-

@@ -103,6 +103,76 @@ def test_missing_fx_rate_blocks_cross_currency_fill() -> None:
     assert result.reason == "FX_RATE_UNAVAILABLE"
 
 
+def test_cross_currency_fill_records_fx_spread_cost() -> None:
+    result = RealisticExecutionEngine().evaluate(
+        order(account_currency="EUR", currency="USD", fx_rate=1.08, fx_spread_bps=6.0, quantity=10),
+        [bar(1, low=99.5, volume=10_000)],
+    )
+
+    assert result.status == "FILLED"
+    assert result.costs.fx_cost > 0
+
+
+def test_short_order_requires_borrow_rate_evidence() -> None:
+    result = RealisticExecutionEngine().evaluate(
+        order(side="SHORT", order_type="MARKET", limit_price=None, borrow_rate_bps=None),
+        [bar(1)],
+    )
+
+    assert result.status == "REJECTED"
+    assert result.reason == "BORROW_RATE_UNAVAILABLE"
+
+
+def test_short_fill_records_borrow_cost_for_expected_holding_period() -> None:
+    result = RealisticExecutionEngine().evaluate(
+        order(
+            side="SHORT",
+            order_type="MARKET",
+            limit_price=None,
+            borrow_rate_bps=365.0,
+            expected_holding_days=2.0,
+            quantity=10,
+        ),
+        [bar(1, volume=10_000)],
+    )
+
+    assert result.status == "FILLED"
+    assert result.costs.borrow_cost > 0
+
+
+def test_order_does_not_fill_in_disallowed_session() -> None:
+    result = RealisticExecutionEngine().evaluate(
+        order(order_type="MARKET", limit_price=None, allowed_sessions=("regular",)),
+        [bar(1, session="opening_auction")],
+    )
+
+    assert result.status == "SUBMITTED"
+    assert result.reason == "NO_ALLOWED_SESSION_BAR"
+
+
+def test_halted_bar_is_not_an_executable_fill() -> None:
+    result = RealisticExecutionEngine().evaluate(
+        order(order_type="MARKET", limit_price=None),
+        [bar(1, is_halted=True)],
+    )
+
+    assert result.status == "SUBMITTED"
+    assert result.reason == "MARKET_HALTED"
+
+
+def test_low_liquidity_increases_dynamic_slippage() -> None:
+    liquid = RealisticExecutionEngine().evaluate(
+        order(quantity=10, liquidity_score=95.0),
+        [bar(1, volume=10_000, low=99.5)],
+    )
+    illiquid = RealisticExecutionEngine().evaluate(
+        order(order_key="order-illiquid", quantity=10, liquidity_score=20.0),
+        [bar(1, volume=10_000, low=99.5)],
+    )
+
+    assert illiquid.fills[0].slippage_bps > liquid.fills[0].slippage_bps
+
+
 def test_gap_through_stop_uses_first_later_executable_open() -> None:
     engine = RealisticExecutionEngine()
     result = engine.evaluate_exit(
@@ -118,6 +188,7 @@ def test_gap_through_stop_uses_first_later_executable_open() -> None:
     assert result.status == "CLOSED"
     assert result.reason == "STOP_HIT"
     assert result.average_fill_price < 98.0
+    assert result.costs.gap_cost > 0
 
 
 def test_same_bar_stop_and_target_uses_conservative_stop_ordering() -> None:
@@ -224,3 +295,31 @@ def test_partial_fill_opens_at_expiry_and_cancels_only_remainder() -> None:
     assert result["filled_quantity"] == 50
     assert result["remaining_quantity"] == 50
     assert result["rejection_reason"] == "PARTIAL_FILL_REMAINDER_CANCELLED"
+
+
+def test_paper_lifecycle_persists_execution_assumptions_and_costs() -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        service = PaperOrderLifecycleService()
+        created = service.submit(
+            db,
+            order(
+                quantity=10,
+                account_currency="EUR",
+                currency="USD",
+                fx_rate=1.08,
+                fx_spread_bps=5.0,
+                liquidity_score=40.0,
+                allowed_sessions=("regular", "closing_auction"),
+            ),
+        )
+        result = service.process_order(db, created, [bar(1, low=99.5, volume=10_000)])
+        fill = db.scalar(select(PaperExecutionFill).where(PaperExecutionFill.order_id == created.id))
+
+    assert result["status"] == "FILLED"
+    assert created.order_payload["fx_spread_bps"] == 5.0
+    assert created.order_payload["liquidity_score"] == 40.0
+    assert created.order_payload["allowed_sessions"] == ["regular", "closing_auction"]
+    assert fill.fx_cost > 0
+    assert fill.fill_payload["account_currency"] == "EUR"

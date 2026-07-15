@@ -1868,7 +1868,11 @@ BLUM now treats strategy research as a bounded scientific pipeline rather than p
 
 Promotion requires at least 300 evaluated trades, purged chronological folds with embargo, positive net expectancy and benchmark excess, a positive block-bootstrap lower bound, multiple-testing significance, acceptable Deflated Sharpe and backtest-overfitting probabilities, multi-window/market/regime stability, controlled drawdown, complete execution-cost coverage and non-concentrated P/L. A stored `PROMOTED_TO_PAPER` row is not sufficient by itself: the paper registry accepts only an active champion certified by `alpha_strategy_factory_v1`. Strategies awaiting more samples are automatically reconsidered when replay evidence grows.
 
-Approved intraday candidates now enter a separate persisted order lifecycle. Signals create `paper_execution_orders`; only later stored market bars can create `paper_execution_fills`. The execution model preserves theoretical and executed prices separately and records spread, dynamic slippage, commission, participation, FX/borrow availability and gap risk. It supports partial fills, expires unfilled orders, opens a partial position when an executed remainder is cancelled at expiry, and never invents a same-timestamp fill.
+Approved intraday candidates now enter a separate persisted order lifecycle. Signals create `paper_execution_orders`; only later stored market bars can create `paper_execution_fills`. The execution model preserves theoretical and executed prices separately and records spread, liquidity-sensitive dynamic slippage, commission, volume participation, latency, FX conversion cost, short borrow cost and gap-through-stop loss. It supports partial fills, expires unfilled orders, opens a partial position when an executed remainder is cancelled at expiry, and never invents a same-timestamp fill.
+
+Market sessions and provider halt metadata are execution gates. Regular-session orders cannot fill from opening/closing-auction bars unless the frozen order explicitly permits that session. Halted bars never fill. Intraday positions close at the next session by default; overnight carrying is an explicit opt-in. Cross-currency orders use only a stored point-in-time FX bar at or before the decision timestamp and are rejected with `FX_RATE_UNAVAILABLE` when that evidence is absent. Short orders similarly require a borrow-rate observation instead of assuming free borrow.
+
+No-trade decisions with an observable reference price are persisted in `intraday_no_trade_decisions` and evaluated only after their configured future horizon. The resulting evidence distinguishes `CORRECT_NO_TRADE`, `MISSED_OPPORTUNITY`, `EDGE_DESTROYED_BY_COSTS` and `SIGNAL_DECAY_BEFORE_ENTRY`; expired executable orders remain separately classified as `ORDER_NOT_FILLED`. These outcomes update strategy memory and learning evidence without pretending that an unfilled order was a trade.
 
 Runtime and UI boundaries:
 
@@ -1878,7 +1882,7 @@ Runtime and UI boundaries:
 - `paper_execution_lifecycle` advances persisted orders and open positions independently.
 - Training and Paper Forward snapshots expose compact `strategy_factory` and `execution_reality` summaries; GET requests do not run research or execution.
 
-Relevant controls are `BLUM_STRATEGY_FACTORY_ENABLED`, `BLUM_STRATEGY_FACTORY_MINUTES`, `BLUM_STRATEGY_FACTORY_MAX_VARIANTS_PER_FAMILY`, `BLUM_STRATEGY_FACTORY_SEED` and `BLUM_PAPER_EXECUTION_LIFECYCLE_MINUTES`.
+Relevant controls are `BLUM_STRATEGY_FACTORY_ENABLED`, `BLUM_STRATEGY_FACTORY_MINUTES`, `BLUM_STRATEGY_FACTORY_MAX_VARIANTS_PER_FAMILY`, `BLUM_STRATEGY_FACTORY_SEED`, `BLUM_PAPER_EXECUTION_LIFECYCLE_MINUTES`, `BLUM_PAPER_EXECUTION_ACCOUNT_CURRENCY`, `BLUM_PAPER_EXECUTION_FX_SPREAD_BPS`, `BLUM_INTRADAY_ALLOW_OVERNIGHT` and `BLUM_INTRADAY_NO_TRADE_EVALUATION_MINUTES`.
 
 This architecture accelerates evidence production, not promotion. A high rejection rate is expected. Replay evidence remains distinct from paper-forward evidence, all fills are simulated research records, and no broker or real-money path exists.
 

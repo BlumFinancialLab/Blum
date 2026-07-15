@@ -76,6 +76,11 @@ class PaperOrderLifecycleService:
                 "max_participation_rate": request.max_participation_rate,
                 "commission_bps": request.commission_bps,
                 "latency_bars": request.latency_bars,
+                "fx_spread_bps": request.fx_spread_bps,
+                "liquidity_score": request.liquidity_score,
+                "allowed_sessions": list(request.allowed_sessions),
+                "borrow_rate_bps": request.borrow_rate_bps,
+                "expected_holding_days": request.expected_holding_days,
                 "frozen_decision_timestamp": request.decision_timestamp.isoformat(),
             },
         )
@@ -119,6 +124,11 @@ class PaperOrderLifecycleService:
             currency=order.currency,
             account_currency=order.account_currency,
             fx_rate=order.fx_rate,
+            fx_spread_bps=float(payload.get("fx_spread_bps") or 0.0),
+            liquidity_score=float(payload.get("liquidity_score") if payload.get("liquidity_score") is not None else 100.0),
+            allowed_sessions=tuple(payload.get("allowed_sessions") or ["regular"]),
+            borrow_rate_bps=float(payload["borrow_rate_bps"]) if payload.get("borrow_rate_bps") is not None else None,
+            expected_holding_days=float(payload.get("expected_holding_days") or 0.0),
         )
         decision = self.engine.evaluate(request, bars)
         new_fills = 0
@@ -127,6 +137,12 @@ class PaperOrderLifecycleService:
             if db.scalar(select(PaperExecutionFill.id).where(PaperExecutionFill.fill_uid == fill_uid)) is not None:
                 continue
             notional = abs(fill.reference_price * fill.quantity) / float(order.fx_rate or 1.0)
+            fx_cost = notional * request.fx_spread_bps / 10_000.0 if order.currency != order.account_currency else 0.0
+            borrow_cost = (
+                notional * float(request.borrow_rate_bps or 0.0) / 10_000.0 * request.expected_holding_days / 365.0
+                if order.side in {"SHORT", "SELL_SHORT"}
+                else 0.0
+            )
             db.add(
                 PaperExecutionFill(
                     order_id=order.id,
@@ -141,8 +157,18 @@ class PaperOrderLifecycleService:
                     spread_cost=notional * fill.spread_bps / 20_000.0,
                     slippage_cost=notional * fill.slippage_bps / 10_000.0,
                     commission_cost=notional * fill.commission_bps / 10_000.0,
+                    fx_cost=fx_cost,
+                    borrow_cost=borrow_cost,
                     participation_rate=fill.participation_rate,
-                    fill_payload={"execution_model": "realistic_execution_v1", "estimated_costs": True},
+                    fill_payload={
+                        "execution_model": "realistic_execution_v1",
+                        "estimated_costs": True,
+                        "currency": order.currency,
+                        "account_currency": order.account_currency,
+                        "fx_rate": order.fx_rate,
+                        "liquidity_score": request.liquidity_score,
+                        "session": next((bar.session for bar in bars if bar.timestamp == fill.timestamp), None),
+                    },
                 )
             )
             new_fills += 1
@@ -217,6 +243,9 @@ class PaperOrderLifecycleService:
         total_spread = sum(float(fill.spread_cost) for fill in fills)
         total_slippage = sum(float(fill.slippage_cost) for fill in fills)
         total_commission = sum(float(fill.commission_cost) for fill in fills)
+        total_fx = sum(float(fill.fx_cost) for fill in fills)
+        total_borrow = sum(float(fill.borrow_cost) for fill in fills)
+        total_gap = sum(float(fill.gap_cost) for fill in fills)
         trade.entry_price = round(average, 8)
         trade.position_size = round(total_quantity, 8)
         trade.opened_at = min(fill.market_timestamp for fill in fills)
@@ -225,7 +254,7 @@ class PaperOrderLifecycleService:
         trade.spread_cost = round(total_spread, 8)
         trade.slippage_cost = round(total_slippage, 8)
         trade.commission_cost = round(total_commission, 8)
-        trade.costs_paid = round(total_spread + total_slippage + total_commission, 8)
+        trade.costs_paid = round(total_spread + total_slippage + total_commission + total_fx + total_borrow + total_gap, 8)
         trade.execution_costs = {
             **dict(trade.execution_costs or {}),
             "execution_model": "realistic_execution_v1",
@@ -236,6 +265,9 @@ class PaperOrderLifecycleService:
             "spread_cost": trade.spread_cost,
             "slippage_cost": trade.slippage_cost,
             "commission_cost": trade.commission_cost,
+            "fx_cost": round(total_fx, 8),
+            "borrow_cost": round(total_borrow, 8),
+            "gap_cost": round(total_gap, 8),
         }
         latest = max(fill.market_timestamp for fill in fills)
         self._event(db, trade.id, "PAPER_ORDER_FILLED" if order.status == "FILLED" else "PAPER_ORDER_PARTIALLY_FILLED", latest, trade.entry_price, "Order fill projected to paper trade.", {"order_id": order.id, "filled_quantity": total_quantity, "remaining_quantity": order.remaining_quantity})

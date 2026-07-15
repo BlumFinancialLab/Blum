@@ -11,6 +11,7 @@ from app.core.config import Settings
 from app.core.database import Base
 from app.models import (
     Asset,
+    IntradayNoTradeDecision,
     IntradayPaperRun,
     LearningEvent,
     LiveForwardPaperGame,
@@ -28,7 +29,14 @@ from app.models import (
 from app.services.intraday_contracts import PAPER_FORWARD_INTRADAY
 from app.services.intraday_market_data import StrictIntradayDataGateway
 from app.services.intraday_opportunity import IntradayPortfolioState, BlumIntradayOpportunityEngine
-from app.services.intraday_paper_engine import BlumIntradayPaperEngine, IntradayPaperLearningService, intraday_snapshot_summary
+from app.services.intraday_paper_engine import (
+    BlumIntradayPaperEngine,
+    IntradayPaperLearningService,
+    classify_unfilled_order,
+    execution_bar_from_replay,
+    intraday_snapshot_summary,
+    point_in_time_fx_rate,
+)
 from app.services.live_forward_paper_trading import LiveForwardPaperTradingService
 from app.services.promoted_strategy_registry import BlumPromotedStrategyRegistry
 from app.services import realtime
@@ -233,6 +241,26 @@ def test_opportunity_rejects_expected_move_that_costs_destroy():
     assert decision.reason_code in {"EXPECTED_MOVE_TOO_SMALL", "COSTS_KILL_EDGE"}
 
 
+def test_intraday_run_persists_evaluable_no_trade_decision() -> None:
+    with setup_db() as db:
+        asset = seed_asset(db)
+        seed_validation(db)
+        seed_complete_stack(db, asset)
+        engine = BlumIntradayPaperEngine(
+            now_provider=lambda: NOW,
+            refresh_missing=False,
+            account_currency="USD",
+            opportunity=BlumIntradayOpportunityEngine(min_expected_move_bps=500.0),
+        )
+
+        engine.run_once(db, trigger="test", assets=[asset])
+        row = db.scalar(select(IntradayNoTradeDecision).where(IntradayNoTradeDecision.ticker == "NVDA"))
+
+    assert row is not None
+    assert row.status == "PENDING"
+    assert row.reason_code in {"EXPECTED_MOVE_TOO_SMALL", "COSTS_KILL_EDGE"}
+
+
 def test_opportunity_rejects_duplicate_open_ticker():
     with setup_db() as db:
         asset = seed_asset(db)
@@ -310,7 +338,7 @@ def test_run_opens_only_promoted_triggered_candidate_with_adverse_fill():
             .limit(1)
         )
         clock = {"now": NOW}
-        engine = BlumIntradayPaperEngine(now_provider=lambda: clock["now"], refresh_missing=False)
+        engine = BlumIntradayPaperEngine(now_provider=lambda: clock["now"], refresh_missing=False, account_currency="USD")
 
         first = engine.run_once(db, trigger="test", assets=[asset])
         second = engine.run_once(db, trigger="test", assets=[asset])
@@ -367,7 +395,7 @@ def test_lifecycle_uses_only_later_one_minute_bar_and_closes_stop():
         seed_validation(db)
         seed_complete_stack(db, asset)
         clock = {"now": NOW}
-        engine = BlumIntradayPaperEngine(now_provider=lambda: clock["now"], refresh_missing=False)
+        engine = BlumIntradayPaperEngine(now_provider=lambda: clock["now"], refresh_missing=False, account_currency="USD")
         opened = engine.run_once(db, trigger="test", assets=[asset])
         trade = db.scalar(select(LiveForwardPaperTrade).where(LiveForwardPaperTrade.evidence_type == PAPER_FORWARD_INTRADAY))
         frozen_payload = dict(trade.frozen_decision_payload)
@@ -546,6 +574,139 @@ def test_intraday_command_is_post_only_and_settings_are_bounded():
     assert settings.intraday_paper_enabled is True
     assert 1 <= settings.intraday_paper_minutes <= 60
     assert settings.intraday_max_runtime_seconds <= 120
+    assert settings.paper_execution_account_currency == "EUR"
+
+
+def test_point_in_time_fx_rate_uses_only_stored_bar_at_or_before_decision() -> None:
+    with setup_db() as db:
+        fx = seed_asset(db, ticker="EURUSD=X", market="Forex")
+        fx.currency = "USD"
+        db.add_all(
+            [
+                ReplayMarketBar(
+                    asset_id=fx.id,
+                    source_symbol=fx.ticker,
+                    normalized_symbol=fx.ticker,
+                    market="FOREX",
+                    timeframe="1m",
+                    bar_timestamp=NOW - timedelta(minutes=1),
+                    close=1.08,
+                    volume=1_000_000,
+                    provider="fixture",
+                    acquired_at=NOW,
+                    data_quality_score=95.0,
+                    source_metadata={},
+                ),
+                ReplayMarketBar(
+                    asset_id=fx.id,
+                    source_symbol=fx.ticker,
+                    normalized_symbol=fx.ticker,
+                    market="FOREX",
+                    timeframe="1m",
+                    bar_timestamp=NOW + timedelta(minutes=1),
+                    close=1.50,
+                    volume=1_000_000,
+                    provider="fixture",
+                    acquired_at=NOW,
+                    data_quality_score=95.0,
+                    source_metadata={},
+                ),
+            ]
+        )
+        db.commit()
+
+        resolved = point_in_time_fx_rate(db, asset_currency="USD", account_currency="EUR", at=NOW)
+
+    assert resolved == 1.08
+
+
+def test_replay_bar_execution_adapter_preserves_halt_and_auction_metadata() -> None:
+    with setup_db() as db:
+        asset = seed_asset(db)
+        row = ReplayMarketBar(
+            asset_id=asset.id,
+            source_symbol=asset.ticker,
+            normalized_symbol=asset.ticker,
+            market="USA",
+            timeframe="1m",
+            bar_timestamp=NOW,
+            open=100.0,
+            high=101.0,
+            low=99.0,
+            close=100.5,
+            volume=1_000,
+            provider="fixture",
+            acquired_at=NOW,
+            data_quality_score=95.0,
+            source_metadata={"is_halted": True, "market_session": "closing_auction"},
+        )
+
+        adapted = execution_bar_from_replay(row, spread_bps=4.0)
+
+    assert adapted.is_halted is True
+    assert adapted.session == "closing_auction"
+
+
+def test_unfilled_order_outcome_distinguishes_missed_and_decayed_signals() -> None:
+    missed = [
+        SimpleNamespace(high=105.0, low=100.5, close=104.0),
+    ]
+    decayed = [
+        SimpleNamespace(high=100.2, low=98.5, close=99.0),
+    ]
+
+    assert classify_unfilled_order(theoretical_price=100.0, target_price=104.0, bars=missed) == "MISSED_OPPORTUNITY"
+    assert classify_unfilled_order(theoretical_price=100.0, target_price=104.0, bars=decayed) == "SIGNAL_DECAY_BEFORE_ENTRY"
+    assert classify_unfilled_order(theoretical_price=100.0, target_price=104.0, bars=[]) == "ORDER_NOT_FILLED"
+
+
+def test_intraday_overnight_position_is_carried_only_when_explicitly_enabled() -> None:
+    with setup_db() as db:
+        game = LiveForwardPaperGame(game_id="overnight", starting_capital=100, current_capital=100, cash=90)
+        db.add(game)
+        db.flush()
+        trade = LiveForwardPaperTrade(
+            trade_uid="overnight-trade",
+            game_id=game.id,
+            ticker="NVDA",
+            setup_type="intraday_breakout",
+            status="OPEN",
+            decision_timestamp=NOW,
+            opened_at=NOW,
+            entry_price=100.0,
+            stop_loss=95.0,
+            target_1=110.0,
+            position_size=0.1,
+            duplicate_key="overnight-trade-key",
+        )
+        next_day = ReplayMarketBar(
+            asset_id=seed_asset(db, ticker="OVERNIGHT-ASSET").id,
+            source_symbol="NVDA",
+            normalized_symbol="NVDA",
+            market="USA",
+            timeframe="1m",
+            bar_timestamp=NOW + timedelta(days=1),
+            open=101.0,
+            high=102.0,
+            low=100.0,
+            close=101.5,
+            volume=1_000,
+            provider="fixture",
+            acquired_at=NOW,
+            data_quality_score=95.0,
+            source_metadata={},
+        )
+
+        forced = BlumIntradayPaperEngine(refresh_missing=False, account_currency="USD", allow_overnight=False)._exit_for_bar(trade, next_day)
+        carried = BlumIntradayPaperEngine(
+            refresh_missing=False,
+            account_currency="USD",
+            allow_overnight=True,
+            max_holding_minutes=3_000,
+        )._exit_for_bar(trade, next_day)
+
+    assert forced[0] == "MARKET_CLOSE"
+    assert carried == (None, None)
 
 
 def test_scheduler_runs_intraday_worker_independently(monkeypatch):
