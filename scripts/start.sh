@@ -4,22 +4,11 @@ set -euo pipefail
 export PORT="${PORT:-7860}"
 export BLUM_PERSIST_DIR="${BLUM_PERSIST_DIR:-/data/blum}"
 export BLUM_DB_BACKUP_SECONDS="${BLUM_DB_BACKUP_SECONDS:-1800}"
-export BLUM_DB_RESTORE_JOBS="${BLUM_DB_RESTORE_JOBS:-2}"
+export BLUM_DB_RESTORE_JOBS="${BLUM_DB_RESTORE_JOBS:-4}"
 RESTORE_STATUS_PID=""
 
 start_restore_status_server() {
-  local status_dir="/tmp/blum-restore-status"
-  mkdir -p "${status_dir}"
-  cat > "${status_dir}/index.html" <<'EOF'
-<!doctype html>
-<html lang="en">
-  <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BLUM startup</title></head>
-  <body style="margin:0;background:#080b0e;color:#e8eef2;font-family:system-ui,sans-serif;display:grid;min-height:100vh;place-items:center">
-    <main style="max-width:620px;padding:32px"><p style="color:#72d6a3;font-weight:700">BLUM · TRADER BRAIN</p><h1>BLUM is restoring its learning memory</h1><p style="color:#9aa7b2;line-height:1.6">The API will start automatically when the persisted market history has been restored. No learning data is being discarded.</p></main>
-  </body>
-</html>
-EOF
-  python3 -m http.server "${PORT}" --bind 0.0.0.0 --directory "${status_dir}" >/tmp/blum-restore-status.log 2>&1 &
+  python3 /app/scripts/restore_status_server.py >/tmp/blum-restore-status.log 2>&1 &
   RESTORE_STATUS_PID=$!
 }
 

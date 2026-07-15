@@ -1561,7 +1561,7 @@ Default runtime budgets:
 - `BLUM_AUTONOMOUS_MAX_ITEMS_PER_JOB=50`
 - `BLUM_MARKET_REFRESH_MAX_ITEMS_PER_JOB=10`
 - `BLUM_MARKET_PROVIDER_VALIDATION_MAX_ITEMS=2`
-- `BLUM_DB_RESTORE_JOBS=2`
+- `BLUM_DB_RESTORE_JOBS=4`
 
 These budgets make long jobs visible and constrain new runtime work. Existing financial engines are not rewritten by this layer.
 
