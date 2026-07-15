@@ -224,9 +224,25 @@ def downgrade() -> None:
     op.drop_table("trade_quality_scores")
     op.drop_table("trade_engine_attributions")
 
+    op.drop_index("ix_trading_game_equity_curve_related_trade_id", table_name="trading_game_equity_curve")
+    op.drop_index("ix_trading_game_equity_curve_event_type", table_name="trading_game_equity_curve")
     for column in ["event_type", "related_trade_id", "annotation_payload"]:
         op.drop_column("trading_game_equity_curve", column)
 
+    for column in [
+        "asset_type",
+        "sector",
+        "thesis_id",
+        "actionability_state_at_entry",
+        "market_regime_at_entry",
+        "benchmark_ticker",
+        "target_1_hit",
+        "target_2_hit",
+        "invalidation_hit",
+        "trade_quality_score",
+        "outcome_label",
+    ]:
+        op.drop_index(f"ix_trading_game_trades_{column}", table_name="trading_game_trades")
     for column in [
         "asset_name",
         "asset_type",
@@ -271,5 +287,6 @@ def downgrade() -> None:
     ]:
         op.drop_column("trading_game_trades", column)
 
+    op.drop_index("ix_trading_games_transparency_updated_at", table_name="trading_games")
     for column in ["ledger_summary", "reality_check_summary", "transparency_updated_at"]:
         op.drop_column("trading_games", column)
