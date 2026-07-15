@@ -383,6 +383,40 @@ def test_alpha_snapshot_shows_historical_evidence_when_paper_forward_has_no_clos
     assert payload["total_evidence_sample_size"] == 1
 
 
+def test_historical_alpha_recomputes_comparable_return_instead_of_trusting_inconsistent_excess():
+    with setup_db() as db:
+        game = TradingGame(game_id="hist-comparable-alpha", current_capital=100.1, starting_capital=100.0)
+        db.add(game)
+        db.flush()
+        db.add(
+            TradingGameTrade(
+                game_id=game.id,
+                mode="historical_simulation",
+                ticker="NVDA",
+                setup_type="momentum_breakout",
+                entry_date=date(2026, 1, 2),
+                exit_date=date(2026, 1, 20),
+                entry_price=100.0,
+                exit_price=110.0,
+                net_pnl_eur=0.1,
+                pnl_percent=0.1,
+                realized_r_multiple=1.5,
+                benchmark_return_same_period=2.0,
+                excess_return_vs_benchmark=50.0,
+                outcome_label="target_hit",
+            )
+        )
+        db.commit()
+
+        payload = TraderBrainService().alpha(db)
+
+    historical = payload["evidence_split"]["historical_replay"]
+    assert historical["blum_return"] == 10.0
+    assert historical["benchmark_return"] == 2.0
+    assert historical["benchmark_excess"] == 8.0
+    assert historical["results"][0]["capital_return"] == 0.1
+
+
 def test_alpha_snapshot_separates_walk_forward_validation_from_historical_benchmark_rows():
     with setup_db() as db:
         run = LearningRun(run_id="wf-run", status="completed", evaluation_mode="walk_forward_validation")

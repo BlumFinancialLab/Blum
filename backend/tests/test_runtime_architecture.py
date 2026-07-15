@@ -330,8 +330,8 @@ def test_market_refresh_isolated_from_learning_and_trading(monkeypatch):
     calls = []
 
     class MarketDataStub:
-        def update_prices(self, db, *, tickers, period, limit):
-            calls.append(("market", tickers, period, limit))
+        def update_prices(self, db, *, tickers, period, limit, provider_validation_limit):
+            calls.append(("market", tickers, period, limit, provider_validation_limit))
             return {"updated": 2}
 
     class SignalStub:
@@ -406,12 +406,12 @@ def test_market_refresh_uses_dedicated_provider_call_budget(monkeypatch):
         db.commit()
         monkeypatch.setattr(realtime.settings, "max_update_assets", 160)
         monkeypatch.setattr(realtime.settings, "blum_autonomous_max_items_per_job", 50)
-        monkeypatch.setattr(realtime.settings, "market_refresh_max_items_per_job", 20)
+        monkeypatch.setattr(realtime.settings, "market_refresh_max_items_per_job", 10)
 
         tickers, state = realtime.market_refresh_asset_slice(db)
 
-        assert len(tickers) == 20
-        assert state["batch_limit"] == 20
+        assert len(tickers) == 10
+        assert state["batch_limit"] == 10
         assert state["has_more"] is True
 
 

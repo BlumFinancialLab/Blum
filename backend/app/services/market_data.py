@@ -18,7 +18,14 @@ class MarketDataService:
         if self.settings.enable_yfinance_fallback:
             self.providers.append(YFinanceProvider())
 
-    def update_prices(self, db: Session, tickers: list[str] | None = None, period: str = "max", limit: int | None = None) -> dict:
+    def update_prices(
+        self,
+        db: Session,
+        tickers: list[str] | None = None,
+        period: str = "max",
+        limit: int | None = None,
+        provider_validation_limit: int | None = None,
+    ) -> dict:
         limit = limit or self.settings.max_update_assets
         query = select(Asset).where(Asset.is_active.is_(True)).order_by(Asset.asset_type, Asset.ticker)
         if tickers:
@@ -71,7 +78,10 @@ class MarketDataService:
                     "status": "ok" if resolved else "no_data",
                 }
             )
-        provider_validation = self._record_provider_checks(db, list(resolved_assets.values()))
+        validation_assets = list(resolved_assets.values())
+        if provider_validation_limit is not None:
+            validation_assets = validation_assets[: max(0, provider_validation_limit)]
+        provider_validation = self._record_provider_checks(db, validation_assets)
         db.commit()
         missing_assets = list(remaining)
         return {
@@ -83,6 +93,7 @@ class MarketDataService:
             "missing_assets": missing_assets,
             "provider_report": provider_report,
             "provider_validation": provider_validation,
+            "provider_validation_sample": len(validation_assets),
             "warning": (
                 "Some assets have no stored prices because every configured public provider failed or returned no data. No synthetic prices were generated."
                 if missing_assets

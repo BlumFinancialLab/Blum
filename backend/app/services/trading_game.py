@@ -428,6 +428,7 @@ class TradingGameSimulator:
                 "simulation": simulation.simulation_payload,
                 "prediction_id": prediction.id if prediction else None,
                 "market_regime": prediction.market_regime if prediction else "unknown",
+                "asset_return_percent": asset_return,
                 "feedback_loop": prediction_feedback_payload(prediction),
                 "guardrails": guardrails(),
             },

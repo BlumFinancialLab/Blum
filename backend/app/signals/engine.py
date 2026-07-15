@@ -328,8 +328,8 @@ def fundamental_features(db: Session, asset: Asset) -> dict:
     assets = metric_value(metrics, "assets")
     liabilities = metric_value(metrics, "liabilities")
     operating_cash_flow = metric_value(metrics, "operating_cash_flow")
-    profit_margin = net_income / revenue if revenue else None
-    leverage = liabilities / assets if assets else None
+    profit_margin = net_income / revenue if net_income is not None and revenue else None
+    leverage = liabilities / assets if liabilities is not None and assets else None
     cash_conversion = operating_cash_flow / net_income if operating_cash_flow is not None and net_income and net_income > 0 else None
     score = avg(
         float(snapshot.quality_score or 0.0),

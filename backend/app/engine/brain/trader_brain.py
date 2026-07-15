@@ -1462,7 +1462,7 @@ def trading_game_evidence_split(rows: list[TradingGameTrade], *, label: str, dat
     r_values = [safe_float(row.realized_r_multiple, None) for row in rows if row.realized_r_multiple is not None]
     return_values = [historical_trade_return(row) for row in rows]
     benchmark_returns = [first_not_none(row.benchmark_return_same_period, row.benchmark_return) for row in rows]
-    excess_values = [safe_float(row.excess_return_vs_benchmark, None) for row in rows if row.excess_return_vs_benchmark is not None]
+    excess_values = [value for row in rows if (value := historical_trade_excess(row)) is not None]
     drawdown_values = [safe_float(row.max_adverse_excursion, None) for row in rows if row.max_adverse_excursion is not None]
     wins = sum(1 for row in rows if trading_game_trade_won(row))
     profit_factor = profit_factor_from_values(pnl_values if pnl_values else r_values)
@@ -1501,11 +1501,30 @@ def trading_game_evidence_split(rows: list[TradingGameTrade], *, label: str, dat
 
 
 def historical_trade_return(row: TradingGameTrade) -> float | None:
+    payload = row.payload if isinstance(row.payload, dict) else {}
+    stored_asset_return = safe_float(payload.get("asset_return_percent"), None)
+    if stored_asset_return is not None:
+        return stored_asset_return
+    outcome = str(row.outcome_label or "").lower()
+    if row.missed_entry or outcome in {"missed_entry", "no_trade_correct", "no_trade_missed_opportunity"}:
+        return 0.0
+    if row.entry_price not in (None, 0) and row.exit_price is not None:
+        side = str(payload.get("side") or "").lower()
+        direction = -1.0 if side in {"sell", "short", "paper_sell"} else 1.0
+        return round(((float(row.exit_price) / float(row.entry_price)) - 1.0) * 100.0 * direction, 4)
     if row.pnl_percent is not None:
         return safe_float(row.pnl_percent, None)
     if row.capital_before not in (None, 0) and row.net_pnl_eur is not None:
         return round((float(row.net_pnl_eur) / float(row.capital_before)) * 100.0, 4)
     return None
+
+
+def historical_trade_excess(row: TradingGameTrade) -> float | None:
+    strategy_return = historical_trade_return(row)
+    benchmark_return = safe_float(first_not_none(row.benchmark_return_same_period, row.benchmark_return), None)
+    if strategy_return is not None and benchmark_return is not None:
+        return round(strategy_return - benchmark_return, 4)
+    return safe_float(row.excess_return_vs_benchmark, None)
 
 
 def trading_game_trade_won(row: TradingGameTrade) -> bool:
@@ -1521,8 +1540,9 @@ def historical_trade_result(row: TradingGameTrade) -> dict:
         "setup_type": row.setup_type,
         "outcome": row.outcome_label,
         "return": historical_trade_return(row),
+        "capital_return": row.pnl_percent,
         "benchmark_return": first_not_none(row.benchmark_return_same_period, row.benchmark_return),
-        "excess_return": row.excess_return_vs_benchmark,
+        "excess_return": historical_trade_excess(row),
         "r_multiple": row.realized_r_multiple,
     }
 

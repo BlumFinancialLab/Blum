@@ -58,3 +58,37 @@ def test_market_refresh_deduplicates_provider_dates_and_is_idempotent():
         assert db.scalar(select(func.count(PriceHistory.id))) == 1
         assert len(rows) == 1
         assert rows[0].close == 102.0
+
+
+def test_market_refresh_bounds_secondary_provider_validation():
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        for index in range(3):
+            db.add(
+                Asset(
+                    ticker=f"V{index}",
+                    name=f"Validation {index}",
+                    category="Equity",
+                    sector="Technology",
+                    country="US",
+                    asset_type="stock",
+                )
+            )
+        db.commit()
+        service = MarketDataService()
+        service.providers = [DuplicateDateProvider()]
+        validated = []
+        service._record_provider_checks = lambda db, assets: validated.extend(asset.ticker for asset in assets) or {"validated_assets": len(assets), "diagnostics": []}
+
+        result = service.update_prices(
+            db,
+            tickers=["V0", "V1", "V2"],
+            period="1y",
+            limit=3,
+            provider_validation_limit=1,
+        )
+
+        assert result["updated_assets"] == 3
+        assert result["provider_validation"]["validated_assets"] == 1
+        assert len(validated) == 1

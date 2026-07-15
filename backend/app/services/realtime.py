@@ -273,6 +273,7 @@ def refresh_market_intelligence(db) -> dict:
             tickers=tickers,
             period=settings.refresh_price_period,
             limit=batch_size,
+            provider_validation_limit=settings.market_provider_validation_max_items,
         ),
         "signal_run": SignalEngine().run(db, tickers=tickers, limit=batch_size),
         "etf_update": update_etf_trends(db),
