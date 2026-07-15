@@ -46,6 +46,28 @@ RUNTIME_MODULES = [
     "snapshot_producer",
 ]
 
+RUNTIME_MODULE_EVENT_SOURCES: dict[str, tuple[str, ...]] = {
+    "market_data": ("market_data", "market_refresh", "data_gap_repair"),
+    "news_sentiment": ("news_sentiment", "news_refresh"),
+    "signals": ("signals", "market_refresh", "accuracy_audit"),
+    "learning_loop": (
+        "learning_loop",
+        "financial_brain_learning",
+        "blum_financial_model_cycle",
+        "blum_point_in_time_learning_loop",
+        "hyperbolic_replay_training",
+    ),
+    "research_planner": ("research_planner", "autonomous_research_engine", "alpha_strategy_factory"),
+    "trading_game": ("trading_game", "blum_trading_game", "live_forward_paper_trading", "intraday_paper_trading"),
+    "decision_intelligence": ("decision_intelligence", "brain_evidence_projector", "accuracy_audit"),
+    "business_quality": ("business_quality", "fundamentals_refresh"),
+    "portfolio_intelligence": ("portfolio_intelligence", "blum_trading_game", "brain_evidence_projector"),
+    "capital_allocation": ("capital_allocation", "blum_trading_game", "live_forward_paper_trading"),
+    "alpha_recovery": ("alpha_recovery", "alpha_strategy_factory", "brain_evidence_projector"),
+    "meta_cognition": ("meta_cognition", "hyperbolic_replay_training", "brain_evidence_projector"),
+    "snapshot_producer": ("snapshot_producer", "startup_snapshot_warmup"),
+}
+
 CRITICAL_SNAPSHOT_TYPES = [
     "learning_summary",
     "dashboard_overview_summary",
@@ -554,12 +576,17 @@ def stale_modules_from_events(events: dict[str, dict]) -> list[str]:
     now = datetime.utcnow()
     stale = []
     for module in RUNTIME_MODULES:
-        event = events.get(module)
-        if not event:
+        candidate_events = [
+            events[source]
+            for source in RUNTIME_MODULE_EVENT_SOURCES.get(module, (module,))
+            if source in events
+        ]
+        if not candidate_events:
             stale.append(module)
             continue
-        created_at = parse_datetime(event.get("created_at"))
-        if created_at and (now - created_at).total_seconds() > 60 * 60 * 6:
+        created_values = [parse_datetime(event.get("created_at")) for event in candidate_events]
+        created_values = [value for value in created_values if value is not None]
+        if not created_values or (now - max(created_values)).total_seconds() > 60 * 60 * 6:
             stale.append(module)
     return stale
 

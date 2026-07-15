@@ -15,9 +15,11 @@ from app.services.central_brain_runtime import (
     LearningHealthService,
     SnapshotProducerService,
     SnapshotWatchdogService,
+    stale_modules_from_events,
 )
 from app.services.dashboard_snapshots import DashboardSnapshotService
 from app.services.learning_loop import LearningLoopService
+from app.services import realtime
 from app.services.realtime import startup_snapshot_warmup_budget
 from app.services.worker_runtime import RuntimeWorkerCoordinator, WORKER_DEFINITIONS
 
@@ -263,8 +265,10 @@ def test_realtime_scheduler_has_professional_learning_lane_and_staggering():
     worker_source = (Path(__file__).resolve().parents[1] / "app" / "services" / "worker_runtime.py").read_text()
     source = realtime_source + worker_source
 
-    assert "blum_professional_learning_cycle" in source
-    assert "run_professional_learning_cycle_job" in source
+    assert "run_professional_financial_brain_job" in source
+    assert "run_professional_model_learning_job" in source
+    assert "run_professional_point_in_time_job" in source
+    assert "run_professional_trading_game_job" in source
     assert "professional_continuous" in source
     assert "backup=False" in source
     assert "batch_size // 2" in source
@@ -273,6 +277,105 @@ def test_realtime_scheduler_has_professional_learning_lane_and_staggering():
     assert "same_worker_already_running" in source
     assert "running_jobs" in source
     assert "runtime_worker_coordinator.begin" in source
+
+
+def test_autonomous_scheduler_job_only_generates_research_plan(monkeypatch):
+    captured = {}
+
+    class PlannerStub:
+        def generate(self, db, *, persist):
+            captured["persist"] = persist
+            return {"objective": "test weak setup"}
+
+    def run_inline(job_name, work):
+        captured["job_name"] = job_name
+        captured["result"] = work(object())
+
+    monkeypatch.setattr(realtime, "AutonomousResearchPlanner", PlannerStub)
+    monkeypatch.setattr(realtime, "_run_job", run_inline)
+
+    realtime.run_autonomous_engine_job()
+
+    assert captured["job_name"] == "autonomous_research_engine"
+    assert captured["persist"] is True
+    assert captured["result"]["research_plan"]["objective"] == "test weak setup"
+    assert "independent workers" in captured["result"]["policy"]
+
+
+def test_market_refresh_isolated_from_learning_and_trading(monkeypatch):
+    calls = []
+
+    class MarketDataStub:
+        def update_prices(self, db, *, period, limit):
+            calls.append(("market", period, limit))
+            return {"updated": 2}
+
+    class SignalStub:
+        def run(self, db, *, limit):
+            calls.append(("signals", limit))
+            return {"signals": 1}
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("market refresh must not invoke learning or trading")
+
+    monkeypatch.setattr(realtime, "MarketDataService", MarketDataStub)
+    monkeypatch.setattr(realtime, "SignalEngine", SignalStub)
+    monkeypatch.setattr(realtime, "update_etf_trends", lambda db: calls.append(("etf",)) or {"updated": 1})
+    monkeypatch.setattr(realtime, "run_learning_cycle", forbidden)
+    monkeypatch.setattr(realtime, "run_model_learning_cycle", forbidden)
+    monkeypatch.setattr(realtime.LearningLoopService, "run_batch", forbidden)
+    monkeypatch.setattr(realtime.TradingGameSimulator, "run", forbidden)
+
+    result = realtime.refresh_market_intelligence(object())
+
+    assert set(result) == {"market_update", "signal_run", "etf_update"}
+    assert [call[0] for call in calls] == ["market", "signals", "etf"]
+
+
+def test_professional_learning_is_scheduled_as_independent_workers(monkeypatch):
+    scheduled = []
+
+    monkeypatch.setattr(realtime.settings, "professional_learning_enabled", True)
+    monkeypatch.setattr(realtime.settings, "trading_game_enabled", True)
+    monkeypatch.setattr(
+        realtime,
+        "_add_interval_job",
+        lambda func, **kwargs: scheduled.append((func.__name__, kwargs)),
+    )
+
+    realtime._schedule_learning_jobs()
+
+    job_ids = [kwargs["job_id"] for _, kwargs in scheduled]
+    delays = [kwargs["delay_seconds"] for _, kwargs in scheduled]
+    assert job_ids == [
+        "financial_brain_learning",
+        "blum_financial_model_cycle",
+        "blum_point_in_time_learning_loop",
+        "blum_trading_game",
+    ]
+    assert delays == sorted(delays)
+    assert len(set(delays)) == len(delays)
+    assert "blum_professional_learning_cycle" not in job_ids
+
+
+def test_runtime_module_freshness_uses_worker_event_aliases():
+    now = datetime.utcnow().isoformat()
+    events = {
+        "market_refresh": {"created_at": now},
+        "news_refresh": {"created_at": now},
+        "financial_brain_learning": {"created_at": now},
+        "autonomous_research_engine": {"created_at": now},
+        "blum_trading_game": {"created_at": now},
+    }
+
+    stale = stale_modules_from_events(events)
+
+    assert "market_data" not in stale
+    assert "signals" not in stale
+    assert "news_sentiment" not in stale
+    assert "learning_loop" not in stale
+    assert "research_planner" not in stale
+    assert "trading_game" not in stale
 
 
 def test_snapshot_producer_batch_continues_after_failed_snapshot(monkeypatch):

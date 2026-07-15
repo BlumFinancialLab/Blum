@@ -57,7 +57,9 @@ graph TD
 
 - `routes.py` is still the largest composition root. It exposes every bounded context from one file and should eventually be split, but the current sprint preserves endpoints.
 - `realtime.py` previously used one process-wide `running` flag. A slow snapshot, market refresh or learning cycle could defer unrelated jobs.
-- `run_market_refresh` and `run_professional_learning_cycle_job` remain composite jobs. Their internal financial order is unchanged for compatibility, but they now run as isolated workers instead of blocking the whole scheduler.
+- `run_market_refresh` now owns only market prices, signals and ETF state. It does not invoke learning, model training or Trading Game work.
+- Professional learning is split into independent Financial Brain, Financial Model, point-in-time Learning Loop and Trading Game workers. The legacy professional-cycle entry point is retained as a bounded compatibility alias, but the scheduler no longer runs a composite mega-job.
+- The autonomous scheduler lane selects and persists research priorities; dedicated workers own the corresponding heavy computation.
 - `CentralBrainRuntime` previously depended on `realtime_status()`, creating a scheduler/runtime import cycle. Learning health now reads the lightweight worker coordinator state.
 - Frontend Learning Overview is already snapshot-first. Deep diagnostics and Trading Game tabs remain lazy by design.
 

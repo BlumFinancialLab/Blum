@@ -11,7 +11,6 @@ from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.ingestion.news_ingestor import NewsIngestor
 from app.services.accuracy import run_accuracy_audit
-from app.services.autonomous_engine import AutonomousResearchEngine
 from app.services.blum_financial_model import run_model_learning_cycle
 from app.services.central_brain_runtime import BrainEventBus, BackgroundJobStateService, SnapshotProducerService, SnapshotWatchdogService
 from app.services.data_continuity import repair_data_gaps
@@ -25,6 +24,7 @@ from app.services.macro import update_macro_snapshots
 from app.services.market_data import MarketDataService
 from app.services.performance import performance_recorder
 from app.services.pipeline import PipelineService
+from app.services.research_planner import AutonomousResearchPlanner
 from app.services.trading_game import TradingGameSimulator
 from app.services.live_forward_paper_trading import LiveForwardPaperTradingService
 from app.services.intraday_paper_engine import BlumIntradayPaperEngine
@@ -107,20 +107,7 @@ def start_realtime_services() -> None:
                     delay_seconds=300,
                     jitter_seconds=30,
                 )
-        if settings.professional_learning_enabled:
-            _add_interval_job(
-                run_professional_learning_cycle_job,
-                minutes=settings.professional_learning_minutes,
-                job_id="blum_professional_learning_cycle",
-                delay_seconds=150,
-                jitter_seconds=30,
-            )
-        else:
-            _add_interval_job(run_learning_cycle_job, minutes=settings.learning_loop_minutes, job_id="financial_brain_learning", delay_seconds=1020, jitter_seconds=45)
-            _add_interval_job(run_blum_model_cycle_job, minutes=settings.blum_model_cycle_minutes, job_id="blum_financial_model_cycle", delay_seconds=1080, jitter_seconds=45)
-            _add_interval_job(run_blum_learning_loop_job, minutes=settings.learning_loop_minutes, job_id="blum_point_in_time_learning_loop", delay_seconds=1140, jitter_seconds=45)
-            if settings.trading_game_enabled:
-                _add_interval_job(run_trading_game_job, minutes=settings.learning_loop_minutes, job_id="blum_trading_game", delay_seconds=1200, jitter_seconds=45)
+        _schedule_learning_jobs()
     _scheduler.start()
     runtime_worker_coordinator.mark_scheduler_started()
     with _state_lock:
@@ -172,6 +159,35 @@ def _add_interval_job(func, *, minutes: int, job_id: str, delay_seconds: int, ji
         next_run_time=datetime.utcnow() + timedelta(seconds=max(0, delay_seconds)),
         jitter=max(0, jitter_seconds),
     )
+
+
+def _schedule_learning_jobs() -> None:
+    """Schedule independent learning lanes instead of one blocking mega-cycle."""
+
+    if settings.professional_learning_enabled:
+        cadence = settings.professional_learning_minutes
+        jobs = [
+            (run_professional_financial_brain_job, "financial_brain_learning", 150),
+            (run_professional_model_learning_job, "blum_financial_model_cycle", 510),
+            (run_professional_point_in_time_job, "blum_point_in_time_learning_loop", 870),
+        ]
+        if settings.trading_game_enabled:
+            jobs.append((run_professional_trading_game_job, "blum_trading_game", 1230))
+        for func, job_id, delay_seconds in jobs:
+            _add_interval_job(
+                func,
+                minutes=cadence,
+                job_id=job_id,
+                delay_seconds=delay_seconds,
+                jitter_seconds=30,
+            )
+        return
+
+    _add_interval_job(run_learning_cycle_job, minutes=settings.learning_loop_minutes, job_id="financial_brain_learning", delay_seconds=1020, jitter_seconds=45)
+    _add_interval_job(run_blum_model_cycle_job, minutes=settings.blum_model_cycle_minutes, job_id="blum_financial_model_cycle", delay_seconds=1080, jitter_seconds=45)
+    _add_interval_job(run_blum_learning_loop_job, minutes=settings.learning_loop_minutes, job_id="blum_point_in_time_learning_loop", delay_seconds=1140, jitter_seconds=45)
+    if settings.trading_game_enabled:
+        _add_interval_job(run_trading_game_job, minutes=settings.learning_loop_minutes, job_id="blum_trading_game", delay_seconds=1200, jitter_seconds=45)
 
 
 def scheduled_jobs() -> list[dict]:
@@ -237,18 +253,18 @@ def run_news_refresh() -> None:
     _run_job("news_refresh", lambda db: NewsIngestor().update_news(db, lookback_hours=72, limit_per_feed=35))
 
 
-def run_market_refresh() -> None:
-    def work(db):
-        market = MarketDataService().update_prices(db, period=settings.refresh_price_period, limit=settings.max_update_assets)
-        signals = SignalEngine().run(db, limit=settings.max_update_assets)
-        etf = update_etf_trends(db)
-        learning = run_learning_cycle(db, limit=settings.max_update_assets * 6) if settings.enable_learning_loop else {}
-        model_learning = run_model_learning_cycle(db, limit=settings.blum_model_cycle_limit) if settings.enable_learning_loop else {}
-        point_in_time_learning = LearningLoopService().run_batch(db, batch_size=min(settings.learning_batch_size, 25), trigger="market_refresh") if settings.enable_learning_loop else {}
-        trading_game = TradingGameSimulator().run(db, batch_size=min(settings.trading_game_batch_size, 40)) if settings.trading_game_enabled else {}
-        return {"market_update": market, "signal_run": signals, "etf_update": etf, "financial_brain_learning": learning, "blum_financial_model": model_learning, "blum_learning_loop": point_in_time_learning, "trading_game": trading_game}
+def refresh_market_intelligence(db) -> dict:
+    """Refresh market-derived state without invoking any learning subsystem."""
 
-    _run_job("market_refresh", work)
+    return {
+        "market_update": MarketDataService().update_prices(db, period=settings.refresh_price_period, limit=settings.max_update_assets),
+        "signal_run": SignalEngine().run(db, limit=settings.max_update_assets),
+        "etf_update": update_etf_trends(db),
+    }
+
+
+def run_market_refresh() -> None:
+    _run_job("market_refresh", refresh_market_intelligence)
 
 
 def run_data_gap_repair() -> None:
@@ -288,6 +304,56 @@ def run_blum_learning_loop_job() -> None:
 
 def run_trading_game_job() -> None:
     _run_job("blum_trading_game", lambda db: TradingGameSimulator().run(db, batch_size=settings.trading_game_batch_size))
+
+
+def professional_learning_batch_size() -> int:
+    return max(
+        1,
+        min(
+            settings.professional_learning_batch_size,
+            settings.learning_batch_size,
+            settings.blum_autonomous_max_items_per_job,
+        ),
+    )
+
+
+def run_professional_financial_brain_job() -> None:
+    batch_size = professional_learning_batch_size()
+    _run_job(
+        "financial_brain_learning",
+        lambda db: run_learning_cycle(db, limit=max(20, min(settings.max_update_assets * 2, batch_size * 4))),
+    )
+
+
+def run_professional_model_learning_job() -> None:
+    batch_size = professional_learning_batch_size()
+    _run_job(
+        "blum_financial_model_cycle",
+        lambda db: run_model_learning_cycle(
+            db,
+            limit=max(20, min(settings.blum_model_cycle_limit, batch_size * 4)),
+            backup=False,
+        ),
+    )
+
+
+def run_professional_point_in_time_job() -> None:
+    batch_size = professional_learning_batch_size()
+    _run_job(
+        "blum_point_in_time_learning_loop",
+        lambda db: LearningLoopService().run_batch(
+            db,
+            batch_size=batch_size,
+            trigger="professional_continuous",
+            sniper_simulation_limit=0,
+        ),
+    )
+
+
+def run_professional_trading_game_job() -> None:
+    batch_size = professional_learning_batch_size()
+    trading_batch = max(3, min(settings.trading_game_batch_size, max(3, batch_size // 2)))
+    _run_job("blum_trading_game", lambda db: TradingGameSimulator().run(db, batch_size=trading_batch))
 
 
 def run_live_forward_paper_trading_job() -> None:
@@ -335,33 +401,9 @@ def run_alpha_strategy_factory_job() -> None:
 
 
 def run_professional_learning_cycle_job() -> None:
-    def work(db):
-        batch_size = max(1, min(settings.professional_learning_batch_size, settings.learning_batch_size, settings.blum_autonomous_max_items_per_job))
-        trading_batch = max(3, min(settings.trading_game_batch_size, max(3, batch_size // 2)))
-        learning = run_learning_cycle(db, limit=max(20, min(settings.max_update_assets * 2, batch_size * 4)))
-        model_learning = run_model_learning_cycle(db, limit=max(20, min(settings.blum_model_cycle_limit, batch_size * 4)), backup=False)
-        point_in_time_learning = LearningLoopService().run_batch(
-            db,
-            batch_size=batch_size,
-            trigger="professional_continuous",
-            sniper_simulation_limit=0,
-        )
-        trading_game = TradingGameSimulator().run(db, batch_size=trading_batch) if settings.trading_game_enabled else {"status": "disabled"}
-        snapshots = SnapshotProducerService().produce_many(db, max_items=settings.blum_autonomous_max_items_per_job)
-        brain_evidence = BlumTradingPowerScoreService().persist_if_evidence_changed(db)
-        return {
-            "mode": "professional_continuous_learning",
-            "batch_size": batch_size,
-            "financial_brain_learning": learning,
-            "blum_financial_model": model_learning,
-            "blum_learning_loop": point_in_time_learning,
-            "trading_game": trading_game,
-            "snapshots": snapshots,
-            "brain_evidence": brain_evidence,
-            "policy": "Bounded server-side learning cycle. Frontend pages observe snapshots only and never trigger this work on render.",
-        }
+    """Backward-compatible bounded entry point for one point-in-time slice."""
 
-    _run_job("blum_professional_learning_cycle", work)
+    run_professional_point_in_time_job()
 
 
 def run_hyperbolic_replay_training_job() -> None:
@@ -376,7 +418,11 @@ def run_hyperbolic_replay_training_job() -> None:
 def run_autonomous_engine_job() -> None:
     _run_job(
         "autonomous_research_engine",
-        lambda db: AutonomousResearchEngine(progress_callback=_update_stage_progress).run_cycle(db, trigger="scheduled"),
+        lambda db: {
+            "status": "ok",
+            "research_plan": AutonomousResearchPlanner().generate(db, persist=True),
+            "policy": "The autonomous planner selects research. Market, learning, trading and snapshot work run in independent workers.",
+        },
     )
 
 
