@@ -19,6 +19,7 @@ from app.models import (
     TradingGameTrade,
 )
 from app.services.financial_chat import meta_cognition_lines
+from app.services.dashboard_snapshots import DashboardSnapshotService
 from app.services.learning_loop import HistoricalSamplerService
 from app.services.meta_cognition import (
     CapitalPreservationAlphaEngine,
@@ -33,6 +34,20 @@ def setup_db() -> Session:
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
     return Session(engine)
+
+
+def test_meta_cognition_summary_does_not_embed_previous_snapshot_payload() -> None:
+    with setup_db() as db:
+        DashboardSnapshotService().write(
+            db,
+            "meta_cognition_summary",
+            {"status": "ready", "previous": {"large": "payload"}},
+        )
+
+        summary = MetaCognitionEngine().summary(db)
+
+    assert summary["snapshot"]["status"] == "ready"
+    assert "payload" not in summary["snapshot"]
 
 
 def seed_game(db: Session) -> TradingGame:

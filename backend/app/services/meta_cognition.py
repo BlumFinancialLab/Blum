@@ -268,9 +268,10 @@ class MetaCognitionEngine:
 
     def summary(self, db: Session) -> dict:
         snapshot = DashboardSnapshotService().latest(db, SNAPSHOT_TYPE)
+        snapshot_metadata = {key: value for key, value in snapshot.items() if key != "payload"}
         return {
             "status": snapshot.get("status"),
-            "snapshot": snapshot,
+            "snapshot": snapshot_metadata,
             "factor_importance": LearningImportanceEngine().latest(db, limit=24),
             "capital_preservation": CapitalPreservationAlphaEngine().latest(db, limit=24),
             "learning_focus": LearningFocusOptimizer().latest(db, limit=24),
