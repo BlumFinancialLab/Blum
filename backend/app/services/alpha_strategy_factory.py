@@ -202,13 +202,18 @@ class AlphaStrategyFactory:
         trigger: str = "scheduled",
     ) -> dict:
         selected = families or list(self.registry.names())
+        selected_families = [str(family) for family in selected]
         now = datetime.utcnow()
         run = StrategyFactoryRun(
             run_uid=f"factory-{now.strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:8]}",
-            hypothesis_family=",".join(selected),
+            hypothesis_family=factory_hypothesis_key(selected_families),
             generation_seed=int(seed),
             status="RUNNING",
-            budgets_json={"max_variants_per_family": max_variants_per_family, "trigger": trigger},
+            budgets_json={
+                "max_variants_per_family": max_variants_per_family,
+                "trigger": trigger,
+                "selected_families": selected_families,
+            },
         )
         db.add(run)
         db.flush()
@@ -433,6 +438,14 @@ class AlphaStrategyFactory:
                     warnings_json=[],
                 )
             )
+
+
+def factory_hypothesis_key(families: list[str]) -> str:
+    if len(families) == 1 and len(families[0]) <= 80:
+        return families[0]
+    serialized = ",".join(families)
+    digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:12]
+    return f"multi_family:{len(families)}:{digest}"
 
 
 def strategy_fingerprint(specification: dict) -> str:

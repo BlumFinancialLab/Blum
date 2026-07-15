@@ -232,6 +232,18 @@ def test_factory_run_is_idempotent_and_reports_missing_evidence() -> None:
     assert snapshot["promoted_to_paper"] == 0
 
 
+def test_multi_family_factory_run_uses_bounded_index_key_and_preserves_full_selection() -> None:
+    with setup_db() as db:
+        families = list(StrategyFamilyRegistry().names())
+
+        AlphaStrategyFactory().run_once(db, families=families, max_variants_per_family=1, seed=7, trigger="test")
+        run = db.query(StrategyFactoryRun).one()
+
+    assert len(run.hypothesis_family) <= 80
+    assert run.hypothesis_family.startswith("multi_family:")
+    assert run.budgets_json["selected_families"] == families
+
+
 def test_champion_challenger_promotion_is_reversible_and_audited() -> None:
     with setup_db() as db:
         run = StrategyFactoryRun(run_uid="champion-run", hypothesis_family="momentum", generation_seed=1, status="COMPLETED")
