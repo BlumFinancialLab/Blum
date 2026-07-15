@@ -306,13 +306,13 @@ def test_market_refresh_isolated_from_learning_and_trading(monkeypatch):
     calls = []
 
     class MarketDataStub:
-        def update_prices(self, db, *, period, limit):
-            calls.append(("market", period, limit))
+        def update_prices(self, db, *, tickers, period, limit):
+            calls.append(("market", tickers, period, limit))
             return {"updated": 2}
 
     class SignalStub:
-        def run(self, db, *, limit):
-            calls.append(("signals", limit))
+        def run(self, db, *, tickers, limit):
+            calls.append(("signals", tickers, limit))
             return {"signals": 1}
 
     def forbidden(*args, **kwargs):
@@ -320,6 +320,11 @@ def test_market_refresh_isolated_from_learning_and_trading(monkeypatch):
 
     monkeypatch.setattr(realtime, "MarketDataService", MarketDataStub)
     monkeypatch.setattr(realtime, "SignalEngine", SignalStub)
+    monkeypatch.setattr(
+        realtime,
+        "market_refresh_asset_slice",
+        lambda db: (["AAA", "BBB"], {"batch_size": 2, "has_more": True, "next_asset_id": 2}),
+    )
     monkeypatch.setattr(realtime, "update_etf_trends", lambda db: calls.append(("etf",)) or {"updated": 1})
     monkeypatch.setattr(realtime, "run_learning_cycle", forbidden)
     monkeypatch.setattr(realtime, "run_model_learning_cycle", forbidden)
@@ -328,8 +333,37 @@ def test_market_refresh_isolated_from_learning_and_trading(monkeypatch):
 
     result = realtime.refresh_market_intelligence(object())
 
-    assert set(result) == {"market_update", "signal_run", "etf_update"}
+    assert set(result) == {"market_update", "signal_run", "etf_update", "slice"}
+    assert result["slice"]["has_more"] is True
     assert [call[0] for call in calls] == ["market", "signals", "etf"]
+
+
+def test_market_refresh_slice_resumes_and_wraps_without_starving_assets(monkeypatch):
+    with setup_db() as db:
+        for index in range(1, 5):
+            db.add(
+                realtime.Asset(
+                    ticker=f"T{index}",
+                    name=f"Test {index}",
+                    category="Equity",
+                    sector="Technology",
+                    country="US",
+                    asset_type="stock",
+                )
+            )
+        db.commit()
+        monkeypatch.setattr(realtime.settings, "blum_autonomous_max_items_per_job", 2)
+
+        first_tickers, first = realtime.market_refresh_asset_slice(db)
+        second_tickers, second = realtime.market_refresh_asset_slice(db)
+        third_tickers, third = realtime.market_refresh_asset_slice(db)
+
+        assert first_tickers == ["T1", "T2"]
+        assert first["has_more"] is True
+        assert second_tickers == ["T3", "T4"]
+        assert second["has_more"] is False
+        assert third_tickers == ["T1", "T2"]
+        assert third["next_asset_id"] == 2
 
 
 def test_professional_learning_is_scheduled_as_independent_workers(monkeypatch):

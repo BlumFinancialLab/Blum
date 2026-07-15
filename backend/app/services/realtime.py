@@ -6,10 +6,12 @@ import time
 import traceback
 
 from apscheduler.schedulers.background import BackgroundScheduler
+from sqlalchemy import select
 
 from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.ingestion.news_ingestor import NewsIngestor
+from app.models import Asset, BackgroundJobState
 from app.services.accuracy import run_accuracy_audit
 from app.services.blum_financial_model import run_model_learning_cycle
 from app.services.central_brain_runtime import BrainEventBus, BackgroundJobStateService, SnapshotProducerService, SnapshotWatchdogService
@@ -256,10 +258,71 @@ def run_news_refresh() -> None:
 def refresh_market_intelligence(db) -> dict:
     """Refresh market-derived state without invoking any learning subsystem."""
 
+    tickers, slice_state = market_refresh_asset_slice(db)
+    if not tickers:
+        return {
+            "market_update": {"status": "no_active_assets", "updated_assets": 0},
+            "signal_run": {"status": "no_active_assets", "created": 0},
+            "etf_update": update_etf_trends(db),
+            "slice": slice_state,
+        }
+    batch_size = len(tickers)
     return {
-        "market_update": MarketDataService().update_prices(db, period=settings.refresh_price_period, limit=settings.max_update_assets),
-        "signal_run": SignalEngine().run(db, limit=settings.max_update_assets),
+        "market_update": MarketDataService().update_prices(
+            db,
+            tickers=tickers,
+            period=settings.refresh_price_period,
+            limit=batch_size,
+        ),
+        "signal_run": SignalEngine().run(db, tickers=tickers, limit=batch_size),
         "etf_update": update_etf_trends(db),
+        "slice": slice_state,
+    }
+
+
+def market_refresh_asset_slice(db) -> tuple[list[str], dict]:
+    state = db.scalar(
+        select(BackgroundJobState).where(
+            BackgroundJobState.job_name == "market_refresh",
+            BackgroundJobState.stage_name == "default",
+        )
+    )
+    cursor = dict(state.cursor_json or {}) if state else {}
+    last_asset_id = int(cursor.get("last_asset_id") or 0)
+    batch_limit = max(
+        1,
+        min(settings.max_update_assets, settings.blum_autonomous_max_items_per_job),
+    )
+
+    def rows_after(asset_id: int):
+        return db.execute(
+            select(Asset.id, Asset.ticker)
+            .where(Asset.is_active.is_(True), Asset.id > asset_id)
+            .order_by(Asset.id)
+            .limit(batch_limit + 1)
+        ).all()
+
+    rows = rows_after(last_asset_id)
+    if not rows and last_asset_id:
+        last_asset_id = 0
+        rows = rows_after(0)
+    selected = rows[:batch_limit]
+    has_more = len(rows) > batch_limit
+    next_asset_id = int(selected[-1].id) if selected and has_more else 0
+    tickers = [str(row.ticker) for row in selected]
+    BackgroundJobStateService().heartbeat(
+        db,
+        "market_refresh",
+        items_processed=len(tickers),
+        cursor={"last_asset_id": next_asset_id},
+    )
+    return tickers, {
+        "batch_size": len(tickers),
+        "batch_limit": batch_limit,
+        "previous_asset_id": last_asset_id,
+        "next_asset_id": next_asset_id,
+        "has_more": has_more,
+        "policy": "Bounded resumable market slice; the cursor rotates across every active asset.",
     }
 
 
