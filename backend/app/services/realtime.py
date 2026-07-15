@@ -291,7 +291,11 @@ def market_refresh_asset_slice(db) -> tuple[list[str], dict]:
     last_asset_id = int(cursor.get("last_asset_id") or 0)
     batch_limit = max(
         1,
-        min(settings.max_update_assets, settings.blum_autonomous_max_items_per_job),
+        min(
+            settings.max_update_assets,
+            settings.blum_autonomous_max_items_per_job,
+            settings.market_refresh_max_items_per_job,
+        ),
     )
 
     def rows_after(asset_id: int):

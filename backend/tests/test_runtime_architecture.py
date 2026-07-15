@@ -390,6 +390,31 @@ def test_market_refresh_slice_resumes_and_wraps_without_starving_assets(monkeypa
         assert third["next_asset_id"] == 2
 
 
+def test_market_refresh_uses_dedicated_provider_call_budget(monkeypatch):
+    with setup_db() as db:
+        for index in range(1, 26):
+            db.add(
+                realtime.Asset(
+                    ticker=f"B{index}",
+                    name=f"Budget {index}",
+                    category="Equity",
+                    sector="Technology",
+                    country="US",
+                    asset_type="stock",
+                )
+            )
+        db.commit()
+        monkeypatch.setattr(realtime.settings, "max_update_assets", 160)
+        monkeypatch.setattr(realtime.settings, "blum_autonomous_max_items_per_job", 50)
+        monkeypatch.setattr(realtime.settings, "market_refresh_max_items_per_job", 20)
+
+        tickers, state = realtime.market_refresh_asset_slice(db)
+
+        assert len(tickers) == 20
+        assert state["batch_limit"] == 20
+        assert state["has_more"] is True
+
+
 def test_professional_learning_is_scheduled_as_independent_workers(monkeypatch):
     scheduled = []
 

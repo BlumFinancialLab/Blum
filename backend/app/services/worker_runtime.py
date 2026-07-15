@@ -28,7 +28,17 @@ WORKER_DEFINITIONS: dict[str, WorkerDefinition] = {
     "brain_evidence_projector": WorkerDefinition("brain_evidence_projector", "learning_evidence", "10m", 120, 1),
     "autonomous_research_engine": WorkerDefinition("autonomous_research_engine", "research", "configured", settings.blum_autonomous_max_seconds_per_job, settings.blum_autonomous_max_items_per_job),
     "news_refresh": WorkerDefinition("news_refresh", "news", "configured", 120, 35),
-    "market_refresh": WorkerDefinition("market_refresh", "market", "configured", settings.blum_autonomous_max_seconds_per_job, min(settings.max_update_assets, settings.blum_autonomous_max_items_per_job)),
+    "market_refresh": WorkerDefinition(
+        "market_refresh",
+        "market",
+        "configured",
+        settings.blum_autonomous_max_seconds_per_job,
+        min(
+            settings.max_update_assets,
+            settings.blum_autonomous_max_items_per_job,
+            settings.market_refresh_max_items_per_job,
+        ),
+    ),
     "data_gap_repair": WorkerDefinition("data_gap_repair", "data_repair", "configured", settings.blum_autonomous_max_seconds_per_job, settings.max_update_assets),
     "accuracy_audit": WorkerDefinition("accuracy_audit", "accuracy", "configured", settings.blum_autonomous_max_seconds_per_job, settings.max_update_assets),
     "macro_refresh": WorkerDefinition("macro_refresh", "macro", "configured", 120, 25),

@@ -1559,6 +1559,7 @@ Default runtime budgets:
 
 - `BLUM_AUTONOMOUS_MAX_SECONDS_PER_JOB=120`
 - `BLUM_AUTONOMOUS_MAX_ITEMS_PER_JOB=50`
+- `BLUM_MARKET_REFRESH_MAX_ITEMS_PER_JOB=20`
 
 These budgets make long jobs visible and constrain new runtime work. Existing financial engines are not rewritten by this layer.
 
