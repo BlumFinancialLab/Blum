@@ -455,7 +455,10 @@ class SnapshotWatchdogService:
         latest = latest_snapshot_map(db)
         missing = [item for item in CRITICAL_SNAPSHOT_TYPES if item not in latest]
         stale = []
-        for snapshot_type, row in latest.items():
+        for snapshot_type in CRITICAL_SNAPSHOT_TYPES:
+            row = latest.get(snapshot_type)
+            if row is None:
+                continue
             if row.expires_at and row.expires_at < now:
                 stale.append(snapshot_type)
             elif row.is_stale:

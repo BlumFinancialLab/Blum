@@ -94,6 +94,30 @@ def test_snapshot_producer_writes_missing_sections_and_watchdog_detects_stale():
         assert "learning_summary" in health["missing_snapshots"]
 
 
+def test_snapshot_watchdog_ignores_stale_noncritical_diagnostic_snapshots():
+    with setup_db() as db:
+        for snapshot_type in CRITICAL_SNAPSHOT_TYPES:
+            DashboardSnapshotService().write(db, snapshot_type, {"status": "ready"}, ttl_seconds=60)
+        DashboardSnapshotService().write(
+            db,
+            "hyperbolic_replay_training_summary",
+            {"status": "diagnostic"},
+            ttl_seconds=60,
+        )
+        row = db.scalar(
+            select(DashboardSnapshot).where(
+                DashboardSnapshot.snapshot_type == "hyperbolic_replay_training_summary"
+            )
+        )
+        row.expires_at = datetime.utcnow() - timedelta(seconds=1)
+        db.commit()
+
+        health = SnapshotWatchdogService().health(db)
+
+        assert health["status"] == "healthy"
+        assert "hyperbolic_replay_training_summary" not in health["stale_snapshots"]
+
+
 def test_dashboard_snapshot_service_keeps_missing_sections_round_trip():
     with setup_db() as db:
         payload = DashboardSnapshotService().write(
