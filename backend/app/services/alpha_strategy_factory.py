@@ -418,6 +418,7 @@ class AlphaStrategyFactory:
                 .limit(5_000)
             ).all()
             rows = [trade.decision_timestamp for trade in trades]
+        rows = sorted({timestamp for timestamp in rows if timestamp is not None})
         if len(rows) < 12:
             return
         for fold in build_purged_folds(rows, n_splits=3, purge_bars=5, embargo_bars=3):

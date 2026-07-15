@@ -244,6 +244,30 @@ def test_multi_family_factory_run_uses_bounded_index_key_and_preserves_full_sele
     assert run.budgets_json["selected_families"] == families
 
 
+def test_factory_folds_group_trades_that_share_a_decision_timestamp() -> None:
+    with setup_db() as db:
+        run = StrategyFactoryRun(run_uid="duplicate-time-run", hypothesis_family="momentum", generation_seed=7, status="RUNNING")
+        db.add(run)
+        db.flush()
+        candidate = StrategyCandidateVariant(
+            factory_run_id=run.id,
+            fingerprint="duplicate-time-candidate",
+            family="momentum",
+            setup_type="momentum_breakout",
+            timeframe_stack=["1d", "15m", "5m", "1m"],
+        )
+        db.add(candidate)
+        db.flush()
+        start = datetime(2024, 1, 1)
+        timestamps = [start + timedelta(days=index) for index in range(40) for _ in range(2)]
+
+        AlphaStrategyFactory._persist_folds(db, candidate, {"timestamps": timestamps})
+        folds = db.query(StrategyValidationFold).filter_by(candidate_id=candidate.id).all()
+
+    assert len(folds) == 3
+    assert all(fold.train_end < fold.validation_start for fold in folds)
+
+
 def test_champion_challenger_promotion_is_reversible_and_audited() -> None:
     with setup_db() as db:
         run = StrategyFactoryRun(run_uid="champion-run", hypothesis_family="momentum", generation_seed=1, status="COMPLETED")
