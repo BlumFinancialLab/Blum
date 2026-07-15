@@ -52,6 +52,7 @@ class MarketDataService:
                 if asset is None or frame is None or frame.empty:
                     continue
                 rows = to_price_rows(asset.id, frame, provider.name)
+                rows = dedupe_price_rows(rows)
                 if not rows:
                     continue
                 min_date = min(row["date"] for row in rows)
@@ -163,6 +164,19 @@ class MarketDataService:
                 )
             inserted_or_updated += 1
         return {"validated_assets": inserted_or_updated, "diagnostics": diagnostics}
+
+
+def dedupe_price_rows(rows: list[dict]) -> list[dict]:
+    """Keep the provider's last observation for each asset/date pair."""
+
+    unique: dict[tuple[int, object], dict] = {}
+    for row in rows:
+        asset_id = row.get("asset_id")
+        point_date = row.get("date")
+        if asset_id is None or point_date is None:
+            continue
+        unique[(int(asset_id), point_date)] = row
+    return sorted(unique.values(), key=lambda row: (row["asset_id"], row["date"]))
 
 
 def latest_price_payload(db: Session, ticker: str) -> dict | None:
