@@ -4,6 +4,7 @@ set -euo pipefail
 export PORT="${PORT:-7860}"
 export BLUM_PERSIST_DIR="${BLUM_PERSIST_DIR:-/data/blum}"
 export BLUM_DB_BACKUP_SECONDS="${BLUM_DB_BACKUP_SECONDS:-1800}"
+export BLUM_DB_RESTORE_JOBS="${BLUM_DB_RESTORE_JOBS:-2}"
 RESTORE_STATUS_PID=""
 
 start_restore_status_server() {
@@ -71,7 +72,8 @@ if [[ -z "${DATABASE_URL:-}" ]]; then
   fi
   if [[ "${TABLE_COUNT:-0}" == "0" && -s "${BLUM_EMBEDDED_POSTGRES_BACKUP_FILE}" ]]; then
     echo "Restoring embedded PostgreSQL backup from ${BLUM_EMBEDDED_POSTGRES_BACKUP_FILE}."
-    su postgres -c "pg_restore -d blum" < "${BLUM_EMBEDDED_POSTGRES_BACKUP_FILE}" || echo "Custom backup restore failed; continuing with migrations."
+    chmod a+r "${BLUM_EMBEDDED_POSTGRES_BACKUP_FILE}" || true
+    su postgres -c "pg_restore --jobs=${BLUM_DB_RESTORE_JOBS} --exit-on-error -d blum '${BLUM_EMBEDDED_POSTGRES_BACKUP_FILE}'" || echo "Custom backup restore failed; continuing with migrations."
   elif [[ "${TABLE_COUNT:-0}" == "0" && -s "${BLUM_COMPRESSED_POSTGRES_BACKUP_FILE}" ]]; then
     echo "Restoring compressed PostgreSQL bootstrap from ${BLUM_COMPRESSED_POSTGRES_BACKUP_FILE}."
     gzip -dc "${BLUM_COMPRESSED_POSTGRES_BACKUP_FILE}" | su postgres -c "psql -d blum" || echo "Compressed backup restore failed; continuing with migrations."
