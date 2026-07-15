@@ -17,6 +17,7 @@ from app.models import (
     LearningEvent,
     LiveForwardPaperGame,
     LiveForwardPaperTrade,
+    PaperExecutionOrder,
     ReplayMarketBar,
     SignalPerformance,
     StrategyMemory,
@@ -31,6 +32,8 @@ from app.services.cross_market_orchestrator import enabled_agents, parse_names
 from app.services.copy_readiness_evidence import EvidenceTimelineService, strategy_identity
 from app.services.market_desks import MarketDeskRegistry
 from app.services.promoted_strategy_registry import BlumPromotedStrategyRegistry, normalize_market
+from app.services.paper_execution_lifecycle import PaperOrderLifecycleService
+from app.services.realistic_execution import ExecutionMarketBar, ExecutionOrderRequest
 from app.services.trading_intelligence_lab import ensure_live_trade_game
 
 
@@ -75,6 +78,7 @@ class BlumIntradayPaperEngine:
         self.max_runtime_seconds = max(1.0, float(max_runtime_seconds if max_runtime_seconds is not None else settings.intraday_max_runtime_seconds))
         self.max_holding_minutes = max(1, int(max_holding_minutes if max_holding_minutes is not None else settings.intraday_max_holding_minutes))
         self.paper = LiveForwardPaperTradingService()
+        self.execution = PaperOrderLifecycleService()
         self.learning = IntradayPaperLearningService()
         self._desk_context: dict[int, tuple[str, str]] = {}
 
@@ -95,9 +99,12 @@ class BlumIntradayPaperEngine:
         decisions: list[dict] = []
         try:
             game = self.paper.active_or_create_live_game(db)
-            lifecycle = self._manage_open_trades(db, game=game, now=now)
-            run.trades_updated = lifecycle["trades_updated"]
-            run.trades_closed = lifecycle["trades_closed"]
+            order_lifecycle = self._manage_pending_orders(db, game=game, now=now)
+            trade_lifecycle = self._manage_open_trades(db, game=game, now=now)
+            lifecycle = {"orders": order_lifecycle, "positions": trade_lifecycle}
+            run.trades_opened = order_lifecycle["trades_opened"]
+            run.trades_updated = trade_lifecycle["trades_updated"]
+            run.trades_closed = trade_lifecycle["trades_closed"]
 
             selected_assets = list(assets)[: self.max_assets] if assets is not None else self._discover_assets(db)
             if not selected_assets:
@@ -138,7 +145,6 @@ class BlumIntradayPaperEngine:
                     trade, created = self._open_trade(db, game=game, run=run, asset=asset, decision=decision)
                     if created:
                         run.candidates_approved += 1
-                        run.trades_opened += 1
                     else:
                         blockers.append({"ticker": trade.ticker, "reason": "DUPLICATE_INTRADAY_DECISION"})
 
@@ -177,6 +183,25 @@ class BlumIntradayPaperEngine:
             db.commit()
             return self._serialize_run(failed, failed.data_blockers)
 
+    def run_execution_once(self, db: Session, *, trigger: str = "manual") -> dict:
+        """Advance only persisted orders and positions; candidate discovery stays independent."""
+        if not settings.intraday_paper_enabled:
+            return {"status": "DISABLED", "trigger": trigger, "evidence_type": PAPER_FORWARD_INTRADAY}
+        game = self.paper.active_or_create_live_game(db)
+        now = self.now_provider()
+        orders = self._manage_pending_orders(db, game=game, now=now)
+        positions = self._manage_open_trades(db, game=game, now=now)
+        self.paper.refresh_live_game_counts(db, game)
+        db.commit()
+        return {
+            "status": "COMPLETED",
+            "trigger": trigger,
+            "evidence_type": PAPER_FORWARD_INTRADAY,
+            "orders": orders,
+            "positions": positions,
+            "policy": "Execution advances from stored future bars only; candidate discovery is not run.",
+        }
+
     def _discover_assets(self, db: Session) -> list[Asset]:
         agent_types = enabled_agents(parse_names(settings.blum_enabled_market_desk_agents), stale_after_hours=settings.paper_forward_scan_stale_data_max_age_hours)
         discovery = MarketDeskRegistry(agents=agent_types).discover(db)
@@ -200,7 +225,7 @@ class BlumIntradayPaperEngine:
             select(LiveForwardPaperTrade).where(
                 LiveForwardPaperTrade.game_id == game.id,
                 LiveForwardPaperTrade.trading_mode == INTRADAY_MODE,
-                LiveForwardPaperTrade.status == "OPEN",
+                LiveForwardPaperTrade.status.in_(["ORDER_SUBMITTED", "PARTIALLY_FILLED", "OPEN"]),
             )
         ).all()
         markets = Counter(row.market or "UNKNOWN" for row in rows)
@@ -234,10 +259,8 @@ class BlumIntradayPaperEngine:
         feedback = self.paper.feedback_metadata(db, ticker=asset.ticker, setup_type=decision.setup_type)
         costs = decision.costs or {}
         observed_entry = float(decision.entry_price or 0.0)
-        one_way_bps = float(costs.get("one_way_bps") or 0.0)
-        entry_fill = observed_entry * (1 + one_way_bps / 10_000)
         quantity = float(decision.sizing.quantity if decision.sizing else 0.0)
-        risk_per_share = max(0.0001, entry_fill - float(decision.stop_price or entry_fill))
+        risk_per_share = max(0.0001, observed_entry - float(decision.stop_price or observed_entry))
         frozen = {
             "evidence_type": PAPER_FORWARD_INTRADAY,
             "trading_mode": INTRADAY_MODE,
@@ -248,7 +271,7 @@ class BlumIntradayPaperEngine:
             },
             "decision_timestamp": decision.decision_timestamp.isoformat(),
             "observed_entry_price": observed_entry,
-            "paper_entry_fill": entry_fill,
+            "paper_entry_fill": None,
             "stop_price": decision.stop_price,
             "target_price": decision.target_price,
             "costs": costs,
@@ -266,7 +289,7 @@ class BlumIntradayPaperEngine:
             asset_type=asset.asset_type,
             sector=asset.sector,
             setup_type=decision.setup_type,
-            status="OPEN",
+            status="ORDER_SUBMITTED",
             decision_timestamp=decision.decision_timestamp,
             decision_date=decision.decision_timestamp.date(),
             model_version_used=feedback["model_version_used"],
@@ -294,36 +317,134 @@ class BlumIntradayPaperEngine:
             benchmark_ticker=decision.benchmark_ticker,
             entry_trigger="Strict 1m trigger after 5m confirmation inside 15m setup and 1d regime.",
             confirmation_condition="All promoted-strategy and strict data gates passed.",
-            entry_price=entry_fill,
-            entry_date=decision.decision_timestamp.date(),
-            opened_at=decision.decision_timestamp,
+            entry_price=None,
+            entry_date=None,
+            opened_at=None,
             stop_loss=decision.stop_price,
             invalidation_level=decision.stop_price,
             target_1=decision.target_price,
             target_2=None,
             trailing_stop=decision.trailing_stop,
-            position_size=quantity,
-            notional_value=quantity * entry_fill,
+            position_size=0.0,
+            notional_value=None,
             risk_amount=quantity * risk_per_share,
             risk_percent=float(decision.sizing.risk_percent if decision.sizing else 0.0),
             expected_risk=quantity * risk_per_share,
-            expected_reward=quantity * max(0.0, float(decision.target_price or entry_fill) - entry_fill),
-            expected_r_multiple=max(0.0, float(decision.target_price or entry_fill) - entry_fill) / risk_per_share,
-            current_price=entry_fill,
+            expected_reward=quantity * max(0.0, float(decision.target_price or observed_entry) - observed_entry),
+            expected_r_multiple=max(0.0, float(decision.target_price or observed_entry) - observed_entry) / risk_per_share,
+            current_price=observed_entry,
             last_managed_bar_at=decision.decision_timestamp,
             duplicate_key=duplicate_key,
-            intraday_metadata={"observed_entry_price": observed_entry, "entry_one_way_bps": one_way_bps},
+            intraday_metadata={"observed_entry_price": observed_entry, "requested_quantity": quantity, "execution_accounted": False},
         )
         db.add(trade)
         db.flush()
-        self._create_ledger_trade(db, game, trade)
         self.paper.append_event(db, trade.id, "INTRADAY_TRADE_CANDIDATE", "Promoted strategy passed all strict intraday gates.", frozen, observed_entry)
-        self.paper.append_event(db, trade.id, "INTRADAY_TRADE_OPENED", "Paper position opened with adverse execution cost model; no broker execution.", {"quantity": quantity, "entry_fill": entry_fill}, entry_fill)
+        request = ExecutionOrderRequest(
+            order_key=f"execution:{duplicate_key}",
+            ticker=trade.ticker,
+            side="BUY",
+            order_type="LIMIT",
+            decision_timestamp=decision.decision_timestamp,
+            theoretical_price=observed_entry,
+            quantity=quantity,
+            limit_price=observed_entry,
+            stop_price=decision.stop_price,
+            target_price=decision.target_price,
+            max_participation_rate=0.05,
+            commission_bps=float(costs.get("commission_bps") or 0.0),
+            latency_bars=1,
+            currency=asset.currency or "USD",
+            account_currency=asset.currency or "USD",
+            fx_rate=1.0,
+        )
+        self.execution.submit(
+            db,
+            request,
+            paper_trade_id=trade.id,
+            validation_id=decision.validation_id,
+            expires_at=decision.decision_timestamp + timedelta(minutes=5),
+        )
+        return trade, True
+
+    def _manage_pending_orders(self, db: Session, *, game: LiveForwardPaperGame, now: datetime) -> dict:
+        orders = db.scalars(
+            select(PaperExecutionOrder)
+            .where(PaperExecutionOrder.status.in_(["SUBMITTED", "PARTIALLY_FILLED"]))
+            .order_by(PaperExecutionOrder.submitted_at, PaperExecutionOrder.id)
+            .limit(100)
+        ).all()
+        processed = opened = expired = new_fills = 0
+        for order in orders:
+            trade = db.get(LiveForwardPaperTrade, order.paper_trade_id) if order.paper_trade_id else None
+            if trade is None or trade.game_id != game.id or trade.trading_mode != INTRADAY_MODE:
+                continue
+            asset = db.scalar(select(Asset).where(func.upper(Asset.ticker) == trade.ticker.upper()).limit(1))
+            if asset is None:
+                continue
+            stored_bars = db.scalars(
+                select(ReplayMarketBar)
+                .where(
+                    ReplayMarketBar.asset_id == asset.id,
+                    ReplayMarketBar.timeframe == "1m",
+                    ReplayMarketBar.bar_timestamp > order.decision_timestamp,
+                    ReplayMarketBar.bar_timestamp <= now,
+                )
+                .order_by(ReplayMarketBar.bar_timestamp)
+                .limit(100)
+            ).all()
+            cost_profile = trade.execution_costs or {}
+            bars = [
+                ExecutionMarketBar(
+                    timestamp=row.bar_timestamp,
+                    open=float(row.open if row.open is not None else row.close),
+                    high=float(row.high if row.high is not None else row.close),
+                    low=float(row.low if row.low is not None else row.close),
+                    close=float(row.close),
+                    volume=float(row.volume or 0.0),
+                    spread_bps=float(cost_profile.get("spread_bps") or 0.0),
+                    volatility_bps=abs(float(row.high or row.close) - float(row.low or row.close)) / max(float(row.close), 0.0001) * 10_000,
+                    session=trade.session_name or "regular",
+                    is_halted=False,
+                )
+                for row in stored_bars
+            ]
+            result = self.execution.process_order(db, order, bars, now=now)
+            processed += 1
+            new_fills += int(result.get("new_fills") or 0)
+            if result["status"] in {"FILLED", "PARTIALLY_FILLED_EXPIRED"} and not bool((trade.intraday_metadata or {}).get("execution_accounted")):
+                self._account_filled_order(db, game=game, trade=trade, order=order)
+                opened += 1
+            elif result["status"] in {"EXPIRED", "REJECTED"}:
+                trade.status = "EXPIRED"
+                trade.close_reason = "ORDER_NOT_FILLED" if result["status"] == "EXPIRED" else (result.get("rejection_reason") or "ORDER_REJECTED")
+                trade.closed_at = now
+                trade.exit_date = now.date()
+                trade.outcome_label = "order_not_filled"
+                trade.lesson_learned = "Approved signal did not produce an executable fill before expiry."
+                self.paper.append_event(db, trade.id, "INTRADAY_ORDER_NOT_FILLED", trade.lesson_learned, result, trade.current_price)
+                self.learning.apply_closed_trade(db, trade)
+                expired += 1
+        return {"orders_processed": processed, "new_fills": new_fills, "trades_opened": opened, "orders_expired": expired}
+
+    def _account_filled_order(self, db: Session, *, game: LiveForwardPaperGame, trade: LiveForwardPaperTrade, order: PaperExecutionOrder) -> None:
+        metadata = dict(trade.intraday_metadata or {})
+        metadata["execution_accounted"] = True
+        metadata["execution_order_id"] = order.id
+        metadata["theoretical_entry_price"] = order.theoretical_price
+        metadata["executed_entry_price"] = order.average_fill_price
+        trade.intraday_metadata = metadata
+        trade.notional_value = float(trade.entry_price or 0.0) * float(trade.position_size or 0.0)
+        risk_per_share = max(0.0001, float(trade.entry_price or 0.0) - float(trade.stop_loss or trade.entry_price or 0.0))
+        trade.risk_amount = risk_per_share * float(trade.position_size or 0.0)
+        trade.expected_risk = trade.risk_amount
+        trade.last_managed_bar_at = trade.opened_at
+        self._create_ledger_trade(db, game, trade)
+        self.paper.append_event(db, trade.id, "INTRADAY_TRADE_OPENED", "Paper position opened only after a later executable fill.", {"order_id": order.id, "quantity": trade.position_size, "theoretical_price": order.theoretical_price, "executed_price": order.average_fill_price}, trade.entry_price)
         game.cash = max(0.0, float(game.cash or 0.0) - float(trade.notional_value or 0.0))
         game.exposure = float(game.exposure or 0.0) + float(trade.notional_value or 0.0)
         game.open_positions = int(game.open_positions or 0) + 1
-        game.updated_at = decision.decision_timestamp
-        return trade, True
+        game.updated_at = trade.opened_at or datetime.utcnow()
 
     def _create_ledger_trade(self, db: Session, game: LiveForwardPaperGame, trade: LiveForwardPaperTrade) -> None:
         ledger_game = ensure_live_trade_game(db)

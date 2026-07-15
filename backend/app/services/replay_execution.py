@@ -22,6 +22,7 @@ class ExecutionCostProfile:
 
     def to_dict(self) -> dict:
         return {
+            "execution_model": "realistic_execution_v1",
             "profile_name": self.profile_name,
             "spread_bps": self.spread_bps,
             "slippage_bps": self.slippage_bps,
@@ -30,6 +31,9 @@ class ExecutionCostProfile:
             "gap_risk_bps": self.gap_risk_bps,
             "one_way_bps": round(self.one_way_bps, 4),
             "total_round_trip_bps": round(self.total_round_trip_bps, 4),
+            "cost_taxonomy": ["spread", "slippage", "commission", "liquidity", "gap", "fx", "borrow"],
+            "estimated_fields": ["spread", "slippage", "liquidity", "gap"],
+            "unavailable_fields": ["fx", "borrow"],
         }
 
 

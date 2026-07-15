@@ -28,6 +28,7 @@ from app.services.pipeline import PipelineService
 from app.services.trading_game import TradingGameSimulator
 from app.services.live_forward_paper_trading import LiveForwardPaperTradingService
 from app.services.intraday_paper_engine import BlumIntradayPaperEngine
+from app.services.alpha_strategy_factory import AlphaStrategyFactory
 from app.services.worker_runtime import runtime_worker_coordinator
 from app.services.adaptive_replay_training import BlumAdaptiveTrainingController
 from app.signals.engine import SignalEngine
@@ -77,6 +78,13 @@ def start_realtime_services() -> None:
         _add_interval_job(run_live_forward_paper_trading_job, minutes=settings.market_refresh_minutes, job_id="live_forward_paper_trading", delay_seconds=390, jitter_seconds=45)
     if settings.intraday_paper_enabled:
         _add_interval_job(run_intraday_paper_trading_job, minutes=settings.intraday_paper_minutes, job_id="intraday_paper_trading", delay_seconds=420, jitter_seconds=15)
+        _add_interval_job(
+            run_paper_execution_lifecycle_job,
+            minutes=settings.paper_execution_lifecycle_minutes,
+            job_id="paper_execution_lifecycle",
+            delay_seconds=435,
+            jitter_seconds=10,
+        )
     _add_interval_job(run_data_gap_repair, minutes=settings.data_gap_repair_minutes, job_id="data_gap_repair", delay_seconds=480, jitter_seconds=45)
     _add_interval_job(run_accuracy_audit_job, minutes=settings.accuracy_audit_minutes, job_id="accuracy_audit", delay_seconds=600, jitter_seconds=45)
     _add_interval_job(run_macro_refresh, minutes=settings.macro_refresh_minutes, job_id="macro_refresh", delay_seconds=720, jitter_seconds=45)
@@ -91,6 +99,14 @@ def start_realtime_services() -> None:
                 delay_seconds=210,
                 jitter_seconds=30,
             )
+            if settings.strategy_factory_enabled:
+                _add_interval_job(
+                    run_alpha_strategy_factory_job,
+                    minutes=settings.strategy_factory_minutes,
+                    job_id="alpha_strategy_factory",
+                    delay_seconds=300,
+                    jitter_seconds=30,
+                )
         if settings.professional_learning_enabled:
             _add_interval_job(
                 run_professional_learning_cycle_job,
@@ -300,6 +316,22 @@ def run_brain_evidence_projection_job() -> None:
 
 def run_intraday_paper_trading_job() -> None:
     _run_job("intraday_paper_trading", lambda db: BlumIntradayPaperEngine().run_once(db, trigger="scheduled"))
+
+
+def run_paper_execution_lifecycle_job() -> None:
+    _run_job("paper_execution_lifecycle", lambda db: BlumIntradayPaperEngine().run_execution_once(db, trigger="scheduled"))
+
+
+def run_alpha_strategy_factory_job() -> None:
+    _run_job(
+        "alpha_strategy_factory",
+        lambda db: AlphaStrategyFactory().run_once(
+            db,
+            max_variants_per_family=settings.strategy_factory_max_variants_per_family,
+            seed=settings.strategy_factory_seed,
+            trigger="scheduled",
+        ),
+    )
 
 
 def run_professional_learning_cycle_job() -> None:

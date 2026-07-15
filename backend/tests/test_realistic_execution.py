@@ -1,0 +1,226 @@
+from __future__ import annotations
+
+from datetime import datetime, timedelta
+
+from sqlalchemy import create_engine, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.core.database import Base
+from app.models import PaperExecutionFill, PaperExecutionOrder
+from app.services.realistic_execution import (
+    ExecutionMarketBar,
+    ExecutionOrderRequest,
+    RealisticExecutionEngine,
+)
+from app.services.paper_execution_lifecycle import PaperOrderLifecycleService
+
+
+NOW = datetime(2026, 7, 15, 14, 30)
+
+
+def order(**overrides) -> ExecutionOrderRequest:
+    payload = {
+        "order_key": "order-1",
+        "ticker": "NVDA",
+        "side": "BUY",
+        "order_type": "LIMIT",
+        "decision_timestamp": NOW,
+        "theoretical_price": 100.0,
+        "quantity": 100.0,
+        "limit_price": 100.0,
+        "stop_price": 98.0,
+        "target_price": 104.0,
+        "max_participation_rate": 0.1,
+        "commission_bps": 1.0,
+        "latency_bars": 0,
+        "currency": "USD",
+        "account_currency": "USD",
+    }
+    payload.update(overrides)
+    return ExecutionOrderRequest(**payload)
+
+
+def bar(minutes: int, **overrides) -> ExecutionMarketBar:
+    payload = {
+        "timestamp": NOW + timedelta(minutes=minutes),
+        "open": 100.4,
+        "high": 100.8,
+        "low": 99.8,
+        "close": 100.2,
+        "volume": 500.0,
+        "spread_bps": 4.0,
+        "volatility_bps": 25.0,
+        "session": "regular",
+        "is_halted": False,
+    }
+    payload.update(overrides)
+    return ExecutionMarketBar(**payload)
+
+
+def test_order_never_fills_from_decision_or_earlier_bar() -> None:
+    engine = RealisticExecutionEngine()
+    result = engine.evaluate(order(), [bar(-1), bar(0)])
+
+    assert result.status == "SUBMITTED"
+    assert result.fills == ()
+    assert result.reason == "NO_LATER_EXECUTABLE_BAR"
+
+
+def test_limit_order_remains_unfilled_without_cross() -> None:
+    result = RealisticExecutionEngine().evaluate(order(limit_price=99.0), [bar(1, low=99.2)])
+
+    assert result.status == "SUBMITTED"
+    assert result.filled_quantity == 0
+    assert result.reason == "ORDER_NOT_FILLED"
+
+
+def test_partial_fill_respects_volume_participation() -> None:
+    result = RealisticExecutionEngine().evaluate(order(quantity=100), [bar(1, volume=500, low=99.5)])
+
+    assert result.status == "PARTIALLY_FILLED"
+    assert result.filled_quantity == 50
+    assert result.remaining_quantity == 50
+    assert result.average_fill_price <= 100.0
+    assert result.costs.total_cost > 0
+
+
+def test_multiple_later_bars_can_complete_partial_order() -> None:
+    result = RealisticExecutionEngine().evaluate(
+        order(quantity=100),
+        [bar(1, volume=500, low=99.5), bar(2, volume=600, low=99.4)],
+    )
+
+    assert result.status == "FILLED"
+    assert result.filled_quantity == 100
+    assert len(result.fills) == 2
+
+
+def test_missing_fx_rate_blocks_cross_currency_fill() -> None:
+    result = RealisticExecutionEngine().evaluate(order(account_currency="EUR", currency="USD", fx_rate=None), [bar(1)])
+
+    assert result.status == "REJECTED"
+    assert result.reason == "FX_RATE_UNAVAILABLE"
+
+
+def test_gap_through_stop_uses_first_later_executable_open() -> None:
+    engine = RealisticExecutionEngine()
+    result = engine.evaluate_exit(
+        side="LONG",
+        quantity=10,
+        entry_price=100.0,
+        stop_price=98.0,
+        target_price=104.0,
+        decision_timestamp=NOW,
+        bars=[bar(1, open=96.0, high=97.0, low=95.5, close=96.5)],
+    )
+
+    assert result.status == "CLOSED"
+    assert result.reason == "STOP_HIT"
+    assert result.average_fill_price < 98.0
+
+
+def test_same_bar_stop_and_target_uses_conservative_stop_ordering() -> None:
+    result = RealisticExecutionEngine().evaluate_exit(
+        side="LONG",
+        quantity=10,
+        entry_price=100.0,
+        stop_price=98.0,
+        target_price=104.0,
+        decision_timestamp=NOW,
+        bars=[bar(1, open=100.0, high=105.0, low=97.0, close=102.0)],
+    )
+
+    assert result.status == "CLOSED"
+    assert result.reason == "STOP_HIT"
+
+
+def test_execution_ledger_deduplicates_orders_and_fills() -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        row = PaperExecutionOrder(
+            order_uid="paper-order-1",
+            duplicate_key="paper-order-key",
+            ticker="NVDA",
+            side="BUY",
+            order_type="LIMIT",
+            status="SUBMITTED",
+            decision_timestamp=NOW,
+            submitted_at=NOW,
+            theoretical_price=100.0,
+            requested_quantity=10.0,
+            remaining_quantity=10.0,
+        )
+        db.add(row)
+        db.flush()
+        db.add(
+            PaperExecutionFill(
+                order_id=row.id,
+                fill_uid="fill-1",
+                market_timestamp=NOW + timedelta(minutes=1),
+                quantity=5.0,
+                reference_price=99.9,
+                executed_price=100.0,
+            )
+        )
+        db.commit()
+        db.add(
+            PaperExecutionOrder(
+                order_uid="paper-order-2",
+                duplicate_key="paper-order-key",
+                ticker="NVDA",
+                side="BUY",
+                order_type="LIMIT",
+                status="SUBMITTED",
+                decision_timestamp=NOW,
+                submitted_at=NOW,
+                theoretical_price=100.0,
+                requested_quantity=10.0,
+                remaining_quantity=10.0,
+            )
+        )
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+        else:
+            raise AssertionError("duplicate execution order was accepted")
+
+
+def test_paper_order_lifecycle_is_idempotent_and_uses_later_bars() -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        service = PaperOrderLifecycleService()
+        created = service.submit(db, order(quantity=100))
+        duplicate = service.submit(db, order(quantity=100))
+        assert created.id == duplicate.id
+        assert created.status == "SUBMITTED"
+
+        first = service.process_order(db, created, [bar(0), bar(1, volume=500, low=99.5)])
+        repeated = service.process_order(db, created, [bar(1, volume=500, low=99.5)])
+        second = service.process_order(db, created, [bar(2, volume=600, low=99.4)])
+        fills = db.scalars(select(PaperExecutionFill).where(PaperExecutionFill.order_id == created.id)).all()
+
+    assert first["status"] == "PARTIALLY_FILLED"
+    assert repeated["new_fills"] == 0
+    assert second["status"] == "FILLED"
+    assert len(fills) == 2
+    assert created.theoretical_price == 100.0
+    assert created.average_fill_price is not None
+    assert all(fill.spread_cost + fill.slippage_cost + fill.commission_cost > 0 for fill in fills)
+
+
+def test_partial_fill_opens_at_expiry_and_cancels_only_remainder() -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        service = PaperOrderLifecycleService()
+        created = service.submit(db, order(quantity=100), expires_at=NOW + timedelta(minutes=1))
+        result = service.process_order(db, created, [bar(1, volume=500, low=99.5)], now=NOW + timedelta(minutes=2))
+
+    assert result["status"] == "PARTIALLY_FILLED_EXPIRED"
+    assert result["filled_quantity"] == 50
+    assert result["remaining_quantity"] == 50
+    assert result["rejection_reason"] == "PARTIAL_FILL_REMAINDER_CANCELLED"

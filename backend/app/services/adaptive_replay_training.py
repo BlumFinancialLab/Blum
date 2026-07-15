@@ -18,6 +18,7 @@ from app.services.hyperbolic_replay import BlumHyperbolicReplayEngine, ReplayRun
 from app.services.performance import performance_recorder
 from app.services.replay_validation import ReplayExperimentService, ReplayLearningFeedbackService, ReplayWalkForwardValidator
 from app.services.worker_runtime import runtime_worker_coordinator
+from app.services.alpha_strategy_factory import strategy_factory_snapshot
 
 
 REPLAY_SNAPSHOT_TYPE = "hyperbolic_replay_training_summary"
@@ -144,6 +145,7 @@ class ReplayTrainingSnapshotService:
             "warnings": [],
             "snapshot_status": snapshot_status,
             "evidence_policy": "Replay evidence remains separate from paper-forward and live-forward evidence.",
+            "strategy_factory": {"status": "NO_FACTORY_RUNS", "examined_variants": 0, "promoted_to_paper": 0},
         }
 
 
@@ -358,6 +360,7 @@ class BlumAdaptiveTrainingController:
             "reason_if_target_missed": reason,
             "blockers": run_summary.get("blockers") or [],
             "warnings": [reason] if reason and validated_today < self.config.target_trades_per_day else [],
+            "strategy_factory": strategy_factory_snapshot(db),
         }
 
     def _miss_reason(self, summary: dict, state: str) -> str:

@@ -1862,6 +1862,26 @@ Key controls include `BLUM_INTRADAY_PAPER_ENABLED`, `BLUM_INTRADAY_PAPER_MINUTES
 
 This engine is paper-only. It has no broker integration, performs no real-money execution and does not force trades when promotion, data or execution-quality gates fail.
 
+## Alpha Strategy Factory and Realistic Execution
+
+BLUM now treats strategy research as a bounded scientific pipeline rather than promoting a setup from an attractive backtest. The scheduled `alpha_strategy_factory` worker generates deterministic variants across momentum, trend, breakout, pullback, mean reversion, volatility expansion, event reaction, relative strength, cross-sectional ranking and intraday scalping families. It evaluates persisted point-in-time replay evidence and records every rejection, challenger and reversible champion promotion.
+
+Promotion requires at least 300 evaluated trades, purged chronological folds with embargo, positive net expectancy and benchmark excess, a positive block-bootstrap lower bound, multiple-testing significance, acceptable Deflated Sharpe and backtest-overfitting probabilities, multi-window/market/regime stability, controlled drawdown, complete execution-cost coverage and non-concentrated P/L. A stored `PROMOTED_TO_PAPER` row is not sufficient by itself: the paper registry accepts only an active champion certified by `alpha_strategy_factory_v1`. Strategies awaiting more samples are automatically reconsidered when replay evidence grows.
+
+Approved intraday candidates now enter a separate persisted order lifecycle. Signals create `paper_execution_orders`; only later stored market bars can create `paper_execution_fills`. The execution model preserves theoretical and executed prices separately and records spread, dynamic slippage, commission, participation, FX/borrow availability and gap risk. It supports partial fills, expires unfilled orders, opens a partial position when an executed remainder is cancelled at expiry, and never invents a same-timestamp fill.
+
+Runtime and UI boundaries:
+
+- `hyperbolic_replay_training` produces historical evidence in bounded background slices.
+- `alpha_strategy_factory` certifies or rejects strategies every configured interval.
+- `intraday_paper_trading` discovers new paper candidates.
+- `paper_execution_lifecycle` advances persisted orders and open positions independently.
+- Training and Paper Forward snapshots expose compact `strategy_factory` and `execution_reality` summaries; GET requests do not run research or execution.
+
+Relevant controls are `BLUM_STRATEGY_FACTORY_ENABLED`, `BLUM_STRATEGY_FACTORY_MINUTES`, `BLUM_STRATEGY_FACTORY_MAX_VARIANTS_PER_FAMILY`, `BLUM_STRATEGY_FACTORY_SEED` and `BLUM_PAPER_EXECUTION_LIFECYCLE_MINUTES`.
+
+This architecture accelerates evidence production, not promotion. A high rejection rate is expected. Replay evidence remains distinct from paper-forward evidence, all fills are simulated research records, and no broker or real-money path exists.
+
 ## Evidence, Trust and Copy Readiness Engine
 
 BLUM measures whether a strategy has enough reproducible evidence to be copied in paper research. The engine keeps four evidence classes strictly separate: `REPLAY_EVIDENCE`, `WALK_FORWARD_EVIDENCE`, `PAPER_FORWARD_EVIDENCE` and `INTRADAY_FORWARD_EVIDENCE`. Replay results can support research, but cannot by themselves promote a strategy to copy-ready status.

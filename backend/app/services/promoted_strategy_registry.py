@@ -4,7 +4,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.models import ReplayStrategyValidation
+from app.models import ReplayStrategyValidation, StrategyCandidateVariant
 from app.services.intraday_contracts import PromotedIntradayStrategy, REQUIRED_INTRADAY_TIMEFRAMES
 
 
@@ -17,7 +17,9 @@ class BlumPromotedStrategyRegistry:
     def list_eligible(self, db: Session, *, market: str, asset_class: str) -> list[PromotedIntradayStrategy]:
         rows = db.scalars(
             select(ReplayStrategyValidation)
+            .join(StrategyCandidateVariant, StrategyCandidateVariant.validation_id == ReplayStrategyValidation.id)
             .where(ReplayStrategyValidation.verdict == "PROMOTED_TO_PAPER")
+            .where(StrategyCandidateVariant.is_champion.is_(True))
             .order_by(desc(ReplayStrategyValidation.created_at), desc(ReplayStrategyValidation.id))
         ).all()
         latest_by_setup: dict[str, ReplayStrategyValidation] = {}
@@ -33,7 +35,9 @@ class BlumPromotedStrategyRegistry:
     def status(self, db: Session) -> dict:
         promoted = db.scalars(
             select(ReplayStrategyValidation)
+            .join(StrategyCandidateVariant, StrategyCandidateVariant.validation_id == ReplayStrategyValidation.id)
             .where(ReplayStrategyValidation.verdict == "PROMOTED_TO_PAPER")
+            .where(StrategyCandidateVariant.is_champion.is_(True))
             .order_by(desc(ReplayStrategyValidation.created_at))
         ).all()
         eligible = [projection for row in promoted if (projection := self._project(row)) is not None]
@@ -47,6 +51,10 @@ class BlumPromotedStrategyRegistry:
 
     def _project(self, row: ReplayStrategyValidation) -> PromotedIntradayStrategy | None:
         metrics = row.metrics_json if isinstance(row.metrics_json, dict) else {}
+        if metrics.get("certification_version") != "alpha_strategy_factory_v1":
+            return None
+        if not bool(metrics.get("multiple_testing_significant")):
+            return None
         sample_size = int(row.sample_size or 0)
         stability = number(metrics.get("stability_score"), 0.0)
         expectancy = number(metrics.get("expectancy_r"), 0.0)

@@ -1,0 +1,301 @@
+from __future__ import annotations
+
+from datetime import datetime, timedelta
+
+from sqlalchemy import create_engine
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.core.database import Base
+from app.models import (
+    PaperExecutionOrder,
+    ReplayStrategyValidation,
+    StrategyCandidateVariant,
+    StrategyFactoryRun,
+    StrategyPromotionEvent,
+    StrategyValidationFold,
+)
+from app.services.alpha_strategy_factory import (
+    AlphaStrategyFactory,
+    ChampionChallengerRegistry,
+    StrategyFamilyRegistry,
+    strategy_factory_snapshot,
+)
+from app.services.strategy_factory_statistics import (
+    backtest_overfitting_probability,
+    benjamini_hochberg,
+    block_bootstrap_interval,
+    build_purged_folds,
+    evaluate_strategy_robustness,
+)
+from app.services.paper_execution_lifecycle import execution_reality_snapshot
+from app.services.worker_runtime import WORKER_DEFINITIONS
+
+
+def test_purged_walk_forward_excludes_overlap_and_embargo() -> None:
+    start = datetime(2024, 1, 1)
+    timestamps = [start + timedelta(days=index) for index in range(120)]
+
+    folds = build_purged_folds(timestamps, n_splits=3, purge_bars=5, embargo_bars=3)
+
+    assert len(folds) == 3
+    for fold in folds:
+        assert fold.train_indices
+        assert fold.validation_indices
+        assert max(fold.train_indices) <= min(fold.validation_indices) - 6
+        assert fold.embargo_end_index == min(119, max(fold.validation_indices) + 3)
+        assert set(fold.train_indices).isdisjoint(fold.validation_indices)
+
+
+def test_block_bootstrap_interval_is_seeded_and_conservative() -> None:
+    values = [0.15, 0.25, 0.1, 0.35, -0.05, 0.3] * 60
+
+    first = block_bootstrap_interval(values, iterations=400, block_size=5, seed=17)
+    second = block_bootstrap_interval(values, iterations=400, block_size=5, seed=17)
+
+    assert first == second
+    assert first.lower < first.mean < first.upper
+    assert first.lower > 0
+
+
+def test_multiple_testing_correction_rejects_raw_only_false_positive() -> None:
+    adjusted = benjamini_hochberg([0.005, 0.03, 0.04, 0.2, 0.8], false_discovery_rate=0.05)
+
+    assert adjusted[0].raw_p_value == 0.005
+    assert adjusted[0].adjusted_p_value == 0.025
+    assert adjusted[0].significant is True
+    assert adjusted[1].significant is False
+    assert adjusted[2].significant is False
+
+
+def test_backtest_overfitting_probability_penalizes_rank_reversals() -> None:
+    stable = backtest_overfitting_probability([(1, 1), (1, 1), (2, 2), (1, 2)], variants=8)
+    unstable = backtest_overfitting_probability([(1, 8), (1, 7), (2, 8), (1, 6)], variants=8)
+
+    assert stable < unstable
+    assert unstable >= 0.75
+
+
+def strong_evidence(**overrides):
+    evidence = {
+        "sample_size": 360,
+        "returns_r": [0.4, -0.2, 0.8, 0.1, 0.5, -0.1] * 60,
+        "benchmark_excess_returns": [0.3, -0.1, 0.6, 0.1, 0.4, -0.05] * 60,
+        "markets": ["USA", "GERMANY"],
+        "tickers": ["AAPL", "MSFT", "SAP", "NVDA"],
+        "regimes": ["risk_on", "range_bound", "risk_off"],
+        "windows": [{"id": "w1"}, {"id": "w2"}, {"id": "w3"}],
+        "max_drawdown": -9.0,
+        "raw_p_value": 0.001,
+        "adjusted_p_value": 0.01,
+        "multiple_testing_significant": True,
+        "overfitting_probability": 0.15,
+        "deflated_sharpe_probability": 0.97,
+        "stability_by_window": [72.0, 78.0, 75.0],
+        "stability_by_market": [70.0, 74.0],
+        "stability_by_regime": [68.0, 73.0, 71.0],
+        "asset_pnl_contributions": {"AAPL": 0.28, "MSFT": 0.25, "SAP": 0.23, "NVDA": 0.24},
+        "cost_coverage": 1.0,
+        "data_quality_score": 92.0,
+        "complexity": 5,
+    }
+    evidence.update(overrides)
+    return evidence
+
+
+def setup_db() -> Session:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    return Session(engine)
+
+
+def test_strategy_factory_persistence_is_deduplicated_and_auditable() -> None:
+    with setup_db() as db:
+        run = StrategyFactoryRun(run_uid="factory-1", hypothesis_family="momentum", generation_seed=7, status="RUNNING")
+        db.add(run)
+        db.flush()
+        candidate = StrategyCandidateVariant(
+            factory_run_id=run.id,
+            fingerprint="candidate-fingerprint",
+            family="momentum",
+            setup_type="momentum_breakout",
+            specification_json={"entry": "close_breakout"},
+            lifecycle_state="VALIDATING",
+        )
+        db.add(candidate)
+        db.flush()
+        db.add(
+            StrategyValidationFold(
+                candidate_id=candidate.id,
+                fold_number=1,
+                train_start=datetime(2023, 1, 1),
+                train_end=datetime(2023, 6, 1),
+                validation_start=datetime(2023, 6, 8),
+                validation_end=datetime(2023, 9, 1),
+                purge_bars=5,
+                embargo_bars=3,
+                train_count=120,
+                validation_count=60,
+            )
+        )
+        db.add(
+            StrategyPromotionEvent(
+                candidate_id=candidate.id,
+                registry_key="momentum:USA:Stock:1d-15m-5m-1m",
+                event_type="PROMOTED",
+                reason="all gates passed",
+                reversible=True,
+            )
+        )
+        db.commit()
+
+        db.add(
+            StrategyCandidateVariant(
+                factory_run_id=run.id,
+                fingerprint="candidate-fingerprint",
+                family="momentum",
+                setup_type="momentum_breakout",
+            )
+        )
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+        else:
+            raise AssertionError("duplicate candidate fingerprint was accepted")
+
+
+def test_299_trades_cannot_promote() -> None:
+    result = evaluate_strategy_robustness(strong_evidence(sample_size=299))
+
+    assert result.verdict == "NEEDS_MORE_EVIDENCE"
+    assert "300" in result.reason
+
+
+def test_costs_and_concentration_receive_distinct_rejections() -> None:
+    costs = evaluate_strategy_robustness(
+        strong_evidence(returns_r=[-0.1, -0.2, 0.05] * 120, benchmark_excess_returns=[-0.2] * 360)
+    )
+    concentrated = evaluate_strategy_robustness(
+        strong_evidence(asset_pnl_contributions={"NVDA": 0.82, "AAPL": 0.08, "MSFT": 0.1})
+    )
+
+    assert costs.verdict == "REJECTED_COSTS"
+    assert concentrated.verdict == "REJECTED_CONCENTRATION"
+
+
+def test_strong_multi_market_evidence_can_promote() -> None:
+    result = evaluate_strategy_robustness(strong_evidence())
+
+    assert result.verdict == "PROMOTED_TO_PAPER"
+    assert result.sample_size == 360
+    assert result.bootstrap_lower_bound > 0
+    assert result.net_expectancy_r > 0
+    assert result.benchmark_excess > 0
+
+
+def test_initial_strategy_family_registry_is_complete_and_bounded() -> None:
+    registry = StrategyFamilyRegistry()
+
+    assert set(registry.names()) == {
+        "momentum",
+        "trend_following",
+        "breakout",
+        "pullback",
+        "mean_reversion",
+        "volatility_expansion",
+        "earnings_news_reaction",
+        "relative_strength",
+        "cross_sectional_ranking",
+        "intraday_scalping",
+    }
+    first = registry.variants("intraday_scalping", max_variants=4, seed=11)
+    second = registry.variants("intraday_scalping", max_variants=4, seed=11)
+    assert first == second
+    assert len(first) == 4
+    assert all(row["timeframe_stack"] == ["1d", "15m", "5m", "1m"] for row in first)
+    assert first[0]["evidence_binding"] == "hyperbolic_replay_v1"
+    assert all(row["evidence_binding"] == "not_implemented" for row in first[1:])
+
+
+def test_factory_run_is_idempotent_and_reports_missing_evidence() -> None:
+    with setup_db() as db:
+        factory = AlphaStrategyFactory()
+        first = factory.run_once(db, families=["momentum"], max_variants_per_family=2, seed=5, trigger="test")
+        second = factory.run_once(db, families=["momentum"], max_variants_per_family=2, seed=5, trigger="test")
+        snapshot = strategy_factory_snapshot(db)
+
+    assert first["variants_examined"] == 2
+    assert first["rejection_counts"]["NEEDS_MORE_EVIDENCE"] == 2
+    assert second["new_candidates"] == 0
+    assert snapshot["examined_variants"] == 2
+    assert snapshot["promoted_to_paper"] == 0
+
+
+def test_champion_challenger_promotion_is_reversible_and_audited() -> None:
+    with setup_db() as db:
+        run = StrategyFactoryRun(run_uid="champion-run", hypothesis_family="momentum", generation_seed=1, status="COMPLETED")
+        db.add(run)
+        db.flush()
+        candidates = []
+        validations = []
+        for index in (1, 2):
+            validation = ReplayStrategyValidation(
+                setup_type="momentum_breakout",
+                sample_size=400,
+                markets_json=["USA", "GERMANY"],
+                windows_json=[{"id": "w1"}, {"id": "w2"}],
+                metrics_json=strong_evidence(),
+                overfitting_score=15.0,
+                verdict="PROMOTED_TO_PAPER",
+                explanation="all gates passed",
+            )
+            db.add(validation)
+            db.flush()
+            candidate = StrategyCandidateVariant(
+                factory_run_id=run.id,
+                validation_id=validation.id,
+                fingerprint=f"champion-{index}",
+                family="momentum",
+                setup_type="momentum_breakout",
+                market="USA",
+                asset_class="Stock",
+                timeframe_stack=["1d", "15m", "5m", "1m"],
+                final_verdict="PROMOTED_TO_PAPER",
+            )
+            db.add(candidate)
+            db.flush()
+            candidates.append(candidate)
+            validations.append(validation)
+
+        registry = ChampionChallengerRegistry()
+        first = registry.promote(db, candidates[0], validations[0])
+        second = registry.promote(db, candidates[1], validations[1])
+        db.commit()
+        db.refresh(candidates[0])
+        db.refresh(candidates[1])
+
+    assert first["status"] == "promoted"
+    assert second["previous_candidate_id"] == candidates[0].id
+    assert candidates[0].is_champion is False
+    assert candidates[1].is_champion is True
+    assert second["reversible"] is True
+
+
+def test_factory_and_execution_workers_are_independently_registered() -> None:
+    assert WORKER_DEFINITIONS["alpha_strategy_factory"].queue_name == "strategy_research"
+    assert WORKER_DEFINITIONS["paper_execution_lifecycle"].queue_name == "paper_execution"
+
+
+def test_factory_and_execution_snapshots_are_read_only() -> None:
+    with setup_db() as db:
+        before_runs = db.query(StrategyFactoryRun).count()
+        before_orders = db.query(PaperExecutionOrder).count()
+        factory = strategy_factory_snapshot(db)
+        execution = execution_reality_snapshot(db)
+        after_runs = db.query(StrategyFactoryRun).count()
+        after_orders = db.query(PaperExecutionOrder).count()
+
+    assert factory["status"] == "NO_FACTORY_RUNS"
+    assert execution["status"] == "NO_EXECUTION_ORDERS"
+    assert (before_runs, before_orders) == (after_runs, after_orders)

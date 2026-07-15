@@ -3934,3 +3934,163 @@ class EvidenceTimelineEvent(Base):
     payload_json: Mapped[dict] = mapped_column(JsonType, default=dict)
     event_timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class StrategyFactoryRun(Base):
+    __tablename__ = "strategy_factory_runs"
+    __table_args__ = (
+        Index("ix_strategy_factory_runs_family_started", "hypothesis_family", "started_at"),
+        Index("ix_strategy_factory_runs_status_started", "status", "started_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_uid: Mapped[str] = mapped_column(String(140), unique=True, index=True)
+    hypothesis_family: Mapped[str] = mapped_column(String(80), index=True)
+    generation_seed: Mapped[int] = mapped_column(Integer, default=7)
+    status: Mapped[str] = mapped_column(String(60), default="RUNNING", index=True)
+    variants_examined: Mapped[int] = mapped_column(Integer, default=0)
+    promoted_count: Mapped[int] = mapped_column(Integer, default=0)
+    rejection_counts_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    budgets_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    summary_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class StrategyCandidateVariant(Base):
+    __tablename__ = "strategy_candidate_variants"
+    __table_args__ = (
+        UniqueConstraint("fingerprint", name="uq_strategy_candidate_variants_fingerprint"),
+        Index("ix_strategy_candidate_variants_family_verdict", "family", "final_verdict"),
+        Index("ix_strategy_candidate_variants_state_created", "lifecycle_state", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    factory_run_id: Mapped[int] = mapped_column(ForeignKey("strategy_factory_runs.id", ondelete="CASCADE"), index=True)
+    validation_id: Mapped[int | None] = mapped_column(ForeignKey("replay_strategy_validations.id", ondelete="SET NULL"), index=True)
+    fingerprint: Mapped[str] = mapped_column(String(96), index=True)
+    family: Mapped[str] = mapped_column(String(80), index=True)
+    setup_type: Mapped[str] = mapped_column(String(100), index=True)
+    market: Mapped[str] = mapped_column(String(80), default="global", index=True)
+    asset_class: Mapped[str] = mapped_column(String(60), default="stocks,etfs", index=True)
+    timeframe_stack: Mapped[list] = mapped_column(JsonType, default=list)
+    specification_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    complexity: Mapped[int] = mapped_column(Integer, default=1)
+    benchmark_ticker: Mapped[str] = mapped_column(String(32), default="SPY", index=True)
+    lifecycle_state: Mapped[str] = mapped_column(String(60), default="GENERATED", index=True)
+    final_verdict: Mapped[str | None] = mapped_column(String(80), index=True)
+    is_champion: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
+class StrategyValidationFold(Base):
+    __tablename__ = "strategy_validation_folds"
+    __table_args__ = (
+        UniqueConstraint("candidate_id", "fold_number", name="uq_strategy_validation_folds_candidate_fold"),
+        Index("ix_strategy_validation_folds_candidate_validation", "candidate_id", "validation_start"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    candidate_id: Mapped[int] = mapped_column(ForeignKey("strategy_candidate_variants.id", ondelete="CASCADE"), index=True)
+    fold_number: Mapped[int] = mapped_column(Integer)
+    train_start: Mapped[datetime] = mapped_column(DateTime)
+    train_end: Mapped[datetime] = mapped_column(DateTime)
+    validation_start: Mapped[datetime] = mapped_column(DateTime, index=True)
+    validation_end: Mapped[datetime] = mapped_column(DateTime)
+    purge_bars: Mapped[int] = mapped_column(Integer, default=0)
+    embargo_bars: Mapped[int] = mapped_column(Integer, default=0)
+    train_count: Mapped[int] = mapped_column(Integer, default=0)
+    validation_count: Mapped[int] = mapped_column(Integer, default=0)
+    metrics_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    coverage_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    warnings_json: Mapped[list] = mapped_column(JsonType, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class StrategyPromotionEvent(Base):
+    __tablename__ = "strategy_promotion_events"
+    __table_args__ = (
+        Index("ix_strategy_promotion_events_registry_time", "registry_key", "created_at"),
+        Index("ix_strategy_promotion_events_candidate_type", "candidate_id", "event_type"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    candidate_id: Mapped[int] = mapped_column(ForeignKey("strategy_candidate_variants.id", ondelete="CASCADE"), index=True)
+    validation_id: Mapped[int | None] = mapped_column(ForeignKey("replay_strategy_validations.id", ondelete="SET NULL"), index=True)
+    previous_candidate_id: Mapped[int | None] = mapped_column(ForeignKey("strategy_candidate_variants.id", ondelete="SET NULL"), index=True)
+    registry_key: Mapped[str] = mapped_column(String(240), index=True)
+    event_type: Mapped[str] = mapped_column(String(60), index=True)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    evidence_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    reversible: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class PaperExecutionOrder(Base):
+    __tablename__ = "paper_execution_orders"
+    __table_args__ = (
+        UniqueConstraint("order_uid", name="uq_paper_execution_orders_uid"),
+        UniqueConstraint("duplicate_key", name="uq_paper_execution_orders_duplicate_key"),
+        Index("ix_paper_execution_orders_status_submitted", "status", "submitted_at"),
+        Index("ix_paper_execution_orders_ticker_decision", "ticker", "decision_timestamp"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    order_uid: Mapped[str] = mapped_column(String(140), index=True)
+    duplicate_key: Mapped[str] = mapped_column(String(220), index=True)
+    paper_trade_id: Mapped[int | None] = mapped_column(ForeignKey("live_forward_paper_trades.id", ondelete="SET NULL"), index=True)
+    replay_trade_id: Mapped[int | None] = mapped_column(ForeignKey("hyperbolic_replay_trades.id", ondelete="SET NULL"), index=True)
+    validation_id: Mapped[int | None] = mapped_column(ForeignKey("replay_strategy_validations.id", ondelete="SET NULL"), index=True)
+    candidate_id: Mapped[int | None] = mapped_column(ForeignKey("strategy_candidate_variants.id", ondelete="SET NULL"), index=True)
+    ticker: Mapped[str] = mapped_column(String(48), index=True)
+    side: Mapped[str] = mapped_column(String(12), index=True)
+    order_type: Mapped[str] = mapped_column(String(24), index=True)
+    status: Mapped[str] = mapped_column(String(40), default="SUBMITTED", index=True)
+    decision_timestamp: Mapped[datetime] = mapped_column(DateTime, index=True)
+    submitted_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    theoretical_price: Mapped[float] = mapped_column(Float)
+    requested_quantity: Mapped[float] = mapped_column(Float)
+    filled_quantity: Mapped[float] = mapped_column(Float, default=0.0)
+    remaining_quantity: Mapped[float] = mapped_column(Float, default=0.0)
+    average_fill_price: Mapped[float | None] = mapped_column(Float)
+    limit_price: Mapped[float | None] = mapped_column(Float)
+    stop_price: Mapped[float | None] = mapped_column(Float)
+    target_price: Mapped[float | None] = mapped_column(Float)
+    currency: Mapped[str] = mapped_column(String(16), default="USD")
+    account_currency: Mapped[str] = mapped_column(String(16), default="USD")
+    fx_rate: Mapped[float | None] = mapped_column(Float)
+    rejection_reason: Mapped[str | None] = mapped_column(Text)
+    order_payload: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
+class PaperExecutionFill(Base):
+    __tablename__ = "paper_execution_fills"
+    __table_args__ = (
+        UniqueConstraint("fill_uid", name="uq_paper_execution_fills_uid"),
+        Index("ix_paper_execution_fills_order_market_time", "order_id", "market_timestamp"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("paper_execution_orders.id", ondelete="CASCADE"), index=True)
+    fill_uid: Mapped[str] = mapped_column(String(180), index=True)
+    market_timestamp: Mapped[datetime] = mapped_column(DateTime, index=True)
+    quantity: Mapped[float] = mapped_column(Float)
+    reference_price: Mapped[float] = mapped_column(Float)
+    executed_price: Mapped[float] = mapped_column(Float)
+    spread_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    slippage_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    commission_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    spread_cost: Mapped[float] = mapped_column(Float, default=0.0)
+    slippage_cost: Mapped[float] = mapped_column(Float, default=0.0)
+    commission_cost: Mapped[float] = mapped_column(Float, default=0.0)
+    fx_cost: Mapped[float] = mapped_column(Float, default=0.0)
+    borrow_cost: Mapped[float] = mapped_column(Float, default=0.0)
+    gap_cost: Mapped[float] = mapped_column(Float, default=0.0)
+    participation_rate: Mapped[float] = mapped_column(Float, default=0.0)
+    fill_payload: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)

@@ -16,8 +16,12 @@ from app.models import (
     LiveForwardPaperGame,
     LiveForwardPaperTrade,
     LiveForwardPaperTradeEvent,
+    PaperExecutionFill,
+    PaperExecutionOrder,
     ReplayMarketBar,
     ReplayStrategyValidation,
+    StrategyCandidateVariant,
+    StrategyFactoryRun,
     StrategyMemory,
     TradeLearningEvidence,
 )
@@ -68,30 +72,56 @@ def seed_validation(
     metrics: dict | None = None,
     overfitting_score: float = 15.0,
 ) -> ReplayStrategyValidation:
+    factory_run = StrategyFactoryRun(
+        run_uid=f"fixture-{setup_type}-{sample_size}-{len(db.new)}",
+        hypothesis_family="intraday_scalping",
+        generation_seed=7,
+        status="COMPLETED",
+    )
+    db.add(factory_run)
+    db.flush()
+    default_metrics = {
+        "benchmark_excess": 4.0,
+        "expectancy_r": 0.25,
+        "stability_score": 75.0,
+        "walk_forward_score": 70.0,
+        "max_drawdown": -8.0,
+        "candidate_weights": {"momentum": 0.35},
+        "timeframe_stack": ["1d", "15m", "5m", "1m"],
+        "entry_rules": {"trigger": "one_minute_breakout"},
+        "stop_rules": {"atr_multiple": 1.0},
+        "target_rules": {"risk_multiple": 1.8},
+        "certification_version": "alpha_strategy_factory_v1",
+        "multiple_testing_significant": True,
+    }
     row = ReplayStrategyValidation(
         setup_type=setup_type,
         sample_size=sample_size,
         markets_json=markets or ["USA", "GERMANY"],
         windows_json=[{"id": "w1"}, {"id": "w2"}, {"id": "w3"}],
-        metrics_json=metrics
-        or {
-            "benchmark_excess": 4.0,
-            "expectancy_r": 0.25,
-            "stability_score": 75.0,
-            "walk_forward_score": 70.0,
-            "max_drawdown": -8.0,
-            "candidate_weights": {"momentum": 0.35},
-            "timeframe_stack": ["1d", "15m", "5m", "1m"],
-            "entry_rules": {"trigger": "one_minute_breakout"},
-            "stop_rules": {"atr_multiple": 1.0},
-            "target_rules": {"risk_multiple": 1.8},
-        },
+        metrics_json={**default_metrics, **(metrics or {})},
         overfitting_score=overfitting_score,
         verdict=verdict,
         explanation="fixture",
         created_at=NOW,
     )
     db.add(row)
+    db.flush()
+    db.add(
+        StrategyCandidateVariant(
+            factory_run_id=factory_run.id,
+            validation_id=row.id,
+            fingerprint=f"fixture-{setup_type}-{row.id}",
+            family="intraday_scalping",
+            setup_type=setup_type,
+            market="global",
+            asset_class="stocks,etfs",
+            timeframe_stack=["1d", "15m", "5m", "1m"],
+            lifecycle_state="PROMOTED",
+            final_verdict=verdict,
+            is_champion=verdict == "PROMOTED_TO_PAPER" and sample_size >= 300,
+        )
+    )
     db.flush()
     return row
 
@@ -279,23 +309,56 @@ def test_run_opens_only_promoted_triggered_candidate_with_adverse_fill():
             .order_by(ReplayMarketBar.bar_timestamp.desc())
             .limit(1)
         )
-        engine = BlumIntradayPaperEngine(now_provider=lambda: NOW, refresh_missing=False)
+        clock = {"now": NOW}
+        engine = BlumIntradayPaperEngine(now_provider=lambda: clock["now"], refresh_missing=False)
 
         first = engine.run_once(db, trigger="test", assets=[asset])
         second = engine.run_once(db, trigger="test", assets=[asset])
+        for minute in (1, 2):
+            close = float(observed_price) + 0.02
+            db.add(
+                ReplayMarketBar(
+                    asset_id=asset.id,
+                    source_symbol=asset.ticker,
+                    normalized_symbol=asset.ticker,
+                    market=asset.country,
+                    timeframe="1m",
+                    bar_timestamp=NOW + timedelta(minutes=minute),
+                    open=close,
+                    high=close + 0.1,
+                    low=float(observed_price) - 0.1,
+                    close=close,
+                    volume=3_000_000,
+                    provider="fixture",
+                    acquired_at=NOW + timedelta(minutes=minute),
+                    data_quality_score=95.0,
+                    source_metadata={"source": "test"},
+                )
+            )
+        db.commit()
+        clock["now"] = NOW + timedelta(minutes=2)
+        filled = engine.run_once(db, trigger="test", assets=[asset])
         trade = db.scalar(select(LiveForwardPaperTrade).where(LiveForwardPaperTrade.evidence_type == PAPER_FORWARD_INTRADAY))
+        execution_order = db.scalar(select(PaperExecutionOrder).where(PaperExecutionOrder.paper_trade_id == trade.id))
+        execution_fills = db.scalars(select(PaperExecutionFill).where(PaperExecutionFill.order_id == execution_order.id)).all()
         events = db.scalars(
             select(LiveForwardPaperTradeEvent)
             .where(LiveForwardPaperTradeEvent.paper_trade_id == trade.id)
             .order_by(LiveForwardPaperTradeEvent.id)
         ).all()
 
-    assert first["trades_opened"] == 1
+    assert first["trades_opened"] == 0
     assert second["trades_opened"] == 0
+    assert filled["trades_opened"] == 1
     assert trade is not None
-    assert trade.entry_price > observed_price
+    assert execution_order.theoretical_price == observed_price
+    assert execution_order.status == "FILLED"
+    assert trade.entry_price is not None
+    assert execution_fills
+    assert sum(fill.spread_cost + fill.slippage_cost + fill.commission_cost for fill in execution_fills) > 0
     assert trade.frozen_decision_payload["evidence_type"] == PAPER_FORWARD_INTRADAY
-    assert [event.event_type for event in events[:2]] == ["INTRADAY_TRADE_CANDIDATE", "INTRADAY_TRADE_OPENED"]
+    assert events[0].event_type == "INTRADAY_TRADE_CANDIDATE"
+    assert "INTRADAY_TRADE_OPENED" in [event.event_type for event in events]
 
 
 def test_lifecycle_uses_only_later_one_minute_bar_and_closes_stop():
@@ -310,7 +373,31 @@ def test_lifecycle_uses_only_later_one_minute_bar_and_closes_stop():
         frozen_payload = dict(trade.frozen_decision_payload)
         stop = float(trade.stop_loss)
 
-        clock["now"] = NOW + timedelta(minutes=1)
+        theoretical = float((trade.intraday_metadata or {})["observed_entry_price"])
+        for minute in (1, 2):
+            db.add(
+                ReplayMarketBar(
+                    asset_id=asset.id,
+                    source_symbol=asset.ticker,
+                    normalized_symbol=asset.ticker,
+                    market=asset.country,
+                    timeframe="1m",
+                    bar_timestamp=NOW + timedelta(minutes=minute),
+                    open=theoretical + 0.05,
+                    high=theoretical + 0.2,
+                    low=theoretical - 0.1,
+                    close=theoretical + 0.05,
+                    volume=3_000_000,
+                    provider="fixture",
+                    acquired_at=NOW + timedelta(minutes=minute),
+                    data_quality_score=95.0,
+                    source_metadata={"source": "test"},
+                )
+            )
+        db.commit()
+        clock["now"] = NOW + timedelta(minutes=2)
+        filled = engine.run_once(db, trigger="test", assets=[asset])
+        clock["now"] = NOW + timedelta(minutes=3)
         db.add(
             ReplayMarketBar(
                 asset_id=asset.id,
@@ -334,12 +421,13 @@ def test_lifecycle_uses_only_later_one_minute_bar_and_closes_stop():
         closed = engine.run_once(db, trigger="test", assets=[asset])
         db.refresh(trade)
 
-    assert opened["trades_opened"] == 1
+    assert opened["trades_opened"] == 0
+    assert filled["trades_opened"] == 1
     assert closed["trades_closed"] == 1
     assert trade.status == "CLOSED"
     assert trade.close_reason == "STOP_HIT"
-    assert trade.last_managed_bar_at == NOW + timedelta(minutes=1)
-    assert trade.closed_at == NOW + timedelta(minutes=1)
+    assert trade.last_managed_bar_at == NOW + timedelta(minutes=3)
+    assert trade.closed_at == NOW + timedelta(minutes=3)
     assert trade.frozen_decision_payload == frozen_payload
     assert trade.net_pnl_eur < 0
 

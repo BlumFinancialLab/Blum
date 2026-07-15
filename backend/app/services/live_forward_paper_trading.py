@@ -844,8 +844,10 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
     def snapshot_payload(self, db: Session) -> dict:
         payload = super().snapshot_payload(db)
         from app.services.intraday_paper_engine import intraday_snapshot_summary
+        from app.services.paper_execution_lifecycle import execution_reality_snapshot
 
         payload["intraday"] = intraday_snapshot_summary(db)
+        payload["execution_reality"] = execution_reality_snapshot(db)
         payload.update({key: value for key, value in payload["intraday"].items() if key.startswith("intraday_") or key in {"open_positions_by_market", "open_positions_by_desk", "open_positions_by_ticker", "distinct_markets_traded_today", "distinct_tickers_traded_today", "average_holding_minutes", "avg_holding_minutes", "average_r", "avg_net_r", "realized_pnl", "realized_intraday_pnl", "benchmark_excess", "costs_paid", "rejected_due_to_costs", "rejected_due_to_concentration", "reason_if_no_intraday_trades", "next_intraday_action"}})
         payload["copy_readiness"] = CopyReadinessSummaryService().summary(db)
         readiness_rows = [*(payload.get("candidates") or []), *(payload.get("open_positions") or [])]

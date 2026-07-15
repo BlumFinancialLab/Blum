@@ -40,6 +40,8 @@ WORKER_DEFINITIONS: dict[str, WorkerDefinition] = {
     "blum_trading_game": WorkerDefinition("blum_trading_game", "trading_game", "configured", settings.blum_autonomous_max_seconds_per_job, settings.trading_game_batch_size),
     "live_forward_paper_trading": WorkerDefinition("live_forward_paper_trading", "paper_forward", "configured", settings.blum_autonomous_max_seconds_per_job, settings.live_trading_game_max_open_positions),
     "intraday_paper_trading": WorkerDefinition("intraday_paper_trading", "intraday_paper", "configured", min(120, settings.intraday_max_runtime_seconds), settings.intraday_max_assets_per_run),
+    "alpha_strategy_factory": WorkerDefinition("alpha_strategy_factory", "strategy_research", "configured", 120, settings.strategy_factory_max_variants_per_family * 10),
+    "paper_execution_lifecycle": WorkerDefinition("paper_execution_lifecycle", "paper_execution", "configured", 60, settings.intraday_max_open_positions),
     "blum_professional_learning_cycle": WorkerDefinition("blum_professional_learning_cycle", "professional_learning", "configured", settings.blum_autonomous_max_seconds_per_job, settings.professional_learning_batch_size),
     "hyperbolic_replay_training": WorkerDefinition("hyperbolic_replay_training", "replay_training", "configured", min(120, settings.replay_max_seconds_per_cycle), settings.replay_max_trades_per_cycle),
     "startup_snapshot_warmup": WorkerDefinition("startup_snapshot_warmup", "startup", "startup", 120, settings.blum_autonomous_max_items_per_job),
