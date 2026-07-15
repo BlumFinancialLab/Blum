@@ -11,21 +11,23 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("signal_snapshots", sa.Column("score_version", sa.String(length=40), nullable=False, server_default="blum-score-v0.4"))
-    op.add_column("signal_snapshots", sa.Column("confidence_score", sa.Float(), nullable=False, server_default="0"))
-    op.add_column("signal_snapshots", sa.Column("lifecycle_state", sa.String(length=40), nullable=False, server_default="new"))
-    op.create_index("ix_signal_snapshots_score_version", "signal_snapshots", ["score_version"])
-    op.create_index("ix_signal_snapshots_confidence_score", "signal_snapshots", ["confidence_score"])
-    op.create_index("ix_signal_snapshots_lifecycle_state", "signal_snapshots", ["lifecycle_state"])
-    op.alter_column("signal_snapshots", "score_version", server_default=None)
-    op.alter_column("signal_snapshots", "confidence_score", server_default=None)
-    op.alter_column("signal_snapshots", "lifecycle_state", server_default=None)
+    with op.batch_alter_table("signal_snapshots") as batch:
+        batch.add_column(sa.Column("score_version", sa.String(length=40), nullable=False, server_default="blum-score-v0.4"))
+        batch.add_column(sa.Column("confidence_score", sa.Float(), nullable=False, server_default="0"))
+        batch.add_column(sa.Column("lifecycle_state", sa.String(length=40), nullable=False, server_default="new"))
+        batch.create_index("ix_signal_snapshots_score_version", ["score_version"])
+        batch.create_index("ix_signal_snapshots_confidence_score", ["confidence_score"])
+        batch.create_index("ix_signal_snapshots_lifecycle_state", ["lifecycle_state"])
+        batch.alter_column("score_version", server_default=None)
+        batch.alter_column("confidence_score", server_default=None)
+        batch.alter_column("lifecycle_state", server_default=None)
 
 
 def downgrade() -> None:
-    op.drop_index("ix_signal_snapshots_lifecycle_state", table_name="signal_snapshots")
-    op.drop_index("ix_signal_snapshots_confidence_score", table_name="signal_snapshots")
-    op.drop_index("ix_signal_snapshots_score_version", table_name="signal_snapshots")
-    op.drop_column("signal_snapshots", "lifecycle_state")
-    op.drop_column("signal_snapshots", "confidence_score")
-    op.drop_column("signal_snapshots", "score_version")
+    with op.batch_alter_table("signal_snapshots") as batch:
+        batch.drop_index("ix_signal_snapshots_lifecycle_state")
+        batch.drop_index("ix_signal_snapshots_confidence_score")
+        batch.drop_index("ix_signal_snapshots_score_version")
+        batch.drop_column("lifecycle_state")
+        batch.drop_column("confidence_score")
+        batch.drop_column("score_version")

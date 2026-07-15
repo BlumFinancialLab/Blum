@@ -11,7 +11,7 @@ branch_labels = None
 depends_on = None
 
 
-json_type = postgresql.JSONB(astext_type=sa.Text())
+json_type = sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), "postgresql")
 
 
 def create_index(table: str, columns: list[str], suffix: str | None = None) -> None:

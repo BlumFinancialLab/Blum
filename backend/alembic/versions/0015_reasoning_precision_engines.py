@@ -11,7 +11,7 @@ branch_labels = None
 depends_on = None
 
 
-json_type = postgresql.JSONB(astext_type=sa.Text())
+json_type = sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), "postgresql")
 
 
 def add_indexes(table: str, names: list[str]) -> None:
@@ -206,8 +206,9 @@ def upgrade() -> None:
     )
     add_indexes("competing_theses", ["competition_id", "thesis_side", "confidence", "judge_score", "expected_horizon", "outcome_status", "created_at", "evaluated_at"])
     op.create_index("ix_competing_theses_competition_side", "competing_theses", ["competition_id", "thesis_side"])
-    op.create_foreign_key("fk_thesis_competitions_winning_thesis", "thesis_competitions", "competing_theses", ["winning_thesis_id"], ["id"], ondelete="SET NULL")
-    op.create_foreign_key("fk_thesis_competitions_runner_up_thesis", "thesis_competitions", "competing_theses", ["runner_up_thesis_id"], ["id"], ondelete="SET NULL")
+    with op.batch_alter_table("thesis_competitions") as batch:
+        batch.create_foreign_key("fk_thesis_competitions_winning_thesis", "competing_theses", ["winning_thesis_id"], ["id"], ondelete="SET NULL")
+        batch.create_foreign_key("fk_thesis_competitions_runner_up_thesis", "competing_theses", ["runner_up_thesis_id"], ["id"], ondelete="SET NULL")
 
     op.create_table(
         "engine_votes",
@@ -313,8 +314,9 @@ def downgrade() -> None:
     op.drop_table("training_example_quality_scores")
     op.drop_table("ensemble_weight_versions")
     op.drop_table("engine_votes")
-    op.drop_constraint("fk_thesis_competitions_runner_up_thesis", "thesis_competitions", type_="foreignkey")
-    op.drop_constraint("fk_thesis_competitions_winning_thesis", "thesis_competitions", type_="foreignkey")
+    with op.batch_alter_table("thesis_competitions") as batch:
+        batch.drop_constraint("fk_thesis_competitions_runner_up_thesis", type_="foreignkey")
+        batch.drop_constraint("fk_thesis_competitions_winning_thesis", type_="foreignkey")
     op.drop_table("competing_theses")
     op.drop_table("thesis_competitions")
     op.drop_table("model_reliability_by_regime")

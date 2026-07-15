@@ -11,7 +11,7 @@ branch_labels = None
 depends_on = None
 
 
-json_type = postgresql.JSONB(astext_type=sa.Text())
+json_type = sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), "postgresql")
 
 
 def _columns(table_name: str) -> set[str]:
