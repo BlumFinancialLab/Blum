@@ -4,7 +4,7 @@ set -euo pipefail
 export PORT="${PORT:-7860}"
 export BLUM_PERSIST_DIR="${BLUM_PERSIST_DIR:-/data/blum}"
 export BLUM_DB_BACKUP_SECONDS="${BLUM_DB_BACKUP_SECONDS:-1800}"
-export BLUM_DB_RESTORE_JOBS="${BLUM_DB_RESTORE_JOBS:-4}"
+export BLUM_DB_RESTORE_JOBS="${BLUM_DB_RESTORE_JOBS:-2}"
 RESTORE_STATUS_PID=""
 
 start_restore_status_server() {

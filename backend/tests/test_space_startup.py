@@ -18,7 +18,7 @@ def test_embedded_postgres_restore_supports_custom_and_bootstrap_fallbacks() -> 
     source = START_SCRIPT.read_text()
 
     assert 'embedded_postgres_blum.dump' in source
-    assert 'BLUM_DB_RESTORE_JOBS="${BLUM_DB_RESTORE_JOBS:-4}"' in source
+    assert 'BLUM_DB_RESTORE_JOBS="${BLUM_DB_RESTORE_JOBS:-2}"' in source
     assert 'pg_restore --jobs=${BLUM_DB_RESTORE_JOBS} --exit-on-error -d blum' in source
     assert '< "${BLUM_EMBEDDED_POSTGRES_BACKUP_FILE}"' not in source
     assert 'embedded_postgres_blum.sql.gz' in source
