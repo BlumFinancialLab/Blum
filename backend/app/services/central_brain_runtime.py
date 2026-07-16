@@ -598,9 +598,17 @@ def stale_modules_from_events(events: dict[str, dict]) -> list[str]:
             continue
         created_values = [parse_datetime(event.get("created_at")) for event in candidate_events]
         created_values = [value for value in created_values if value is not None]
-        if not created_values or (now - max(created_values)).total_seconds() > 60 * 60 * 6:
+        if not created_values or (now - max(created_values)).total_seconds() > module_freshness_seconds(module):
             stale.append(module)
     return stale
+
+
+def module_freshness_seconds(module: str) -> float:
+    default_seconds = 60 * 60 * 6
+    if module == "business_quality":
+        fundamentals_cadence = max(1, settings.fundamentals_refresh_minutes) * 60
+        return max(default_seconds, fundamentals_cadence * 1.25)
+    return default_seconds
 
 
 def current_bottleneck() -> dict:

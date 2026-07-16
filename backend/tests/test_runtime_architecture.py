@@ -474,6 +474,18 @@ def test_runtime_module_freshness_uses_worker_event_aliases():
     assert "trading_game" not in stale
 
 
+def test_business_quality_freshness_matches_fundamentals_cadence():
+    events = {
+        "fundamentals_refresh": {
+            "created_at": (datetime.utcnow() - timedelta(hours=7)).isoformat(),
+        }
+    }
+
+    stale = stale_modules_from_events(events)
+
+    assert "business_quality" not in stale
+
+
 def test_snapshot_producer_batch_continues_after_failed_snapshot(monkeypatch):
     with setup_db() as db:
         original_payload = SnapshotProducerService._payload
