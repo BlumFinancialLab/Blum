@@ -14,6 +14,7 @@ from app.providers.replay_data_provider import (
     ReplayDataRequest,
     YahooReplayDataProvider,
     YFinanceReplayDataProvider,
+    default_replay_providers,
 )
 from app.services.replay_data import MultiProviderReplayDataService
 
@@ -178,6 +179,7 @@ def test_yahoo_replay_clamps_one_minute_request_to_provider_retention(monkeypatc
 
     def fake_get(url, *, params, headers, timeout):
         captured.update(params)
+        captured["headers"] = headers
         return FakeYahooResponse()
 
     monkeypatch.setattr("app.providers.replay_data_provider.requests.get", fake_get)
@@ -188,6 +190,7 @@ def test_yahoo_replay_clamps_one_minute_request_to_provider_retention(monkeypatc
 
     requested_start = datetime.utcfromtimestamp(captured["period1"])
     assert requested_start == end - timedelta(days=7)
+    assert captured["headers"]["User-Agent"] == "Mozilla/5.0"
 
 
 def test_yfinance_replay_clamps_five_minute_request_to_provider_retention(monkeypatch):
@@ -274,6 +277,56 @@ def test_replay_persistence_honors_provider_quality_override():
 
     assert rows
     assert {row.data_quality_score for row in rows} == {55.0}
+
+
+def test_default_replay_providers_prefer_complete_ohlcv_before_price_path_fallback():
+    providers = default_replay_providers(include_yfinance=False)
+
+    assert isinstance(providers[0], YahooReplayDataProvider)
+    assert isinstance(providers[1], NasdaqChartReplayDataProvider)
+
+
+def test_higher_quality_provider_upgrades_existing_replay_bar():
+    start = datetime(2026, 7, 10, 8, 0)
+    low_quality = RecordingProvider(frame(start, periods=4, frequency="15min"))
+    low_quality.name = "price_path"
+    low_quality.source_metadata = {"data_quality_score": 55.0}
+    high_quality_frame = frame(start, periods=5, frequency="15min")
+    high_quality_frame.loc[start, "Open"] = 99.25
+    high_quality_frame.loc[start, "Volume"] = 2_500_000
+    high_quality = RecordingProvider(high_quality_frame)
+    high_quality.name = "complete_ohlcv"
+    high_quality.source_metadata = {"data_quality_score": 100.0}
+
+    with setup_db() as db:
+        asset = seed_asset(db)
+        MultiProviderReplayDataService([low_quality]).ensure_coverage(
+            db,
+            asset=asset,
+            timeframe="15m",
+            start=start,
+            end=start + timedelta(hours=1),
+        )
+        MultiProviderReplayDataService([high_quality]).ensure_coverage(
+            db,
+            asset=asset,
+            timeframe="15m",
+            start=start,
+            end=start + timedelta(hours=2),
+        )
+        upgraded = db.scalar(
+            select(ReplayMarketBar).where(
+                ReplayMarketBar.asset_id == asset.id,
+                ReplayMarketBar.timeframe == "15m",
+                ReplayMarketBar.bar_timestamp == start,
+            )
+        )
+
+    assert upgraded is not None
+    assert upgraded.provider == "complete_ohlcv"
+    assert upgraded.data_quality_score == 100.0
+    assert upgraded.open == 99.25
+    assert upgraded.volume == 2_500_000
 
 
 def test_unsupported_provider_does_not_pollute_successful_fallback_blockers():

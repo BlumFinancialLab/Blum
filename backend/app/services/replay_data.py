@@ -187,21 +187,33 @@ class MultiProviderReplayDataService:
     @staticmethod
     def _persist_bars(db: Session, asset: Asset, timeframe: str, provider: str, frame: pd.DataFrame, metadata: dict) -> None:
         timestamps = [pd.Timestamp(value).to_pydatetime().replace(tzinfo=None) for value in frame.index]
-        existing = set(
-            db.scalars(
-                select(ReplayMarketBar.bar_timestamp).where(
+        existing = {
+            row.bar_timestamp: row
+            for row in db.scalars(
+                select(ReplayMarketBar).where(
                     ReplayMarketBar.asset_id == asset.id,
                     ReplayMarketBar.timeframe == timeframe,
                     ReplayMarketBar.bar_timestamp.in_(timestamps),
                 )
             ).all()
-        )
+        }
         provider_quality = metadata.get("data_quality_score") if isinstance(metadata, dict) else None
         quality = _number(provider_quality) if provider_quality is not None else _frame_quality(frame)
         quality = max(0.0, min(100.0, float(quality or 0.0)))
         acquired_at = datetime.utcnow()
         for timestamp, (_, row) in zip(timestamps, frame.iterrows()):
-            if timestamp in existing:
+            persisted = existing.get(timestamp)
+            if persisted is not None:
+                if quality > float(persisted.data_quality_score or 0.0):
+                    persisted.open = _number(row.get("Open"))
+                    persisted.high = _number(row.get("High"))
+                    persisted.low = _number(row.get("Low"))
+                    persisted.close = float(row.get("Close"))
+                    persisted.volume = _number(row.get("Volume"))
+                    persisted.provider = provider
+                    persisted.acquired_at = acquired_at
+                    persisted.data_quality_score = quality
+                    persisted.source_metadata = metadata
                 continue
             db.add(
                 ReplayMarketBar(

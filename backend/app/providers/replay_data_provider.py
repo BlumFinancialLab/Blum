@@ -150,7 +150,8 @@ class YahooReplayDataProvider:
             "events": "div,splits",
         }
         try:
-            response = requests.get(url, params=params, headers=provider_headers(), timeout=12)
+            headers = {**provider_headers(), "User-Agent": "Mozilla/5.0"}
+            response = requests.get(url, params=params, headers=headers, timeout=12)
             response.raise_for_status()
             payload = response.json()
         except Exception:
@@ -237,9 +238,10 @@ class DailyProviderReplayAdapter:
 
 
 def default_replay_providers(*, include_yfinance: bool = True) -> list[ReplayDataProvider]:
-    providers: list[ReplayDataProvider] = [NasdaqChartReplayDataProvider(), YahooReplayDataProvider()]
+    providers: list[ReplayDataProvider] = [YahooReplayDataProvider()]
     if include_yfinance:
         providers.append(YFinanceReplayDataProvider())
+    providers.append(NasdaqChartReplayDataProvider())
     providers.extend([DailyProviderReplayAdapter(StooqProvider()), DailyProviderReplayAdapter(NasdaqHistoricalProvider())])
     return providers
 
