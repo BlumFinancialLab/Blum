@@ -10,27 +10,23 @@ from app.core.config import get_settings
 
 def database_persistence_status() -> dict:
     backup_file = os.getenv("BLUM_EMBEDDED_POSTGRES_BACKUP_FILE")
-    embedded_pgdata = os.getenv("BLUM_EMBEDDED_PGDATA")
-    embedded_cluster_exists = bool(embedded_pgdata and os.path.exists(os.path.join(embedded_pgdata, "PG_VERSION")))
     backup_exists = bool(backup_file and os.path.exists(backup_file))
     backup_size = os.path.getsize(backup_file) if backup_exists and backup_file else 0
     uses_external_database = bool(os.getenv("DATABASE_URL")) and not backup_file
-    mode = "external_postgres" if uses_external_database else "persistent_embedded_postgres" if embedded_cluster_exists else "embedded_postgres"
+    mode = "external_postgres" if uses_external_database else "embedded_postgres"
     return {
         "mode": mode,
         "external_database_configured": uses_external_database,
-        "embedded_pgdata": embedded_pgdata,
-        "embedded_cluster_exists": embedded_cluster_exists,
         "embedded_backup_file": backup_file,
         "embedded_backup_exists": backup_exists,
         "embedded_backup_size_bytes": backup_size,
         "embedded_backup_interval_seconds": safe_int(os.getenv("BLUM_DB_BACKUP_SECONDS"), 300),
         "persistent_dir": os.getenv("BLUM_PERSIST_DIR", "/data/blum"),
-        "strict_no_reset_mode": uses_external_database or embedded_cluster_exists,
+        "strict_no_reset_mode": uses_external_database,
         "last_backup_attempt": os.getenv("BLUM_LAST_BACKUP_ATTEMPT"),
         "durability_note": (
-            "External DATABASE_URL or a PostgreSQL cluster stored directly on persistent /data provides continuous durability. "
-            "The atomic embedded dump remains a secondary recovery path."
+            "External DATABASE_URL is the strict no-reset mode. Embedded PostgreSQL backup can recover learning state only "
+            "when Hugging Face persistent storage is enabled for the /data mount."
         ),
     }
 

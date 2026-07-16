@@ -14,17 +14,6 @@ def test_embedded_postgres_backup_uses_custom_format_and_is_atomic() -> None:
     assert '"${BLUM_EMBEDDED_POSTGRES_BACKUP_FILE}.tmp"' in source
 
 
-def test_embedded_postgres_primary_cluster_lives_on_persistent_storage() -> None:
-    source = START_SCRIPT.read_text()
-
-    assert 'BLUM_EMBEDDED_PGDATA="${BLUM_EMBEDDED_PGDATA:-${BLUM_PERSIST_DIR}/postgres_data}"' in source
-    assert 'pg_config --bindir' in source
-    assert 'initdb' in source
-    assert 'pg_ctl' in source
-    assert 'service postgresql start' not in source
-    assert 'export PGDATA="${BLUM_EMBEDDED_PGDATA}"' in source
-
-
 def test_embedded_postgres_restore_supports_custom_and_bootstrap_fallbacks() -> None:
     source = START_SCRIPT.read_text()
 
