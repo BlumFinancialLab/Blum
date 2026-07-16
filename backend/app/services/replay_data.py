@@ -79,7 +79,6 @@ class MultiProviderReplayDataService:
         for provider in self.providers:
             if timeframe not in provider.supported_timeframes:
                 attempts.append({"provider": provider.name, "status": "blocked", "blockers": ["UNSUPPORTED_TIMEFRAME"]})
-                blockers.append("UNSUPPORTED_TIMEFRAME")
                 continue
             request = ReplayDataRequest(
                 source_symbol=asset.ticker,
@@ -112,7 +111,7 @@ class MultiProviderReplayDataService:
                     "blockers": list(result.blockers),
                 }
             )
-            blockers.extend(result.blockers)
+            blockers.extend(code for code in result.blockers if not code.startswith("UNSUPPORTED_"))
             if normalized.empty:
                 continue
             self._persist_bars(db, asset, timeframe, provider.name, normalized, result.source_metadata)
@@ -197,7 +196,9 @@ class MultiProviderReplayDataService:
                 )
             ).all()
         )
-        quality = _frame_quality(frame)
+        provider_quality = metadata.get("data_quality_score") if isinstance(metadata, dict) else None
+        quality = _number(provider_quality) if provider_quality is not None else _frame_quality(frame)
+        quality = max(0.0, min(100.0, float(quality or 0.0)))
         acquired_at = datetime.utcnow()
         for timestamp, (_, row) in zip(timestamps, frame.iterrows()):
             if timestamp in existing:

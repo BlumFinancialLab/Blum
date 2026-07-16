@@ -681,6 +681,36 @@ def test_paper_forward_lifecycle_opens_candidate_when_trigger_is_met():
         assert any(event.event_type == "POSITION_OPENED" for event in events)
 
 
+def test_paper_forward_lifecycle_allows_only_one_open_position_per_ticker():
+    with setup_db() as db:
+        asset = seed_asset(db)
+        service = LiveForwardPaperTradingService()
+        first_payload = candidate(target_1=130.0, target_2=150.0)
+        second_payload = candidate(target_1=128.0, target_2=145.0)
+        second_payload["setup"] = {"setup_type": "pullback"}
+        second_payload["trade_plan"] = {
+            **second_payload["trade_plan"],
+            "entry_trigger": "pullback reclaim above support",
+        }
+        service.create_candidate(db, first_payload)
+        service.create_candidate(db, second_payload)
+        add_price(db, asset, 1, 101.0)
+
+        report = run_lifecycle(service, db)
+        open_rows = db.scalars(
+            select(PaperForwardTrade).where(
+                PaperForwardTrade.ticker == "NVDA",
+                PaperForwardTrade.status == "OPEN",
+            )
+        ).all()
+
+    assert len(open_rows) == 1
+    assert any(
+        row.get("reason") == "ticker_position_already_open"
+        for row in report["phases"]["open_eligible_trades"]["skipped"]
+    )
+
+
 def test_paper_forward_lifecycle_keeps_candidate_when_trigger_not_met():
     with setup_db() as db:
         asset = seed_asset(db)

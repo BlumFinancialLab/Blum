@@ -19,6 +19,7 @@ from app.models import (
     LiveForwardPaperTradeEvent,
     PaperExecutionFill,
     PaperExecutionOrder,
+    PriceHistory,
     ReplayMarketBar,
     ReplayStrategyValidation,
     StrategyCandidateVariant,
@@ -198,6 +199,30 @@ def test_registry_rejects_unstable_negative_or_overfit_strategy():
     assert rows == []
 
 
+def test_registry_accepts_metrics_emitted_by_alpha_strategy_factory():
+    with setup_db() as db:
+        promoted = seed_validation(
+            db,
+            metrics={
+                "expectancy_r": None,
+                "walk_forward_score": None,
+                "net_expectancy_r": 0.25,
+                "deflated_sharpe_probability": 0.97,
+                "stability_score": 74.0,
+            },
+        )
+
+        rows = BlumPromotedStrategyRegistry().list_eligible(
+            db,
+            market="USA",
+            asset_class="Stock",
+        )
+
+    assert [row.validation_id for row in rows] == [promoted.id]
+    assert rows[0].metrics["net_expectancy_r"] == 0.25
+    assert rows[0].walk_forward_score >= 60.0
+
+
 def test_data_gateway_requires_all_four_timeframes_without_fallback():
     with setup_db() as db:
         asset = seed_asset(db)
@@ -283,6 +308,47 @@ def test_opportunity_rejects_duplicate_open_ticker():
 def test_intraday_trade_evidence_constant_is_forward_only():
     assert PAPER_FORWARD_INTRADAY == "PAPER_FORWARD_INTRADAY"
     assert PAPER_FORWARD_INTRADAY != "REPLAY_EVIDENCE"
+
+
+def test_intraday_discovery_rotates_across_the_stored_asset_universe():
+    with setup_db() as db:
+        for index in range(25):
+            asset = seed_asset(db, ticker=f"T{index:02d}", market="USA")
+            db.add(
+                PriceHistory(
+                    asset_id=asset.id,
+                    date=NOW.date(),
+                    open=100.0,
+                    high=101.0,
+                    low=99.0,
+                    close=100.0,
+                    volume=1_000_000,
+                    provider="fixture",
+                )
+            )
+        db.commit()
+        engine = BlumIntradayPaperEngine(
+            now_provider=lambda: NOW,
+            refresh_missing=False,
+            max_assets=10,
+        )
+
+        first = engine.run_once(db, trigger="test")
+        second = engine.run_once(db, trigger="test")
+
+    first_tickers = {
+        row["ticker"]
+        for row in first["blockers"]
+        if row.get("reason") == "NO_PROMOTED_INTRADAY_STRATEGY"
+    }
+    second_tickers = {
+        row["ticker"]
+        for row in second["blockers"]
+        if row.get("reason") == "NO_PROMOTED_INTRADAY_STRATEGY"
+    }
+    assert len(first_tickers) == 10
+    assert len(second_tickers) == 10
+    assert first_tickers.isdisjoint(second_tickers)
 
 
 def test_intraday_trade_persists_strategy_cost_and_lifecycle_metadata():
@@ -518,6 +584,7 @@ def test_intraday_snapshot_is_read_only_and_reports_no_activity_truthfully():
     assert before == after == 0
     assert snapshot["status"] == "NO_INTRADAY_RUNS"
     assert snapshot["trades_opened_today"] == 0
+    assert snapshot["strategy_registry"]["status"] == "NO_PROMOTED_STRATEGIES"
 
 
 def test_intraday_run_reports_data_blocked_when_no_eligible_market_data_exists():

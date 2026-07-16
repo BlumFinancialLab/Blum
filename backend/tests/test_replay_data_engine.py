@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 import pytest
@@ -8,7 +8,13 @@ from sqlalchemy.orm import Session
 
 from app.core.database import Base
 from app.models import Asset, PriceHistory, ReplayMarketBar
-from app.providers.replay_data_provider import ProviderBars, ReplayDataRequest
+from app.providers.replay_data_provider import (
+    NasdaqChartReplayDataProvider,
+    ProviderBars,
+    ReplayDataRequest,
+    YahooReplayDataProvider,
+    YFinanceReplayDataProvider,
+)
 from app.services.replay_data import MultiProviderReplayDataService
 
 
@@ -117,6 +123,177 @@ def frame(start: datetime, periods: int, frequency: str) -> pd.DataFrame:
         },
         index=index,
     )
+
+
+class FakeYahooResponse:
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict:
+        return {
+            "chart": {
+                "result": [
+                    {
+                        "timestamp": [1_752_657_600],
+                        "indicators": {
+                            "quote": [
+                                {
+                                    "open": [100.0],
+                                    "high": [101.0],
+                                    "low": [99.0],
+                                    "close": [100.5],
+                                    "volume": [1_000_000],
+                                }
+                            ]
+                        },
+                    }
+                ],
+                "error": None,
+            }
+        }
+
+
+class FakeNasdaqResponse:
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict:
+        start = datetime(2026, 7, 15, 13, 30, tzinfo=timezone.utc)
+        return {
+            "data": {
+                "symbol": "NVDA",
+                "chart": [
+                    {
+                        "x": int((start + timedelta(minutes=index)).timestamp() * 1000),
+                        "y": 170.0 + index / 10,
+                    }
+                    for index in range(31)
+                ],
+            }
+        }
+
+
+def test_yahoo_replay_clamps_one_minute_request_to_provider_retention(monkeypatch):
+    captured: dict = {}
+
+    def fake_get(url, *, params, headers, timeout):
+        captured.update(params)
+        return FakeYahooResponse()
+
+    monkeypatch.setattr("app.providers.replay_data_provider.requests.get", fake_get)
+    end = datetime(2026, 7, 16, 12, 0)
+    request = ReplayDataRequest("NVDA", "NVDA", "USA", "1m", end - timedelta(days=365), end)
+
+    YahooReplayDataProvider().fetch(request)
+
+    requested_start = datetime.utcfromtimestamp(captured["period1"])
+    assert requested_start == end - timedelta(days=7)
+
+
+def test_yfinance_replay_clamps_five_minute_request_to_provider_retention(monkeypatch):
+    captured: dict = {}
+
+    def fake_download(symbol, **kwargs):
+        captured.update(kwargs)
+        return pd.DataFrame()
+
+    monkeypatch.setattr("app.providers.replay_data_provider.yf.download", fake_download)
+    end = datetime(2026, 7, 16, 12, 0)
+    request = ReplayDataRequest("NVDA", "NVDA", "USA", "5m", end - timedelta(days=365), end)
+
+    YFinanceReplayDataProvider().fetch(request)
+
+    assert captured["start"] == end - timedelta(days=59)
+
+
+def test_nasdaq_chart_provider_resamples_observed_price_path(monkeypatch):
+    monkeypatch.setattr(
+        "app.providers.replay_data_provider.requests.get",
+        lambda *args, **kwargs: FakeNasdaqResponse(),
+    )
+    end = datetime(2026, 7, 16, 12, 0)
+
+    result = NasdaqChartReplayDataProvider().fetch(
+        ReplayDataRequest("NVDA", "NVDA", "USA", "15m", end - timedelta(days=10), end)
+    )
+
+    assert result.blockers == []
+    assert len(result.frame) == 3
+    assert result.frame.iloc[0]["Open"] == 170.0
+    assert result.frame.iloc[0]["Close"] == 171.4
+    assert result.source_metadata["bar_construction"] == "observed_last_sale_path"
+    assert result.source_metadata["data_quality_score"] == 55.0
+
+
+def test_nasdaq_chart_provider_never_returns_bars_after_requested_end(monkeypatch):
+    monkeypatch.setattr(
+        "app.providers.replay_data_provider.requests.get",
+        lambda *args, **kwargs: FakeNasdaqResponse(),
+    )
+    end = datetime(2026, 7, 14, 20, 0)
+
+    result = NasdaqChartReplayDataProvider().fetch(
+        ReplayDataRequest("NVDA", "NVDA", "USA", "1m", end - timedelta(days=2), end)
+    )
+
+    assert result.frame.empty
+    assert result.blockers == ["NO_INTRADAY_HISTORY"]
+
+
+def test_nasdaq_chart_provider_reuses_one_price_path_for_all_timeframes(monkeypatch):
+    request_count = 0
+
+    def fake_get(*args, **kwargs):
+        nonlocal request_count
+        request_count += 1
+        return FakeNasdaqResponse()
+
+    monkeypatch.setattr("app.providers.replay_data_provider.requests.get", fake_get)
+    provider = NasdaqChartReplayDataProvider()
+    end = datetime(2026, 7, 16, 12, 0)
+    for timeframe in ("1m", "5m", "15m"):
+        provider.fetch(ReplayDataRequest("NVDA", "NVDA", "USA", timeframe, end - timedelta(days=10), end))
+
+    assert request_count == 1
+
+
+def test_replay_persistence_honors_provider_quality_override():
+    start = datetime(2026, 7, 10, 8, 0)
+    provider = RecordingProvider(frame(start, periods=5, frequency="15min"))
+    provider.source_metadata = {"license": "test", "data_quality_score": 55.0}
+    with setup_db() as db:
+        asset = seed_asset(db)
+        MultiProviderReplayDataService([provider]).ensure_coverage(
+            db,
+            asset=asset,
+            timeframe="15m",
+            start=start,
+            end=start + timedelta(hours=1),
+        )
+        rows = db.scalars(select(ReplayMarketBar).where(ReplayMarketBar.asset_id == asset.id)).all()
+
+    assert rows
+    assert {row.data_quality_score for row in rows} == {55.0}
+
+
+def test_unsupported_provider_does_not_pollute_successful_fallback_blockers():
+    start = datetime(2026, 7, 10, 8, 0)
+    unsupported = RecordingProvider()
+    unsupported.supported_timeframes = frozenset({"1d"})
+    fallback = RecordingProvider(frame(start, periods=5, frequency="15min"))
+    fallback.name = "fallback"
+    with setup_db() as db:
+        asset = seed_asset(db)
+        result = MultiProviderReplayDataService([unsupported, fallback]).ensure_coverage(
+            db,
+            asset=asset,
+            timeframe="15m",
+            start=start,
+            end=start + timedelta(hours=1),
+        )
+
+    assert result.provider == "fallback"
+    assert "UNSUPPORTED_TIMEFRAME" not in result.blockers
 
 
 def seed_replay_bars(db: Session, asset: Asset, start: datetime, count: int, timeframe: str = "5m") -> None:

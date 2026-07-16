@@ -547,11 +547,24 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
         waiting: list[dict] = []
         data_blocked: list[dict] = []
         skipped: list[dict] = []
+        open_tickers = {
+            str(ticker).upper()
+            for ticker in db.scalars(
+                select(LiveForwardPaperTrade.ticker).where(
+                    LiveForwardPaperTrade.game_id == live_game.id,
+                    LiveForwardPaperTrade.status.in_(["ORDER_SUBMITTED", "PARTIALLY_FILLED", "OPEN"]),
+                )
+            ).all()
+            if ticker
+        }
 
         for trade in rows:
             if int(live_game.open_positions or 0) >= settings.live_trading_game_max_open_positions:
                 skipped.append({"trade_id": trade.id, "ticker": trade.ticker, "reason": "max_open_positions_reached"})
                 break
+            if trade.ticker.upper() in open_tickers:
+                skipped.append({"trade_id": trade.id, "ticker": trade.ticker, "reason": "ticker_position_already_open"})
+                continue
 
             if classification_from_trade(trade) != TRADE_CANDIDATE:
                 waiting.append({
@@ -581,6 +594,7 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
                 continue
 
             opened.append(self.open_candidate_trade(db, live_game, trade, latest_date, latest_price, condition))
+            open_tickers.add(trade.ticker.upper())
 
         return {"opened": opened, "waiting": waiting, "data_blocked": data_blocked, "skipped": skipped}
 

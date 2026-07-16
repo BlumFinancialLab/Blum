@@ -57,8 +57,13 @@ class BlumPromotedStrategyRegistry:
             return None
         sample_size = int(row.sample_size or 0)
         stability = number(metrics.get("stability_score"), 0.0)
-        expectancy = number(metrics.get("expectancy_r"), 0.0)
+        expectancy = number(
+            metrics.get("expectancy_r"),
+            number(metrics.get("net_expectancy_r"), 0.0),
+        )
         benchmark_excess = number(metrics.get("benchmark_excess"), 0.0)
+        deflated_sharpe = number(metrics.get("deflated_sharpe_probability"), 0.0) * 100.0
+        derived_walk_forward_score = min(stability, deflated_sharpe) if deflated_sharpe > 0 else stability
         timeframe_stack = tuple(metrics.get("timeframe_stack") or REQUIRED_INTRADAY_TIMEFRAMES)
         if sample_size < settings.replay_min_promotion_samples:
             return None
@@ -83,7 +88,7 @@ class BlumPromotedStrategyRegistry:
             minimum_confidence=number(metrics.get("minimum_confidence"), 60.0),
             minimum_edge_score=number(metrics.get("minimum_edge_score"), settings.blum_quant_edge_min_score),
             validated_trade_count=sample_size,
-            walk_forward_score=number(metrics.get("walk_forward_score"), 0.0),
+            walk_forward_score=number(metrics.get("walk_forward_score"), derived_walk_forward_score),
             expected_costs=dict(metrics.get("expected_costs") or {}),
             max_allowed_drawdown=abs(number(metrics.get("max_drawdown"), 0.0)),
             promotion_timestamp=row.created_at,

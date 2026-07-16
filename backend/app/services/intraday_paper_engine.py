@@ -88,6 +88,7 @@ class BlumIntradayPaperEngine:
         self.learning = IntradayPaperLearningService()
         self.no_trade_learning = IntradayNoTradeLearningService(evaluation_minutes=settings.intraday_no_trade_evaluation_minutes)
         self._desk_context: dict[int, tuple[str, str]] = {}
+        self._discovery_metadata: dict = {}
 
     def run_once(self, db: Session, *, trigger: str = "manual", assets: Iterable[Asset] | None = None) -> dict:
         if not settings.intraday_paper_enabled:
@@ -165,6 +166,7 @@ class BlumIntradayPaperEngine:
             run.summary_json = {
                 "decisions": decisions[:50],
                 "lifecycle": lifecycle,
+                "asset_discovery": self._discovery_metadata,
                 "policy": "Strict 1d/15m/5m/1m paper-forward evidence; no timeframe fallback or broker execution.",
             }
             self.paper.refresh_live_game_counts(db, game)
@@ -227,9 +229,32 @@ class BlumIntradayPaperEngine:
                 seen.add(asset.id)
                 self._desk_context[asset.id] = (agent.agent_name, agent.benchmark)
                 ranked.append(asset)
-                if len(ranked) >= self.max_assets:
-                    return ranked
-        return ranked
+
+        ranked.sort(key=lambda row: (row.ticker.upper(), row.id))
+        previous = db.scalar(
+            select(IntradayPaperRun)
+            .where(IntradayPaperRun.status != "RUNNING")
+            .order_by(desc(IntradayPaperRun.id))
+            .limit(1)
+        )
+        previous_discovery = (previous.summary_json or {}).get("asset_discovery") if previous else {}
+        cursor_before = (previous_discovery or {}).get("cursor_after")
+        start_index = 0
+        if cursor_before is not None:
+            for index, asset in enumerate(ranked):
+                if asset.id == cursor_before:
+                    start_index = (index + 1) % max(1, len(ranked))
+                    break
+        rotated = ranked[start_index:] + ranked[:start_index]
+        selected = rotated[: self.max_assets]
+        self._discovery_metadata = {
+            "policy": "round_robin_stored_market_universe",
+            "universe_size": len(ranked),
+            "cursor_before": cursor_before,
+            "cursor_after": selected[-1].id if selected else cursor_before,
+            "selected_tickers": [asset.ticker for asset in selected],
+        }
+        return selected
 
     def _portfolio_state(self, db: Session, game: LiveForwardPaperGame) -> IntradayPortfolioState:
         rows = db.scalars(
@@ -822,6 +847,7 @@ def intraday_snapshot_summary(db: Session, *, now: datetime | None = None) -> di
     no_trade_pending = int(
         db.scalar(select(func.count(IntradayNoTradeDecision.id)).where(IntradayNoTradeDecision.status == "PENDING")) or 0
     )
+    strategy_registry = BlumPromotedStrategyRegistry().status(db)
     if not latest_run:
         inactivity_reason = "No intraday run has completed."
         next_action = "Wait for the bounded backend worker or invoke the explicit manual POST."
@@ -869,6 +895,7 @@ def intraday_snapshot_summary(db: Session, *, now: datetime | None = None) -> di
         "desks": dict(Counter(row.desk or "UNKNOWN" for row in rows)),
         "setups": dict(Counter(row.setup_type for row in rows)),
         "latest_blockers": latest_run.data_blockers if latest_run else ["No intraday run has completed."],
+        "strategy_registry": strategy_registry,
         "evidence_type": PAPER_FORWARD_INTRADAY,
         "policy": "Read-only forward paper evidence. No trade or recalculation is triggered by this snapshot.",
     }

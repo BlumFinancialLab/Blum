@@ -134,7 +134,10 @@ class BlumIntradayOpportunityEngine:
             return IntradayDecision(INTRADAY_BLOCKED, "SPREAD_TOO_WIDE", "Estimated spread is too large relative to the target.", costs=costs, **base)
 
         confidence = min(95.0, strategy.walk_forward_score)
-        edge_score = min(100.0, 50.0 + float(strategy.metrics.get("expectancy_r") or 0.0) * 100.0)
+        expectancy_r = strategy.metrics.get("expectancy_r")
+        if expectancy_r is None:
+            expectancy_r = strategy.metrics.get("net_expectancy_r")
+        edge_score = min(100.0, 50.0 + float(expectancy_r or 0.0) * 100.0)
         if confidence < strategy.minimum_confidence or edge_score < strategy.minimum_edge_score:
             return IntradayDecision(INTRADAY_BLOCKED, "QUANT_EDGE_BELOW_THRESHOLD", "Promoted strategy does not meet current confidence or Quant Edge threshold.", confidence=confidence, edge_score=edge_score, regime=regime, session=session, costs=costs, **base)
         size = self.sizer.size(
