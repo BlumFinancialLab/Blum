@@ -149,6 +149,16 @@ class ReplayTrainingSnapshotService:
         }
 
 
+def refresh_strategy_factory_state(db: Session) -> dict:
+    """Refresh only the factory projection after its independent worker completes."""
+
+    service = ReplayTrainingSnapshotService()
+    current = service.snapshot(db)
+    current.pop("last_snapshot_timestamp", None)
+    current["strategy_factory"] = strategy_factory_snapshot(db)
+    return service.write(db, current)
+
+
 class BlumAdaptiveTrainingController:
     def __init__(
         self,

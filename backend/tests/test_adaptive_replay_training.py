@@ -1,15 +1,18 @@
+from datetime import datetime
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.core.database import Base
 from app.main import app
 from app.engine.facade import BlumEngineFacade
-from app.models import BackgroundJobState
+from app.models import BackgroundJobState, StrategyFactoryRun
 from app.services.adaptive_replay_training import (
     BlumAdaptiveTrainingController,
     ReplayResourceSample,
     ReplayTrainingConfig,
     ReplayTrainingSnapshotService,
+    refresh_strategy_factory_state,
 )
 
 
@@ -179,6 +182,36 @@ def test_replay_training_snapshot_is_read_only_and_stale_safe():
     assert missing["replay_engine_status"] == "INITIALIZING"
     assert stored["validated_trades_today"] == 125
     assert stored["target_trades_per_day"] == 5000
+
+
+def test_factory_worker_refreshes_factory_state_without_waiting_for_next_replay():
+    with setup_db() as db:
+        ReplayTrainingSnapshotService().write(
+            db,
+            {
+                "strategy_factory": {
+                    "status": "READY",
+                    "latest_run_at": "2026-07-15T12:00:00",
+                    "examined_variants": 1,
+                    "promoted_to_paper": 0,
+                }
+            },
+        )
+        db.add(
+            StrategyFactoryRun(
+                run_uid="factory-latest",
+                hypothesis_family="intraday_scalping",
+                generation_seed=7,
+                status="COMPLETED",
+                started_at=datetime(2026, 7, 16, 6, 47),
+                completed_at=datetime(2026, 7, 16, 6, 47, 1),
+            )
+        )
+        db.commit()
+
+        refreshed = refresh_strategy_factory_state(db)
+
+    assert refreshed["strategy_factory"]["latest_run_at"] == "2026-07-16T06:47:01"
 
 
 def test_facade_manual_replay_calls_controller_only_on_command(monkeypatch):

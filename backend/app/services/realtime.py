@@ -32,7 +32,7 @@ from app.services.live_forward_paper_trading import LiveForwardPaperTradingServi
 from app.services.intraday_paper_engine import BlumIntradayPaperEngine
 from app.services.alpha_strategy_factory import AlphaStrategyFactory
 from app.services.worker_runtime import runtime_worker_coordinator
-from app.services.adaptive_replay_training import BlumAdaptiveTrainingController
+from app.services.adaptive_replay_training import BlumAdaptiveTrainingController, refresh_strategy_factory_state
 from app.signals.engine import SignalEngine
 
 
@@ -457,14 +457,19 @@ def run_paper_execution_lifecycle_job() -> None:
 
 
 def run_alpha_strategy_factory_job() -> None:
-    _run_job(
-        "alpha_strategy_factory",
-        lambda db: AlphaStrategyFactory().run_once(
+    def work(db):
+        factory = AlphaStrategyFactory().run_once(
             db,
             max_variants_per_family=settings.strategy_factory_max_variants_per_family,
             seed=settings.strategy_factory_seed,
             trigger="scheduled",
-        ),
+        )
+        snapshot = refresh_strategy_factory_state(db)
+        return {"factory": factory, "snapshot_status": snapshot.get("status")}
+
+    _run_job(
+        "alpha_strategy_factory",
+        work,
     )
 
 
