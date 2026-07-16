@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from app.core.database import Base
-from app.models import EquityCurveAnnotation, TradingGame, TradingGameEquityCurve, TradingGameLedgerSnapshot, TradingGameTrade
+from app.models import EquityCurveAnnotation, TradeEngineAttribution, TradingGame, TradingGameEquityCurve, TradingGameLedgerSnapshot, TradingGameTrade
 from app.services.dashboard import dashboard_overview
 from app.services.dashboard_snapshots import DashboardSnapshotService
 from app.services.trade_transparency import EquityCurveAnnotationService, TradeLedgerService
@@ -176,3 +176,40 @@ def test_snapshot_rows_can_be_marked_stale_and_still_read():
 
     assert payload["status"] == "ok"
     assert payload["rows"]
+
+
+def test_incremental_transparency_enriches_only_new_trades():
+    with make_session() as db:
+        game = seed_game(db)
+        historical_ids = list(db.scalars(select(TradingGameTrade.id).where(TradingGameTrade.game_id == game.id)).all())
+        new_trade = TradingGameTrade(
+            game_id=game.id,
+            ticker="MSFT",
+            setup_type="trend_continuation",
+            decision_state="active_setup",
+            entry_date=date(2025, 1, 20),
+            exit_date=date(2025, 1, 24),
+            entry_price=100.0,
+            exit_price=104.0,
+            position_size=0.5,
+            risk_amount=1.0,
+            risk_percent=1.0,
+            realized_r_multiple=1.5,
+            realized_pl=1.5,
+            net_pnl_eur=1.5,
+            capital_before=101.0,
+            capital_after=102.5,
+            benchmark_return_same_period=1.0,
+            excess_return_vs_benchmark=3.0,
+            reproducibility_score=80.0,
+            outcome_label="target_hit",
+            created_at=datetime(2025, 1, 20, 16, 0),
+        )
+        db.add(new_trade)
+        db.flush()
+
+        payload = TradeLedgerService().refresh_trades_incremental(db, game, [new_trade], commit=False)
+
+        assert payload["trades_enriched"] == 1
+        assert db.query(TradeEngineAttribution).filter(TradeEngineAttribution.trade_id == new_trade.id).count() > 0
+        assert db.query(TradeEngineAttribution).filter(TradeEngineAttribution.trade_id.in_(historical_ids)).count() == 0

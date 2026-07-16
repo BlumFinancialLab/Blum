@@ -130,12 +130,21 @@ class BrainEventBus:
         return serialize_event(row)
 
     def latest_by_module(self, db: Session, limit: int = 300) -> dict[str, dict]:
-        rows = db.scalars(select(BrainRuntimeEvent).order_by(desc(BrainRuntimeEvent.created_at)).limit(limit)).all()
-        latest: dict[str, dict] = {}
-        for row in rows:
-            if row.source_module not in latest:
-                latest[row.source_module] = serialize_event(row)
-        return latest
+        latest_ids = (
+            select(
+                BrainRuntimeEvent.source_module.label("source_module"),
+                func.max(BrainRuntimeEvent.id).label("event_id"),
+            )
+            .group_by(BrainRuntimeEvent.source_module)
+            .subquery()
+        )
+        rows = db.scalars(
+            select(BrainRuntimeEvent)
+            .join(latest_ids, BrainRuntimeEvent.id == latest_ids.c.event_id)
+            .order_by(desc(BrainRuntimeEvent.created_at))
+            .limit(limit)
+        ).all()
+        return {row.source_module: serialize_event(row) for row in rows}
 
     def recent(self, db: Session, limit: int = 80) -> list[dict]:
         rows = db.scalars(select(BrainRuntimeEvent).order_by(desc(BrainRuntimeEvent.created_at)).limit(limit)).all()

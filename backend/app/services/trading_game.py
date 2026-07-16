@@ -255,6 +255,7 @@ class TradingGameSimulator:
             return {"status": "insufficient_simulations", "game": serialize_game(game), "policy": TRADING_GAME_POLICY}
 
         executed = []
+        executed_rows = []
         for simulation, prediction in simulations:
             if game.current_capital <= 0 and cycle_service is None:
                 self.close_bankrupt_game(db, game)
@@ -263,13 +264,14 @@ class TradingGameSimulator:
             trade = self.apply_simulation(db, game, simulation, prediction)
             if cycle_service is not None:
                 cycle_service.record_trade(db, game, trade)
+            executed_rows.append(trade)
             executed.append(serialize_game_trade(trade))
         self.recalculate_game(db, game)
         self.update_lessons(db, game)
         try:
             from app.services.trade_transparency import TradeLedgerService
 
-            TradeLedgerService().refresh_game_transparency(db, game, commit=False)
+            TradeLedgerService().refresh_trades_incremental(db, game, executed_rows, commit=False)
         except Exception as exc:
             game.ledger_summary = {"status": "degraded", "error": f"{type(exc).__name__}: {exc}"}
         db.commit()

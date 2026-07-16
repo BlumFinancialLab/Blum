@@ -204,6 +204,38 @@ class TradeLedgerService:
             db.flush()
         return {"status": "ok", "trades": len(trades), "summary": summary, "reality_check": reality}
 
+    def refresh_trades_incremental(
+        self,
+        db: Session,
+        game: TradingGame,
+        trades: list[TradingGameTrade],
+        *,
+        commit: bool = True,
+        persist_reality: bool = True,
+    ) -> dict:
+        """Enrich new trades without replaying transparency for the full ledger."""
+
+        for trade in trades:
+            self.refresh_trade(db, game, trade)
+        reality = TradingGameRealityCheckService().evaluate(db, game, persist=persist_reality)
+        summary = self.summary_for_game(db, game)
+        game.ledger_summary = summary
+        game.reality_check_summary = reality
+        game.transparency_updated_at = datetime.utcnow()
+        game.updated_at = datetime.utcnow()
+        EquityCurveAnnotationService().refresh(db, game, trades)
+        if commit:
+            db.commit()
+        else:
+            db.flush()
+        return {
+            "status": "ok",
+            "trades_enriched": len(trades),
+            "summary": summary,
+            "reality_check": reality,
+            "mode": "incremental",
+        }
+
     def refresh_trade(self, db: Session, game: TradingGame, trade: TradingGameTrade) -> TradingGameTrade:
         asset = db.scalar(select(Asset).where(Asset.ticker == trade.ticker).limit(1))
         simulation = db.get(ExecutionSimulation, trade.execution_simulation_id) if trade.execution_simulation_id else None

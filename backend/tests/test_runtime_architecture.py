@@ -47,6 +47,19 @@ def test_brain_event_bus_persists_module_events():
         assert row.payload_json["items"] == 3
 
 
+def test_latest_runtime_event_keeps_infrequent_modules_visible():
+    with setup_db() as db:
+        bus = BrainEventBus()
+        bus.publish(db, "module_completed", "fundamentals_refresh", status="ok")
+        for index in range(350):
+            bus.publish(db, "module_completed", "snapshot_producer", status="ok", payload={"index": index})
+
+        latest = bus.latest_by_module(db)
+
+        assert latest["fundamentals_refresh"]["status"] == "ok"
+        assert latest["snapshot_producer"]["payload"]["index"] == 349
+
+
 def test_background_job_state_records_start_complete_and_budget_stop():
     with setup_db() as db:
         service = BackgroundJobStateService()
