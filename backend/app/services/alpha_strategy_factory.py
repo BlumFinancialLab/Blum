@@ -326,20 +326,31 @@ class AlphaStrategyFactory:
         }
 
     @staticmethod
+    def _candidate_replay_rows(db: Session, candidate: StrategyCandidateVariant) -> list[HyperbolicReplayTrade]:
+        specification = dict(candidate.specification_json or {})
+        if specification.get("evidence_binding") != "hyperbolic_replay_v1":
+            return []
+        expected_timeframes = tuple(candidate.timeframe_stack or [])
+        rows = db.scalars(
+            select(HyperbolicReplayTrade)
+            .where(
+                HyperbolicReplayTrade.setup_type == candidate.setup_type,
+                HyperbolicReplayTrade.state == "REPLAY_EVALUATED",
+            )
+            .order_by(HyperbolicReplayTrade.decision_timestamp)
+            .limit(5_000)
+        ).all()
+        return [
+            row
+            for row in rows
+            if tuple((row.decision_payload or {}).get("required_timeframes") or []) == expected_timeframes
+        ]
+
+    @staticmethod
     def _candidate_evidence(db: Session, candidate: StrategyCandidateVariant) -> dict:
         specification = dict(candidate.specification_json or {})
         binding = specification.get("evidence_binding")
-        rows = []
-        if binding == "hyperbolic_replay_v1":
-            rows = db.scalars(
-                select(HyperbolicReplayTrade)
-                .where(
-                    HyperbolicReplayTrade.setup_type == candidate.setup_type,
-                    HyperbolicReplayTrade.state == "REPLAY_EVALUATED",
-                )
-                .order_by(HyperbolicReplayTrade.decision_timestamp)
-                .limit(5_000)
-            ).all()
+        rows = AlphaStrategyFactory._candidate_replay_rows(db, candidate)
         returns = [float(row.r_multiple or 0.0) for row in rows]
         excess = [float(row.benchmark_excess) for row in rows if row.benchmark_excess is not None]
         windows = split_windows(returns, 3)
@@ -394,15 +405,7 @@ class AlphaStrategyFactory:
         validation = db.get(ReplayStrategyValidation, candidate.validation_id) if candidate.validation_id else None
         if validation is not None and (candidate.specification_json or {}).get("evidence_binding") != "hyperbolic_replay_v1":
             return False
-        current_sample = int(
-            db.scalar(
-                select(func.count(HyperbolicReplayTrade.id)).where(
-                    HyperbolicReplayTrade.setup_type == candidate.setup_type,
-                    HyperbolicReplayTrade.state == "REPLAY_EVALUATED",
-                )
-            )
-            or 0
-        )
+        current_sample = len(AlphaStrategyFactory._candidate_replay_rows(db, candidate))
         return validation is None or current_sample > int(validation.sample_size or 0)
 
     @staticmethod
@@ -415,15 +418,7 @@ class AlphaStrategyFactory:
             return
         rows = evidence.get("timestamps") or []
         if not rows:
-            trades = db.scalars(
-                select(HyperbolicReplayTrade)
-                .where(
-                    HyperbolicReplayTrade.setup_type == candidate.setup_type,
-                    HyperbolicReplayTrade.state == "REPLAY_EVALUATED",
-                )
-                .order_by(HyperbolicReplayTrade.decision_timestamp)
-                .limit(5_000)
-            ).all()
+            trades = AlphaStrategyFactory._candidate_replay_rows(db, candidate)
             rows = [trade.decision_timestamp for trade in trades]
         rows = sorted({timestamp for timestamp in rows if timestamp is not None})
         if len(rows) < 12:

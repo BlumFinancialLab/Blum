@@ -8,6 +8,9 @@ from sqlalchemy.orm import Session
 
 from app.core.database import Base
 from app.models import (
+    Asset,
+    HyperbolicReplayRun,
+    HyperbolicReplayTrade,
     PaperExecutionOrder,
     ReplayStrategyValidation,
     StrategyCandidateVariant,
@@ -233,6 +236,65 @@ def test_factory_run_is_idempotent_and_reports_missing_evidence() -> None:
     assert second["new_candidates"] == 0
     assert snapshot["examined_variants"] == 2
     assert snapshot["promoted_to_paper"] == 0
+
+
+def test_candidate_evidence_requires_the_exact_replay_timeframe_stack() -> None:
+    with setup_db() as db:
+        asset = Asset(
+            ticker="AAPL",
+            name="Apple",
+            category="Stock",
+            sector="Technology",
+            industry="Consumer Electronics",
+            asset_type="Stock",
+            country="USA",
+            currency="USD",
+            exchange="NASDAQ",
+            is_active=True,
+        )
+        replay_run = HyperbolicReplayRun(run_id="replay-stack-test", status="COMPLETED")
+        factory_run = StrategyFactoryRun(
+            run_uid="factory-stack-test",
+            hypothesis_family="intraday_scalping",
+            generation_seed=1,
+            status="RUNNING",
+        )
+        db.add_all([asset, replay_run, factory_run])
+        db.flush()
+        candidate = StrategyCandidateVariant(
+            factory_run_id=factory_run.id,
+            fingerprint="intraday-trend-full-stack",
+            family="intraday_scalping",
+            setup_type="intraday_trend",
+            timeframe_stack=["1d", "15m", "5m", "1m"],
+            specification_json={"evidence_binding": "hyperbolic_replay_v1"},
+        )
+        db.add(candidate)
+        for index, required_timeframes in enumerate(
+            (["1d", "15m", "5m"], ["1d", "15m", "5m", "1m"])
+        ):
+            db.add(
+                HyperbolicReplayTrade(
+                    run_id=replay_run.id,
+                    asset_id=asset.id,
+                    ticker=asset.ticker,
+                    market="USA",
+                    setup_type="intraday_trend",
+                    timeframe="5m",
+                    state="REPLAY_EVALUATED",
+                    decision_timestamp=datetime(2025, 1, 1) + timedelta(minutes=index),
+                    r_multiple=0.2 + index,
+                    data_quality_score=95.0,
+                    decision_payload={"required_timeframes": required_timeframes},
+                    execution_payload={"cost_profile": {"round_trip_bps": 4.0}},
+                )
+            )
+        db.flush()
+
+        evidence = AlphaStrategyFactory._candidate_evidence(db, candidate)
+
+    assert evidence["sample_size"] == 1
+    assert evidence["returns_r"] == [1.2]
 
 
 def test_multi_family_factory_run_uses_bounded_index_key_and_preserves_full_selection() -> None:
