@@ -331,7 +331,8 @@ def test_paper_trading_empty_state_is_explicit_and_snapshot_first():
     assert payload["journal_summary"]["open_count"] == 0
 
 
-def test_alpha_page_reports_insufficient_evidence_instead_of_claiming_alpha():
+def test_alpha_page_reports_insufficient_evidence_instead_of_claiming_alpha(monkeypatch):
+    monkeypatch.setattr("app.engine.brain.trader_brain.settings.paper_forward_lifecycle_enabled", False)
     with setup_db() as db:
         payload = TraderBrainService().alpha(db)
 

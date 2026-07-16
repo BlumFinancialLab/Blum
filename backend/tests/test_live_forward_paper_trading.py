@@ -435,6 +435,7 @@ def test_live_trading_run_cycle_delegates_to_scanner_owned_foundation(monkeypatc
 
 
 def test_paper_forward_run_once_reports_actionability_summary(monkeypatch):
+    monkeypatch.setattr("app.services.live_forward_paper_trading.settings.paper_forward_lifecycle_enabled", False)
     with setup_db() as db:
         service = LiveForwardPaperTradingService()
         install_scanner_payloads(monkeypatch, [
@@ -623,7 +624,8 @@ def test_paper_forward_scouting_falls_back_to_real_ohlcv_universe(monkeypatch):
         assert all(row["scouting_policy"] == "real_stored_ohlcv_only_no_synthetic_candidates" for row in rows)
 
 
-def test_paper_forward_run_lifecycle_refuses_when_disabled_without_override():
+def test_paper_forward_run_lifecycle_refuses_when_disabled_without_override(monkeypatch):
+    monkeypatch.setattr("app.services.live_forward_paper_trading.settings.paper_forward_lifecycle_enabled", False)
     with setup_db() as db:
         service = LiveForwardPaperTradingService()
         service.create_candidate(db, candidate())
