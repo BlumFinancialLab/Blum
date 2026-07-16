@@ -6,7 +6,13 @@ from sqlalchemy.orm import Session
 
 from app.core.database import Base
 from app.models import Asset, HyperbolicReplayTrade, ModelVersion, ReplayMarketBar, ReplayStrategyValidation, StrategyMemory
-from app.services.hyperbolic_replay import BlumHyperbolicReplayEngine, ReplayRunRequest, SETUP_REQUIREMENTS, _choose_setup
+from app.services.hyperbolic_replay import (
+    BlumHyperbolicReplayEngine,
+    ReplayRunRequest,
+    SETUP_REQUIREMENTS,
+    _choose_setup,
+    _eligible_setups,
+)
 from app.services.replay_execution import ReplayExecutionModel, ReplayPositionSizer
 from app.services.replay_validation import ReplayExperimentService, ReplayLearningFeedbackService, ReplayWalkForwardValidator
 from app.services.adaptive_replay_training import _validation_evidence
@@ -175,6 +181,46 @@ def test_full_multi_timeframe_replay_uses_daily_context_and_one_minute_execution
     )
 
 
+def test_full_multi_timeframe_replay_exercises_distinct_intraday_strategies():
+    with setup_db() as db:
+        asset = seed_asset(db)
+        start = datetime(2025, 1, 1)
+        seed_trending_bars(db, asset, "1d", start - timedelta(days=60), count=80, minutes=1440)
+        seed_trending_bars(db, asset, "15m", start - timedelta(hours=10), count=80, minutes=15)
+        seed_trending_bars(db, asset, "5m", start - timedelta(hours=3), count=80, minutes=5)
+        seed_trending_bars(db, asset, "1m", start, count=80, minutes=1)
+
+        BlumHyperbolicReplayEngine().run_cycle(
+            db,
+            ReplayRunRequest(asset_ids=[asset.id], max_assets=1, max_trades=4, fetch_missing=False),
+        )
+        setup_types = set(db.scalars(select(HyperbolicReplayTrade.setup_type)).all())
+
+    assert {"intraday_breakout", "intraday_trend"}.issubset(setup_types)
+
+
+def test_replay_budget_is_distributed_across_assets_instead_of_exhausted_by_first_ticker():
+    with setup_db() as db:
+        first = seed_asset(db, "AAPL")
+        second = seed_asset(db, "MSFT")
+        start = datetime(2025, 1, 1)
+        seed_trending_bars(db, first, "1d", start, count=80, minutes=1440)
+        seed_trending_bars(db, second, "1d", start, count=80, minutes=1440)
+
+        BlumHyperbolicReplayEngine().run_cycle(
+            db,
+            ReplayRunRequest(asset_ids=[first.id, second.id], max_assets=2, max_trades=4, fetch_missing=False),
+        )
+        evidence_by_ticker = dict(
+            db.execute(
+                select(HyperbolicReplayTrade.ticker, func.count(HyperbolicReplayTrade.id))
+                .group_by(HyperbolicReplayTrade.ticker)
+            ).all()
+        )
+
+    assert evidence_by_ticker == {"AAPL": 2, "MSFT": 2}
+
+
 def test_higher_timeframe_contradiction_blocks_intraday_breakout():
     with setup_db() as db:
         asset = seed_asset(db)
@@ -209,6 +255,16 @@ def test_daily_replay_continues_and_intraday_gaps_are_reported():
 def test_setup_requirements_include_mean_reversion_without_fake_one_minute_data():
     assert SETUP_REQUIREMENTS["mean_reversion"] == ("15m", "5m")
     assert _choose_setup({"15m", "5m"}) == ("mean_reversion", "5m")
+
+
+def test_eligible_setups_returns_every_strategy_supported_by_available_timeframes():
+    eligible = _eligible_setups({"1d", "15m", "5m", "1m"})
+
+    assert eligible[:2] == [
+        ("intraday_breakout", "1m"),
+        ("intraday_trend", "5m"),
+    ]
+    assert ("swing_breakout", "1d") in eligible
 
 
 def test_replay_computes_benchmark_excess_only_from_synchronized_stored_bars():

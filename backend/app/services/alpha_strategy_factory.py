@@ -42,6 +42,7 @@ FAMILY_DEFINITIONS: dict[str, dict] = {
     "cross_sectional_ranking": {"setup_type": "cross_sectional_momentum", "entries": ["top_decile", "top_quintile"]},
     "intraday_scalping": {
         "setup_type": "intraday_breakout",
+        "replay_setup_types": ["intraday_breakout", "intraday_trend"],
         "entries": ["one_minute_breakout", "five_minute_pullback"],
         "timeframe_stack": ["1d", "15m", "5m", "1m"],
         "holding_periods": [15, 45],
@@ -53,6 +54,7 @@ REPLAY_IMPLEMENTATIONS: dict[str, dict] = {
     "pullback": {"entry_rule": "pullback_signal", "stop_rule": "atr_or_one_percent", "target_rule": "two_r", "holding_period": 20},
     "mean_reversion": {"entry_rule": "mean_reversion_signal", "stop_rule": "atr_or_one_percent", "target_rule": "two_r", "holding_period": 20},
     "intraday_breakout": {"entry_rule": "close_breakout", "stop_rule": "atr_or_one_percent", "target_rule": "two_r", "holding_period": 20},
+    "intraday_trend": {"entry_rule": "five_minute_breakout", "stop_rule": "atr_or_one_percent", "target_rule": "two_r", "holding_period": 20},
 }
 
 
@@ -66,39 +68,44 @@ class StrategyFamilyRegistry:
             raise KeyError(f"unknown strategy family: {family}")
         timeframe_stack = list(definition.get("timeframe_stack") or ["1d"])
         holding_periods = list(definition.get("holding_periods") or [10, 20])
-        combinations = list(
-            product(
+        combinations = [
+            (definition["setup_type"], *combination)
+            for combination in product(
                 definition["entries"],
                 ["atr_1_5", "structure"],
                 ["two_r", "trailing_atr"],
                 holding_periods,
                 ["all", "aligned_only"],
             )
-        )
+        ]
         random.Random(int(seed)).shuffle(combinations)
         variants: list[dict] = []
-        canonical = REPLAY_IMPLEMENTATIONS.get(definition["setup_type"])
-        if canonical:
-            combinations.insert(
-                0,
-                (
-                    canonical["entry_rule"],
-                    canonical["stop_rule"],
-                    canonical["target_rule"],
-                    canonical["holding_period"],
-                    "all",
-                ),
-            )
+        canonical_combinations = []
+        for setup_type in definition.get("replay_setup_types") or [definition["setup_type"]]:
+            canonical = REPLAY_IMPLEMENTATIONS.get(setup_type)
+            if canonical:
+                canonical_combinations.append(
+                    (
+                        setup_type,
+                        canonical["entry_rule"],
+                        canonical["stop_rule"],
+                        canonical["target_rule"],
+                        canonical["holding_period"],
+                        "all",
+                    )
+                )
+        combinations = canonical_combinations + combinations
         seen: set[tuple] = set()
-        for entry, stop, target, holding, regime_filter in combinations:
-            combination = (entry, stop, target, holding, regime_filter)
+        for setup_type, entry, stop, target, holding, regime_filter in combinations:
+            combination = (setup_type, entry, stop, target, holding, regime_filter)
             if combination in seen:
                 continue
             seen.add(combination)
+            canonical = REPLAY_IMPLEMENTATIONS.get(setup_type)
             variants.append(
                 {
                     "family": family,
-                    "setup_type": definition["setup_type"],
+                    "setup_type": setup_type,
                     "market": "global",
                     "asset_class": "stocks,etfs",
                     "benchmark_ticker": "SPY",
@@ -110,7 +117,7 @@ class StrategyFamilyRegistry:
                     "regime_filter": regime_filter,
                     "complexity": 5,
                     "execution_model": "realistic_execution_v1",
-                    "evidence_binding": "hyperbolic_replay_v1" if canonical and combination[:4] == (
+                    "evidence_binding": "hyperbolic_replay_v1" if canonical and combination[1:5] == (
                         canonical["entry_rule"],
                         canonical["stop_rule"],
                         canonical["target_rule"],

@@ -215,7 +215,10 @@ def test_initial_strategy_family_registry_is_complete_and_bounded() -> None:
     assert len(first) == 4
     assert all(row["timeframe_stack"] == ["1d", "15m", "5m", "1m"] for row in first)
     assert first[0]["evidence_binding"] == "hyperbolic_replay_v1"
-    assert all(row["evidence_binding"] == "not_implemented" for row in first[1:])
+    assert first[0]["setup_type"] == "intraday_breakout"
+    assert first[1]["evidence_binding"] == "hyperbolic_replay_v1"
+    assert first[1]["setup_type"] == "intraday_trend"
+    assert all(row["evidence_binding"] == "not_implemented" for row in first[2:])
 
 
 def test_factory_run_is_idempotent_and_reports_missing_evidence() -> None:

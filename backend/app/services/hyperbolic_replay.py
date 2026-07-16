@@ -3,6 +3,7 @@ from __future__ import annotations
 from bisect import bisect_right
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from math import ceil
 import time
 from uuid import uuid4
 
@@ -17,7 +18,7 @@ from app.services.replay_execution import ReplayExecutionModel, ReplayPositionSi
 TIMEFRAME_ORDER = ("1d", "15m", "5m", "1m")
 SETUP_REQUIREMENTS = {
     "intraday_breakout": ("1d", "15m", "5m", "1m"),
-    "intraday_trend": ("1d", "15m", "5m"),
+    "intraday_trend": ("1d", "15m", "5m", "1m"),
     "mean_reversion": ("15m", "5m"),
     "pullback": ("1d", "15m"),
     "swing_breakout": ("1d",),
@@ -93,38 +94,60 @@ class BlumHyperbolicReplayEngine:
         markets: set[str] = set()
         generated = 0
         validated = 0
-        for asset in assets:
+        for asset_index, asset in enumerate(assets):
             if generated >= request.max_trades or time.perf_counter() - started >= request.max_seconds:
                 break
             markets.add(asset.country or asset.exchange or "UNKNOWN")
             available = self._available_timeframes(db, asset, request, blockers)
             used_timeframes.update(available)
-            setup = _choose_setup(available)
-            if setup is None:
+            eligible_setups = _eligible_setups(available)
+            if not eligible_setups:
                 blockers.append({"ticker": asset.ticker, "code": "COVERAGE_INCOMPLETE", "timeframe": "all"})
                 continue
-            setup_type, execution_timeframe = setup
-            bars_by_timeframe = {
+            bars_by_available_timeframe = {
                 timeframe: self._bars(db, asset.id, timeframe, request)
-                for timeframe in SETUP_REQUIREMENTS[setup_type]
+                for timeframe in available
             }
-            bars = bars_by_timeframe[execution_timeframe]
-            remaining = request.max_trades - generated
-            trades = self._replay_asset(
-                db,
-                run,
-                asset,
-                bars,
-                bars_by_timeframe,
-                setup_type,
-                execution_timeframe,
-                remaining,
-                request.capital,
-            )
-            if not trades:
-                blockers.append({"ticker": asset.ticker, "code": "NO_NEW_REPLAY_EVIDENCE", "timeframe": execution_timeframe})
-            generated += len(trades)
-            validated += sum(1 for trade in trades if trade.state == "REPLAY_EVALUATED")
+            remaining_assets = len(assets) - asset_index
+            asset_budget = max(1, ceil((request.max_trades - generated) / remaining_assets))
+            asset_generated = 0
+            for setup_index, (setup_type, execution_timeframe) in enumerate(eligible_setups):
+                if (
+                    generated >= request.max_trades
+                    or asset_generated >= asset_budget
+                    or time.perf_counter() - started >= request.max_seconds
+                ):
+                    break
+                bars_by_timeframe = {
+                    timeframe: bars_by_available_timeframe[timeframe]
+                    for timeframe in SETUP_REQUIREMENTS[setup_type]
+                }
+                bars = bars_by_timeframe[execution_timeframe]
+                remaining_setups = len(eligible_setups) - setup_index
+                setup_budget = max(1, ceil((asset_budget - asset_generated) / remaining_setups))
+                trades = self._replay_asset(
+                    db,
+                    run,
+                    asset,
+                    bars,
+                    bars_by_timeframe,
+                    setup_type,
+                    execution_timeframe,
+                    min(setup_budget, request.max_trades - generated),
+                    request.capital,
+                )
+                if not trades:
+                    blockers.append(
+                        {
+                            "ticker": asset.ticker,
+                            "code": "NO_NEW_REPLAY_EVIDENCE",
+                            "timeframe": execution_timeframe,
+                            "setup_type": setup_type,
+                        }
+                    )
+                asset_generated += len(trades)
+                generated += len(trades)
+                validated += sum(1 for trade in trades if trade.state == "REPLAY_EVALUATED")
         duration = time.perf_counter() - started
         run.assets_selected = len(assets)
         run.trades_generated = generated
@@ -380,10 +403,16 @@ class BlumHyperbolicReplayEngine:
 
 
 def _choose_setup(available: set[str]) -> tuple[str, str] | None:
+    eligible = _eligible_setups(available)
+    return eligible[0] if eligible else None
+
+
+def _eligible_setups(available: set[str]) -> list[tuple[str, str]]:
+    eligible: list[tuple[str, str]] = []
     for setup in SETUP_PRIORITY:
         if set(SETUP_REQUIREMENTS[setup]).issubset(available):
-            return setup, SETUP_EXECUTION_TIMEFRAME[setup]
-    return None
+            eligible.append((setup, SETUP_EXECUTION_TIMEFRAME[setup]))
+    return eligible
 
 
 def _breakout_signal(history: list[ReplayMarketBar], current: ReplayMarketBar) -> bool:
