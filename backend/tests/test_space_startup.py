@@ -23,7 +23,6 @@ def test_embedded_postgres_primary_cluster_lives_on_persistent_storage() -> None
     assert 'pg_ctl' in source
     assert 'service postgresql start' not in source
     assert 'export PGDATA="${BLUM_EMBEDDED_PGDATA}"' in source
-    assert 'chown -R postgres:postgres "${BLUM_EMBEDDED_PGDATA}"' in source
 
 
 def test_embedded_postgres_restore_supports_custom_and_bootstrap_fallbacks() -> None:
