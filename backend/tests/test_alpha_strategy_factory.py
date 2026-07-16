@@ -292,9 +292,21 @@ def test_candidate_evidence_requires_the_exact_replay_timeframe_stack() -> None:
         db.flush()
 
         evidence = AlphaStrategyFactory._candidate_evidence(db, candidate)
+        previous_validation = ReplayStrategyValidation(
+            setup_type="intraday_trend",
+            sample_size=2,
+            verdict="NEEDS_MORE_EVIDENCE",
+            explanation="Legacy validation counted an incompatible timeframe stack.",
+        )
+        db.add(previous_validation)
+        db.flush()
+        candidate.validation_id = previous_validation.id
+        db.flush()
+        requires_revalidation = AlphaStrategyFactory._has_new_evidence(db, candidate)
 
     assert evidence["sample_size"] == 1
     assert evidence["returns_r"] == [1.2]
+    assert requires_revalidation is True
 
 
 def test_multi_family_factory_run_uses_bounded_index_key_and_preserves_full_selection() -> None:

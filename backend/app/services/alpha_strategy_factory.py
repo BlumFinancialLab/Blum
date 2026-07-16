@@ -406,7 +406,7 @@ class AlphaStrategyFactory:
         if validation is not None and (candidate.specification_json or {}).get("evidence_binding") != "hyperbolic_replay_v1":
             return False
         current_sample = len(AlphaStrategyFactory._candidate_replay_rows(db, candidate))
-        return validation is None or current_sample > int(validation.sample_size or 0)
+        return validation is None or current_sample != int(validation.sample_size or 0)
 
     @staticmethod
     def _persist_folds(db: Session, candidate: StrategyCandidateVariant, evidence: dict) -> None:
