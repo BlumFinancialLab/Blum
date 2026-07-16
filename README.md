@@ -1710,7 +1710,7 @@ docker run --rm -p 7860:7860 \
   blum-ai-financial-intelligence
 ```
 
-For Hugging Face Docker demos without an external database, the startup script writes periodic embedded PostgreSQL backups to `/data/blum/embedded_postgres_blum.sql` and restores them on startup when the public schema is empty. This protects the learning memory only when Hugging Face persistent storage is enabled for the `/data` mount. The strict no-reset configuration is still an external `DATABASE_URL`.
+For Hugging Face Docker deployments without an external database, the primary PostgreSQL cluster now lives directly in `/data/blum/postgres_data`. Database commits therefore survive image rebuilds without waiting for the periodic dump cycle. The startup script still writes an atomic custom-format backup to `/data/blum/embedded_postgres_blum.dump` as a secondary recovery path and imports that backup once when migrating an existing Space to the persistent cluster. This requires persistent storage for the `/data` mount; an external `DATABASE_URL` remains supported.
 
 ## Hugging Face Spaces Deployment
 
@@ -1730,7 +1730,7 @@ The UI exposes `/system/status` in the sidebar and dashboard. If the GUI looks u
 
 - `app_version` must show the latest deployed version.
 - `feature_set` must show the expected feature bundle.
-- `persistence.mode` must be `external_postgres` for strict no-reset durability, or `embedded_postgres` with a populated backup file plus persistent `/data` storage for demo durability.
+- `persistence.mode` must be `external_postgres` or `persistent_embedded_postgres` for continuous durability. Legacy `embedded_postgres` mode depends on the latest completed dump and may lose writes made after that dump.
 - `GET /autonomous/status` shows the latest autonomous run, stage diagnostics, readiness score and dataset catalog status.
 - `POST /system/persistence/backup` exists as an administrative recovery endpoint; normal operation persists through the autonomous worker.
 - `Financial Brain` shows `fallback mode` unless `BLUM_ENABLE_FINANCIAL_BRAIN_MODEL=true`.

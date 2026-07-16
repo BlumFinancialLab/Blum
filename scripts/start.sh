@@ -3,6 +3,7 @@ set -euo pipefail
 
 export PORT="${PORT:-7860}"
 export BLUM_PERSIST_DIR="${BLUM_PERSIST_DIR:-/data/blum}"
+export BLUM_EMBEDDED_PGDATA="${BLUM_EMBEDDED_PGDATA:-${BLUM_PERSIST_DIR}/postgres_data}"
 export BLUM_DB_BACKUP_SECONDS="${BLUM_DB_BACKUP_SECONDS:-1800}"
 export BLUM_DB_RESTORE_JOBS="${BLUM_DB_RESTORE_JOBS:-2}"
 RESTORE_STATUS_PID=""
@@ -44,19 +45,42 @@ start_backup_loop() {
   fi
 }
 
+start_persistent_postgres() {
+  local pg_bin
+  pg_bin="$(pg_config --bindir)"
+  mkdir -p "${BLUM_EMBEDDED_PGDATA}" /var/run/postgresql
+  chown postgres:postgres "${BLUM_EMBEDDED_PGDATA}" /var/run/postgresql
+  chmod 700 "${BLUM_EMBEDDED_PGDATA}"
+
+  if [[ ! -s "${BLUM_EMBEDDED_PGDATA}/PG_VERSION" ]]; then
+    echo "Initializing persistent embedded PostgreSQL at ${BLUM_EMBEDDED_PGDATA}."
+    su postgres -c "'${pg_bin}/initdb' -D '${BLUM_EMBEDDED_PGDATA}' --auth-local=trust --auth-host=scram-sha-256"
+  fi
+
+  if su postgres -c "'${pg_bin}/pg_isready' -q -h 127.0.0.1 -p 5432"; then
+    return
+  fi
+  rm -f "${BLUM_EMBEDDED_PGDATA}/postmaster.pid"
+  su postgres -c "'${pg_bin}/pg_ctl' -D '${BLUM_EMBEDDED_PGDATA}' -o '-c listen_addresses=127.0.0.1 -p 5432 -k /var/run/postgresql' -w start"
+}
+
 if [[ -z "${DATABASE_URL:-}" ]]; then
-  echo "No DATABASE_URL provided. Starting embedded PostgreSQL for the Hugging Face Docker demo."
+  echo "No DATABASE_URL provided. Starting persistent embedded PostgreSQL for the Hugging Face Docker demo."
   mkdir -p "${BLUM_PERSIST_DIR}" || true
-  service postgresql start
-  su postgres -c "psql -tc \"SELECT 1 FROM pg_database WHERE datname='blum'\" | grep -q 1 || createdb blum"
-  su postgres -c "psql -c \"ALTER USER postgres PASSWORD 'postgres';\""
+  export PGDATA="${BLUM_EMBEDDED_PGDATA}"
   export BLUM_EMBEDDED_POSTGRES_BACKUP_FILE="${BLUM_PERSIST_DIR}/embedded_postgres_blum.dump"
   export BLUM_COMPRESSED_POSTGRES_BACKUP_FILE="${BLUM_PERSIST_DIR}/embedded_postgres_blum.sql.gz"
   export BLUM_COMPRESSED_POSTGRES_PART_PREFIX="${BLUM_PERSIST_DIR}/embedded_postgres_blum.sql.gz"
   export BLUM_COMPRESSED_POSTGRES_PARTS_READY_FILE="${BLUM_PERSIST_DIR}/embedded_postgres_blum.sql.gz.parts-ready"
   export BLUM_LEGACY_POSTGRES_BACKUP_FILE="${BLUM_PERSIST_DIR}/embedded_postgres_blum.sql"
+  if [[ ! -s "${BLUM_EMBEDDED_PGDATA}/PG_VERSION" ]] && { [[ -s "${BLUM_EMBEDDED_POSTGRES_BACKUP_FILE}" ]] || [[ -s "${BLUM_COMPRESSED_POSTGRES_BACKUP_FILE}" ]] || [[ -s "${BLUM_COMPRESSED_POSTGRES_PARTS_READY_FILE}" ]] || [[ -s "${BLUM_LEGACY_POSTGRES_BACKUP_FILE}" ]]; }; then
+    start_restore_status_server
+  fi
+  start_persistent_postgres
+  su postgres -c "psql -tc \"SELECT 1 FROM pg_database WHERE datname='blum'\" | grep -q 1 || createdb blum"
+  su postgres -c "psql -c \"ALTER USER postgres PASSWORD 'postgres';\""
   TABLE_COUNT="$(su postgres -c "psql -d blum -tAc \"SELECT count(*) FROM information_schema.tables WHERE table_schema='public';\"" | tr -d '[:space:]')"
-  if [[ "${TABLE_COUNT:-0}" == "0" ]] && { [[ -s "${BLUM_EMBEDDED_POSTGRES_BACKUP_FILE}" ]] || [[ -s "${BLUM_COMPRESSED_POSTGRES_BACKUP_FILE}" ]] || [[ -s "${BLUM_COMPRESSED_POSTGRES_PARTS_READY_FILE}" ]] || [[ -s "${BLUM_LEGACY_POSTGRES_BACKUP_FILE}" ]]; }; then
+  if [[ "${TABLE_COUNT:-0}" == "0" && -z "${RESTORE_STATUS_PID}" ]] && { [[ -s "${BLUM_EMBEDDED_POSTGRES_BACKUP_FILE}" ]] || [[ -s "${BLUM_COMPRESSED_POSTGRES_BACKUP_FILE}" ]] || [[ -s "${BLUM_COMPRESSED_POSTGRES_PARTS_READY_FILE}" ]] || [[ -s "${BLUM_LEGACY_POSTGRES_BACKUP_FILE}" ]]; }; then
     start_restore_status_server
   fi
   if [[ "${TABLE_COUNT:-0}" == "0" && -s "${BLUM_EMBEDDED_POSTGRES_BACKUP_FILE}" ]]; then
@@ -75,7 +99,7 @@ if [[ -z "${DATABASE_URL:-}" ]]; then
   elif [[ ! -s "${BLUM_EMBEDDED_POSTGRES_BACKUP_FILE}" && ! -s "${BLUM_COMPRESSED_POSTGRES_BACKUP_FILE}" && ! -s "${BLUM_LEGACY_POSTGRES_BACKUP_FILE}" ]]; then
     echo "No embedded PostgreSQL backup found yet. A new backup will be written periodically."
   else
-    echo "Embedded PostgreSQL already contains tables; skipping restore."
+    echo "Persistent embedded PostgreSQL already contains tables; skipping restore."
   fi
   stop_restore_status_server
   export DATABASE_URL="postgresql+psycopg2://postgres:postgres@127.0.0.1:5432/blum"
