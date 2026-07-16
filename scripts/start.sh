@@ -49,7 +49,9 @@ start_persistent_postgres() {
   local pg_bin
   pg_bin="$(pg_config --bindir)"
   mkdir -p "${BLUM_EMBEDDED_PGDATA}" /var/run/postgresql
-  chown postgres:postgres "${BLUM_EMBEDDED_PGDATA}" /var/run/postgresql
+  # Hugging Face bucket volumes may remount persisted files with root ownership.
+  chown -R postgres:postgres "${BLUM_EMBEDDED_PGDATA}"
+  chown postgres:postgres /var/run/postgresql
   chmod 700 "${BLUM_EMBEDDED_PGDATA}"
 
   if [[ ! -s "${BLUM_EMBEDDED_PGDATA}/PG_VERSION" ]]; then
