@@ -2063,14 +2063,28 @@ def paper_forward_actionability_summary(rows: list[LiveForwardPaperTrade]) -> di
     diagnoses = [(row, actionability_diagnosis_from_trade(row)) for row in rows]
     status_counts = Counter(str(diagnosis.get("actionability_status") or "ERROR") for _, diagnosis in diagnoses)
     reason_counts = Counter(str(diagnosis.get("rejection_reason") or "unknown") for _, diagnosis in diagnoses if str(diagnosis.get("actionability_status")) != "ACTIONABLE")
-    actionable_rows = [(row, diagnosis) for row, diagnosis in diagnoses if diagnosis.get("actionability_status") == "ACTIONABLE"]
-    waiting_rows = [(row, diagnosis) for row, diagnosis in diagnoses if diagnosis.get("actionability_status") == "WAITING_FOR_TRIGGER"]
+    actionable_rows = [
+        (row, diagnosis)
+        for row, diagnosis in diagnoses
+        if row.status == "CANDIDATE" and diagnosis.get("actionability_status") == "ACTIONABLE"
+    ]
+    waiting_rows = [
+        (row, diagnosis)
+        for row, diagnosis in diagnoses
+        if row.status == "WAITING_FOR_TRIGGER" and diagnosis.get("actionability_status") == "WAITING_FOR_TRIGGER"
+    ]
+    blocked_rows = [
+        (row, diagnosis)
+        for row, diagnosis in diagnoses
+        if row.status == "DATA_BLOCKED" or diagnosis.get("actionability_status") == "DATA_BLOCKED"
+    ]
     skipped_rows = [
         (row, diagnosis)
         for row, diagnosis in diagnoses
-        if diagnosis.get("actionability_status") not in {"ACTIONABLE", "WAITING_FOR_TRIGGER", "DATA_BLOCKED"}
+        if (row, diagnosis) not in actionable_rows
+        and (row, diagnosis) not in waiting_rows
+        and (row, diagnosis) not in blocked_rows
     ]
-    blocked_rows = [(row, diagnosis) for row, diagnosis in diagnoses if diagnosis.get("actionability_status") == "DATA_BLOCKED"]
     return {
         "total_candidates": len(rows),
         "actionable_count": len(actionable_rows),

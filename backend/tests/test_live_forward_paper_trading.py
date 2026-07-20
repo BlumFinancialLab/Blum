@@ -585,6 +585,20 @@ def test_paper_forward_run_once_reports_actionability_summary(monkeypatch):
         assert snapshot["paper_forward_lifecycle_mode"] == "CANDIDATE_FREEZE_ONLY"
 
 
+def test_actionability_summary_does_not_count_skipped_trade_as_operationally_actionable():
+    with setup_db() as db:
+        service = LiveForwardPaperTradingService()
+        trade = service.create_candidate(db, candidate())
+        trade.status = "SKIPPED"
+        trade.classification_reason = "entry_geometry_deteriorated"
+        db.commit()
+
+        summary = service.actionability_summary(db)
+
+    assert summary["actionable_count"] == 0
+    assert summary["skipped_count"] == 1
+
+
 def test_paper_forward_opportunity_scanner_classifies_trade_watchlist_blocked_and_data_blocked():
     with setup_db() as db:
         seed_asset(db, "NVDA")
