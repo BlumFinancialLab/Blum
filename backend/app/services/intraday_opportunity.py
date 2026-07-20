@@ -153,7 +153,15 @@ class BlumIntradayOpportunityEngine:
         )
         if size.units <= 0:
             return IntradayDecision(INTRADAY_BLOCKED, size.blocker or "SIZING_BLOCKED", "Dynamic position sizing rejected the setup.", **base)
-        sizing = IntradayPositionSize(size.units, size.notional, size.risk_amount, size.risk_fraction * 100.0, "Volatility, liquidity, confidence, edge, regime, data quality and stop distance.")
+        evidence_lane = str(strategy.metrics.get("evidence_lane") or "certified_paper")
+        risk_multiplier = max(0.05, min(1.0, float(strategy.metrics.get("paper_risk_multiplier") or 1.0)))
+        sizing = IntradayPositionSize(
+            round(size.units * risk_multiplier, 6),
+            round(size.notional * risk_multiplier, 4),
+            round(size.risk_amount * risk_multiplier, 4),
+            round(size.risk_fraction * 100.0 * risk_multiplier, 6),
+            f"Volatility, liquidity, confidence, edge, regime, data quality and stop distance; {evidence_lane} risk multiplier {risk_multiplier:.2f}.",
+        )
         return IntradayDecision(
             INTRADAY_TRADE_CANDIDATE,
             "APPROVED",
@@ -172,7 +180,13 @@ class BlumIntradayOpportunityEngine:
             session=session,
             costs=costs,
             sizing=sizing,
-            evidence={"timeframes": list(strategy.timeframe_stack), "data_timestamps": {key: value.isoformat() if value else None for key, value in data.latest_timestamps.items()}},
+            evidence={
+                "timeframes": list(strategy.timeframe_stack),
+                "data_timestamps": {key: value.isoformat() if value else None for key, value in data.latest_timestamps.items()},
+                "evidence_lane": evidence_lane,
+                "paper_risk_multiplier": risk_multiplier,
+                "certified_for_copy_readiness": bool(strategy.metrics.get("certified_for_copy_readiness", evidence_lane == "certified_paper")),
+            },
             **base,
         )
 

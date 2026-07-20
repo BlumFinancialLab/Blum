@@ -209,6 +209,30 @@ def test_open_forward_trade_does_not_count_as_closed_evidence(db):
     assert card.forward_trades == 0
 
 
+def test_experimental_intraday_trade_is_not_projected_as_certified_copy_evidence(db):
+    game = LiveForwardPaperGame(game_id="experimental-intraday-evidence-game")
+    db.add(game)
+    db.flush()
+    source = forward_trade(
+        game,
+        uid="experimental-intraday-closed",
+        status="CLOSED",
+        evidence_type="PAPER_FORWARD_INTRADAY_EXPERIMENTAL",
+        trading_mode="INTRADAY_PAPER_FORWARD",
+    )
+    db.add(source)
+    db.commit()
+
+    StrategyEvidenceProjector().project(db)
+
+    projected_source_ids = {
+        row.get("source_id")
+        for card in db.scalars(select(StrategyEvidenceSnapshot)).all()
+        for row in (card.source_rows_json or [])
+    }
+    assert source.id not in projected_source_ids
+
+
 def test_legacy_standard_forward_producer_shape_projects_as_paper_without_mutating_source(db):
     game = LiveForwardPaperGame(game_id="legacy-standard-forward-game")
     db.add(game)

@@ -27,7 +27,7 @@ from app.models import (
     StrategyMemory,
     TradeLearningEvidence,
 )
-from app.services.intraday_contracts import PAPER_FORWARD_INTRADAY
+from app.services.intraday_contracts import PAPER_FORWARD_INTRADAY, PAPER_FORWARD_INTRADAY_EXPERIMENTAL
 from app.services.intraday_market_data import StrictIntradayDataGateway
 from app.services.intraday_opportunity import IntradayPortfolioState, BlumIntradayOpportunityEngine
 from app.services.intraday_paper_engine import (
@@ -102,6 +102,8 @@ def seed_validation(
         "target_rules": {"risk_multiple": 1.8},
         "certification_version": "alpha_strategy_factory_v1",
         "multiple_testing_significant": True,
+        "cost_coverage": 1.0,
+        "data_quality_score": 90.0,
     }
     row = ReplayStrategyValidation(
         setup_type=setup_type,
@@ -223,6 +225,63 @@ def test_registry_accepts_metrics_emitted_by_alpha_strategy_factory():
     assert rows[0].walk_forward_score >= 60.0
 
 
+def test_registry_exposes_positive_cost_adjusted_challenger_as_experimental_only(monkeypatch):
+    monkeypatch.setattr("app.services.promoted_strategy_registry.settings.intraday_experimental_min_samples", 100)
+    with setup_db() as db:
+        validation = seed_validation(
+            db,
+            sample_size=150,
+            verdict="NEEDS_MORE_EVIDENCE",
+            metrics={
+                "net_expectancy_r": 0.18,
+                "benchmark_excess": 1.5,
+                "stability_score": 62.0,
+                "multiple_testing_significant": False,
+            },
+        )
+
+        promoted = BlumPromotedStrategyRegistry().list_eligible(db, market="USA", asset_class="Stock")
+        experimental = BlumPromotedStrategyRegistry().list_experimental(db, market="USA", asset_class="Stock")
+
+    assert promoted == []
+    assert [row.validation_id for row in experimental] == [validation.id]
+    assert experimental[0].metrics["evidence_lane"] == "experimental_paper"
+    assert experimental[0].metrics["paper_risk_multiplier"] == 0.25
+
+
+def test_experimental_intraday_strategy_uses_reduced_paper_risk(monkeypatch):
+    monkeypatch.setattr("app.services.promoted_strategy_registry.settings.intraday_experimental_min_samples", 100)
+    with setup_db() as db:
+        asset = seed_asset(db)
+        seed_validation(
+            db,
+            sample_size=150,
+            verdict="NEEDS_MORE_EVIDENCE",
+            metrics={
+                "net_expectancy_r": 0.25,
+                "benchmark_excess": 2.0,
+                "stability_score": 75.0,
+                "multiple_testing_significant": False,
+            },
+        )
+        seed_complete_stack(db, asset)
+        strategy = BlumPromotedStrategyRegistry().list_experimental(db, market="USA", asset_class="Stock")[0]
+        bundle = StrictIntradayDataGateway(refresh_missing=False).load(db, asset=asset, now=NOW)
+
+        decision = BlumIntradayOpportunityEngine().evaluate(
+            strategy=strategy,
+            data=bundle,
+            portfolio=IntradayPortfolioState(capital=10_000.0),
+            desk="NasdaqAgent",
+            benchmark_ticker="QQQ",
+        )
+
+    assert decision.status == "INTRADAY_TRADE_CANDIDATE"
+    assert decision.sizing is not None
+    assert decision.sizing.risk_percent <= 0.25
+    assert decision.evidence["evidence_lane"] == "experimental_paper"
+
+
 def test_data_gateway_requires_all_four_timeframes_without_fallback():
     with setup_db() as db:
         asset = seed_asset(db)
@@ -317,7 +376,7 @@ def test_intraday_discovery_rotates_across_the_stored_asset_universe():
             db.add(
                 PriceHistory(
                     asset_id=asset.id,
-                    date=NOW.date(),
+                    date=datetime.utcnow().date(),
                     open=100.0,
                     high=101.0,
                     low=99.0,
@@ -573,6 +632,50 @@ def test_closed_intraday_trade_updates_forward_memory_once_but_open_trade_does_n
     assert evidence_count == 1
     assert memory_count == 1
     assert event_count == 1
+
+
+def test_experimental_intraday_trade_learns_without_becoming_certified_evidence():
+    with setup_db() as db:
+        game = LiveForwardPaperGame(game_id="experimental-learning", starting_capital=100, current_capital=100, cash=100)
+        db.add(game)
+        db.flush()
+        trade = LiveForwardPaperTrade(
+            trade_uid="experimental-learning-trade",
+            game_id=game.id,
+            ticker="AMD",
+            setup_type="intraday_breakout",
+            status="CLOSED",
+            decision_timestamp=NOW,
+            closed_at=NOW + timedelta(minutes=20),
+            duplicate_key="experimental-learning-key",
+            trading_mode="INTRADAY_PAPER_FORWARD",
+            evidence_type=PAPER_FORWARD_INTRADAY_EXPERIMENTAL,
+            market="USA",
+            desk="NasdaqAgent",
+            session_name="regular",
+            timeframe_stack=["1d", "15m", "5m", "1m"],
+            entry_price=100.0,
+            exit_price=101.0,
+            stop_loss=99.0,
+            position_size=0.25,
+            net_pnl_eur=0.24,
+            r_multiple=1.0,
+            close_reason="TARGET_HIT",
+            frozen_decision_payload={"regime": "trend_up"},
+        )
+        db.add(trade)
+        db.flush()
+
+        result = IntradayPaperLearningService().apply_closed_trade(db, trade)
+        snapshot = intraday_snapshot_summary(db, now=NOW)
+        evidence = db.scalar(select(TradeLearningEvidence).where(TradeLearningEvidence.action_taken == f"intraday_trade:{trade.id}"))
+        memory = db.scalar(select(StrategyMemory))
+
+    assert result["status"] == "applied"
+    assert evidence.supporting_trades_json["evidence_type"] == PAPER_FORWARD_INTRADAY_EXPERIMENTAL
+    assert memory.memory_key.startswith("intraday_experimental:")
+    assert snapshot["experimental_closed_sample_size"] == 1
+    assert snapshot["closed_sample_size"] == 0
 
 
 def test_intraday_snapshot_is_read_only_and_reports_no_activity_truthfully():

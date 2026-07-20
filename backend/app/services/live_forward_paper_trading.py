@@ -30,6 +30,7 @@ from app.services.trading_intelligence_lab import (
     actionability_event_payload,
     diagnose_candidate_actionability,
     compact_candidate,
+    candidate_evidence_fingerprint,
     ensure_live_trade_game,
     freeze_decision_payload,
     latest_market_price_after,
@@ -86,6 +87,7 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
             model_version=feedback["model_version_used"],
             setup_type=setup_type,
             entry_trigger=entry_trigger,
+            evidence_fingerprint=candidate_evidence_fingerprint(decision_payload),
         )
         existing = db.scalar(select(LiveForwardPaperTrade).where(LiveForwardPaperTrade.duplicate_key == duplicate_key).limit(1))
         if existing:
@@ -566,12 +568,14 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
                 skipped.append({"trade_id": trade.id, "ticker": trade.ticker, "reason": "ticker_position_already_open"})
                 continue
 
-            if classification_from_trade(trade) != TRADE_CANDIDATE:
+            classification = classification_from_trade(trade)
+            watchlist_can_mature = classification == WATCHLIST_CANDIDATE and waiting_candidate_can_mature(trade)
+            if classification != TRADE_CANDIDATE and not watchlist_can_mature:
                 waiting.append({
                     "trade_id": trade.id,
                     "ticker": trade.ticker,
                     "reason": "non_trade_candidate",
-                    "classification": classification_from_trade(trade),
+                    "classification": classification,
                 })
                 continue
 
@@ -592,6 +596,16 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
             if not condition["eligible"]:
                 waiting.append({"trade_id": trade.id, "ticker": trade.ticker, **condition})
                 continue
+
+            if watchlist_can_mature:
+                self.append_event_once(
+                    db,
+                    trade,
+                    "WATCHLIST_TRIGGER_CONFIRMED",
+                    "A later market observation confirmed the explicit trigger stored in the frozen watchlist decision.",
+                    payload={"condition": condition, "original_classification": classification},
+                    price_used=latest_price,
+                )
 
             opened.append(self.open_candidate_trade(db, live_game, trade, latest_date, latest_price, condition))
             open_tickers.add(trade.ticker.upper())
@@ -1197,7 +1211,6 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
 
     def entry_condition_status(self, trade: LiveForwardPaperTrade, latest_price: float) -> dict:
         plan = (trade.frozen_decision_payload or {}).get("trade_plan") or {}
-        entry_type = normalize_text(plan.get("entry_type") or plan.get("order_type") or "MARKET").upper()
         entry_zone = plan.get("entry_zone") if isinstance(plan.get("entry_zone"), dict) else {}
         trigger_price = first_positive_float(
             plan.get("trigger_price"),
@@ -1213,6 +1226,14 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
             entry_zone.get("low"),
             trade.entry_price,
         )
+        entry_type = normalize_text(plan.get("entry_type") or plan.get("order_type")).upper()
+        if not entry_type:
+            if trigger_price:
+                entry_type = "ABOVE_TRIGGER"
+            elif limit_price:
+                entry_type = "PULLBACK"
+            else:
+                entry_type = "MARKET"
 
         if entry_type in {"MARKET", "MKT"}:
             return {"eligible": True, "entry_type": "MARKET", "reason": "Market-style paper entry evaluated on latest future data."}
@@ -1353,6 +1374,7 @@ def existing_candidate_id(db: Session, service: LiveForwardPaperTradingService, 
         model_version=feedback["model_version_used"],
         setup_type=setup_type,
         entry_trigger=entry_trigger,
+        evidence_fingerprint=candidate_evidence_fingerprint(candidate),
     )
     return db.scalar(select(LiveForwardPaperTrade.id).where(LiveForwardPaperTrade.duplicate_key == duplicate_key).limit(1))
 
@@ -1615,6 +1637,38 @@ def classification_from_trade(row: LiveForwardPaperTrade) -> str:
     if row.status == "DATA_BLOCKED":
         return DATA_BLOCKED_CANDIDATE
     return BLOCKED_CANDIDATE
+
+
+def waiting_candidate_can_mature(row: LiveForwardPaperTrade) -> bool:
+    payload = row.frozen_decision_payload if isinstance(row.frozen_decision_payload, dict) else {}
+    diagnosis = payload.get("actionability_diagnosis") if isinstance(payload.get("actionability_diagnosis"), dict) else {}
+    scanner_original_status = str(diagnosis.get("scanner_original_status") or diagnosis.get("actionability_status") or "")
+    plan = payload.get("trade_plan") if isinstance(payload.get("trade_plan"), dict) else {}
+    entry_type = normalize_text(plan.get("entry_type") or plan.get("order_type")).upper()
+    entry_zone = plan.get("entry_zone") if isinstance(plan.get("entry_zone"), dict) else {}
+    has_numeric_trigger = first_positive_float(
+        plan.get("trigger_price"),
+        plan.get("entry_trigger_price"),
+        plan.get("breakout_level"),
+        plan.get("confirmation_price"),
+        entry_zone.get("high"),
+    ) is not None
+    has_numeric_limit = first_positive_float(
+        plan.get("limit_price"),
+        plan.get("pullback_price"),
+        entry_zone.get("low"),
+    ) is not None
+    explicit_condition = (
+        entry_type in {"ABOVE_TRIGGER", "BREAKOUT", "BELOW_TRIGGER"} and has_numeric_trigger
+    ) or (
+        entry_type in {"LIMIT", "PULLBACK"} and has_numeric_limit
+    ) or (not entry_type and (has_numeric_trigger or has_numeric_limit))
+    return (
+        row.status == "WAITING_FOR_TRIGGER"
+        and scanner_original_status == "WAITING_FOR_TRIGGER"
+        and bool(diagnosis.get("should_wait"))
+        and explicit_condition
+    )
 
 
 def skipped_market_summary(rows: list[LiveForwardPaperTrade]) -> list[dict]:

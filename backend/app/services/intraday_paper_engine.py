@@ -25,7 +25,12 @@ from app.models import (
     TradeLearningEvidence,
     TradingGameTrade,
 )
-from app.services.intraday_contracts import INTRADAY_TRADE_CANDIDATE, PAPER_FORWARD_INTRADAY, IntradayDecision
+from app.services.intraday_contracts import (
+    INTRADAY_TRADE_CANDIDATE,
+    PAPER_FORWARD_INTRADAY,
+    PAPER_FORWARD_INTRADAY_EXPERIMENTAL,
+    IntradayDecision,
+)
 from app.services.intraday_market_data import StrictIntradayDataGateway
 from app.services.intraday_opportunity import BlumIntradayOpportunityEngine, IntradayPortfolioState
 from app.services.intraday_no_trade_learning import IntradayNoTradeLearningService
@@ -128,6 +133,14 @@ class BlumIntradayPaperEngine:
                 seen_markets.add(market)
                 run.assets_checked += 1
                 strategies = self.registry.list_eligible(db, market=market, asset_class=asset.asset_type or asset.category or "Stock")
+                evidence_lane = "certified_paper"
+                if not strategies and settings.intraday_experimental_paper_enabled:
+                    strategies = self.registry.list_experimental(
+                        db,
+                        market=market,
+                        asset_class=asset.asset_type or asset.category or "Stock",
+                    )
+                    evidence_lane = "experimental_paper" if strategies else evidence_lane
                 if not strategies:
                     blockers.append({"ticker": asset.ticker, "market": market, "reason": "NO_PROMOTED_INTRADAY_STRATEGY"})
                     continue
@@ -146,7 +159,7 @@ class BlumIntradayPaperEngine:
                         benchmark_ticker=benchmark,
                         asset_type=asset.asset_type or "Stock",
                     )
-                    decisions.append(json_safe(decision.to_dict()))
+                    decisions.append({**json_safe(decision.to_dict()), "evidence_lane": evidence_lane})
                     if decision.status != INTRADAY_TRADE_CANDIDATE:
                         self._count_rejection(run, decision.reason_code)
                         self.no_trade_learning.record(db, run=run, asset=asset, decision=decision)
@@ -293,12 +306,18 @@ class BlumIntradayPaperEngine:
             return existing, False
 
         feedback = self.paper.feedback_metadata(db, ticker=asset.ticker, setup_type=decision.setup_type)
+        evidence_lane = str(decision.evidence.get("evidence_lane") or "certified_paper")
+        trade_evidence_type = (
+            PAPER_FORWARD_INTRADAY_EXPERIMENTAL
+            if evidence_lane == "experimental_paper"
+            else PAPER_FORWARD_INTRADAY
+        )
         costs = decision.costs or {}
         observed_entry = float(decision.entry_price or 0.0)
         quantity = float(decision.sizing.quantity if decision.sizing else 0.0)
         risk_per_share = max(0.0001, observed_entry - float(decision.stop_price or observed_entry))
         frozen = {
-            "evidence_type": PAPER_FORWARD_INTRADAY,
+            "evidence_type": trade_evidence_type,
             "trading_mode": INTRADAY_MODE,
             "strategy": {
                 "id": decision.strategy_id,
@@ -336,7 +355,7 @@ class BlumIntradayPaperEngine:
             research_priority_used=feedback["research_priority_used"],
             frozen_decision_payload=frozen,
             trading_mode=INTRADAY_MODE,
-            evidence_type=PAPER_FORWARD_INTRADAY,
+            evidence_type=trade_evidence_type,
             promoted_validation_id=decision.validation_id,
             intraday_run_id=run.id,
             market=normalize_market(decision.market),
@@ -352,7 +371,11 @@ class BlumIntradayPaperEngine:
             sniper_score=decision.edge_score,
             benchmark_ticker=decision.benchmark_ticker,
             entry_trigger="Strict 1m trigger after 5m confirmation inside 15m setup and 1d regime.",
-            confirmation_condition="All promoted-strategy and strict data gates passed.",
+            confirmation_condition=(
+                "All certified-strategy and strict data gates passed."
+                if evidence_lane == "certified_paper"
+                else "Experimental challenger passed strict data, cost and execution gates; evidence remains uncertified."
+            ),
             entry_price=None,
             entry_date=None,
             opened_at=None,
@@ -371,11 +394,28 @@ class BlumIntradayPaperEngine:
             current_price=observed_entry,
             last_managed_bar_at=decision.decision_timestamp,
             duplicate_key=duplicate_key,
-            intraday_metadata={"observed_entry_price": observed_entry, "requested_quantity": quantity, "execution_accounted": False},
+            intraday_metadata={
+                "observed_entry_price": observed_entry,
+                "requested_quantity": quantity,
+                "execution_accounted": False,
+                "evidence_lane": evidence_lane,
+                "certified_for_copy_readiness": evidence_lane == "certified_paper",
+            },
         )
         db.add(trade)
         db.flush()
-        self.paper.append_event(db, trade.id, "INTRADAY_TRADE_CANDIDATE", "Promoted strategy passed all strict intraday gates.", frozen, observed_entry)
+        self.paper.append_event(
+            db,
+            trade.id,
+            "INTRADAY_TRADE_CANDIDATE",
+            (
+                "Promoted strategy passed all strict intraday gates."
+                if evidence_lane == "certified_paper"
+                else "Experimental challenger passed strict intraday gates at reduced paper risk; it is not copy-ready evidence."
+            ),
+            frozen,
+            observed_entry,
+        )
         request = ExecutionOrderRequest(
             order_key=f"execution:{duplicate_key}",
             ticker=trade.ticker,
@@ -500,7 +540,11 @@ class BlumIntradayPaperEngine:
             decision_state="active_setup",
             entry_date=trade.entry_date,
             entry_price=trade.entry_price,
-            entry_reason="Strict promoted intraday setup confirmed.",
+            entry_reason=(
+                "Strict promoted intraday setup confirmed."
+                if trade.evidence_type == PAPER_FORWARD_INTRADAY
+                else "Reduced-risk experimental intraday challenger confirmed; not certified for copy-readiness."
+            ),
             entry_trigger=trade.entry_trigger,
             confirmation_condition=trade.confirmation_condition,
             position_size=trade.position_size,
@@ -515,7 +559,7 @@ class BlumIntradayPaperEngine:
             reproducibility_score=90.0,
             data_quality_score=minimum_quality_from_trade(trade),
             outcome_label="open",
-            payload={"paper_forward_trade_id": trade.id, "evidence_type": PAPER_FORWARD_INTRADAY, "frozen_decision_payload": trade.frozen_decision_payload},
+            payload={"paper_forward_trade_id": trade.id, "evidence_type": trade.evidence_type or PAPER_FORWARD_INTRADAY, "frozen_decision_payload": trade.frozen_decision_payload},
         )
         db.add(ledger)
         db.flush()
@@ -739,6 +783,8 @@ class IntradayPaperLearningService:
             "CORRECT_NO_TRADE": "no_trade_filter_confirmed",
         }.get(outcome, "setup_confirmed" if positive else "setup_failed")
         observation = intraday_lesson(trade)
+        evidence_type = trade.evidence_type or PAPER_FORWARD_INTRADAY
+        experimental = evidence_type == PAPER_FORWARD_INTRADAY_EXPERIMENTAL
         evidence = TradeLearningEvidence(
             trade_id=trade.ledger_trade_id,
             ticker=trade.ticker,
@@ -749,7 +795,7 @@ class IntradayPaperLearningService:
             sample_size=1,
             supporting_trades_json={
                 "paper_forward_trade_id": trade.id,
-                "evidence_type": PAPER_FORWARD_INTRADAY,
+                "evidence_type": evidence_type,
                 "market": trade.market,
                 "desk": trade.desk,
                 "timeframe_stack": trade.timeframe_stack,
@@ -764,20 +810,26 @@ class IntradayPaperLearningService:
             confidence=max(10.0, min(90.0, 50.0 + abs(float(trade.r_multiple or 0.0)) * 10.0)),
         )
         db.add(evidence)
-        memory_key = f"intraday:{trade.setup_type}:{trade.market or 'unknown'}:{(trade.frozen_decision_payload or {}).get('regime') or 'unknown'}"
+        memory_namespace = "intraday_experimental" if experimental else "intraday"
+        memory_key = f"{memory_namespace}:{trade.setup_type}:{trade.market or 'unknown'}:{(trade.frozen_decision_payload or {}).get('regime') or 'unknown'}"
         memory = db.scalar(select(StrategyMemory).where(StrategyMemory.memory_key == memory_key).limit(1))
         if memory is None:
-            memory = StrategyMemory(memory_key=memory_key, category="intraday_paper", conditions={"setup": trade.setup_type, "market": trade.market, "regime": (trade.frozen_decision_payload or {}).get("regime")}, evidence={})
+            memory = StrategyMemory(
+                memory_key=memory_key,
+                category="intraday_experimental_paper" if experimental else "intraday_paper",
+                conditions={"setup": trade.setup_type, "market": trade.market, "regime": (trade.frozen_decision_payload or {}).get("regime"), "evidence_lane": evidence_type},
+                evidence={},
+            )
             db.add(memory)
         memory.sample_count = int(memory.sample_count or 0) + 1
         memory.positive_count = int(memory.positive_count or 0) + (1 if positive else 0)
         memory.negative_count = int(memory.negative_count or 0) + (0 if positive else 1)
         memory.reliability_score = round(memory.positive_count / max(1, memory.sample_count) * 100, 4)
         memory.lesson = observation
-        memory.evidence = {"latest_trade_id": trade.id, "latest_r_multiple": trade.r_multiple, "latest_costs_paid": trade.costs_paid, "evidence_type": PAPER_FORWARD_INTRADAY}
+        memory.evidence = {"latest_trade_id": trade.id, "latest_r_multiple": trade.r_multiple, "latest_costs_paid": trade.costs_paid, "evidence_type": evidence_type}
         memory.last_seen_at = trade.closed_at
 
-        signal_name = f"intraday:{trade.setup_type}"
+        signal_name = f"{memory_namespace}:{trade.setup_type}"
         signal = db.scalar(select(SignalPerformance).where(SignalPerformance.signal_name == signal_name, SignalPerformance.timeframe == "1m", SignalPerformance.market_regime == ((trade.frozen_decision_payload or {}).get("regime") or "unknown")).limit(1))
         if signal is None:
             signal = SignalPerformance(signal_name=signal_name, timeframe="1m", market_regime=(trade.frozen_decision_payload or {}).get("regime") or "unknown")
@@ -787,20 +839,24 @@ class IntradayPaperLearningService:
         signal.false_positive_count = int(signal.false_positive_count or 0) + (0 if positive else 1)
         signal.reliability_score = round(signal.correct_count / max(1, signal.sample_count) * 100, 4)
         signal.average_return = running_average(signal.average_return, signal.sample_count, float(trade.pnl_percent or 0.0))
-        signal.evidence = {"latest_trade_id": trade.id, "evidence_type": PAPER_FORWARD_INTRADAY, "costs_paid": trade.costs_paid}
+        signal.evidence = {"latest_trade_id": trade.id, "evidence_type": evidence_type, "costs_paid": trade.costs_paid}
         audit = FeedbackLoopAudit(
             ticker=trade.ticker,
             model_version_used=trade.model_version_used or "base-static",
             learned_knowledge_json={"lesson": observation, "strategy_memory_key": memory_key, "signal": signal_name},
             changes_applied_json={"strategy_reliability": memory.reliability_score, "signal_reliability": signal.reliability_score},
-            future_decision_json={"source_trade_id": trade.id, "evidence_type": PAPER_FORWARD_INTRADAY, "applies_to_future_only": True},
+            future_decision_json={"source_trade_id": trade.id, "evidence_type": evidence_type, "applies_to_future_only": True},
             outcome_json={"r_multiple": trade.r_multiple, "net_pnl": trade.net_pnl_eur, "benchmark_excess": trade.excess_return_vs_benchmark, "close_reason": trade.close_reason},
             improvement_detected=False,
-            evidence_grade="insufficient" if signal.sample_count < 30 else "forward_sample",
-            summary="Closed intraday paper outcome stored for future-only confidence and reliability calibration.",
+            evidence_grade=("experimental_forward_sample" if experimental else "insufficient") if signal.sample_count < 30 else ("experimental_forward_evidence" if experimental else "forward_sample"),
+            summary=(
+                "Closed experimental intraday outcome stored in an isolated future-only learning lane."
+                if experimental
+                else "Closed intraday paper outcome stored for future-only confidence and reliability calibration."
+            ),
         )
         db.add(audit)
-        db.add(LearningEvent(event_type="intraday_paper_trade_closed", severity="Info", title=f"{trade.ticker} intraday paper outcome", description=observation, payload={"paper_forward_trade_id": trade.id, "evidence_type": PAPER_FORWARD_INTRADAY, "r_multiple": trade.r_multiple}))
+        db.add(LearningEvent(event_type="intraday_paper_trade_closed", severity="Info", title=f"{trade.ticker} intraday paper outcome", description=observation, payload={"paper_forward_trade_id": trade.id, "evidence_type": evidence_type, "r_multiple": trade.r_multiple}))
         db.flush()
         strategy_id = strategy_identity(trade.setup_type, trade.promoted_validation_id)[0]
         timeline = EvidenceTimelineService()
@@ -830,10 +886,13 @@ def intraday_snapshot_summary(db: Session, *, now: datetime | None = None) -> di
     day = now.date()
     latest_run = db.scalar(select(IntradayPaperRun).order_by(desc(IntradayPaperRun.started_at)).limit(1))
     rows = db.scalars(select(LiveForwardPaperTrade).where(LiveForwardPaperTrade.evidence_type == PAPER_FORWARD_INTRADAY).order_by(desc(LiveForwardPaperTrade.created_at)).limit(500)).all()
-    today_rows = [row for row in rows if (row.decision_date or row.created_at.date()) == day]
+    experimental_rows = db.scalars(select(LiveForwardPaperTrade).where(LiveForwardPaperTrade.evidence_type == PAPER_FORWARD_INTRADAY_EXPERIMENTAL).order_by(desc(LiveForwardPaperTrade.created_at)).limit(500)).all()
+    all_rows = [*rows, *experimental_rows]
+    today_rows = [row for row in all_rows if (row.decision_date or row.created_at.date()) == day]
     closed = [row for row in rows if row.status in TERMINAL_STATUSES]
+    experimental_closed = [row for row in experimental_rows if row.status in TERMINAL_STATUSES]
     costs = sum(float(row.costs_paid or 0.0) for row in closed)
-    open_rows = [row for row in rows if row.status == "OPEN"]
+    open_rows = [row for row in all_rows if row.status == "OPEN"]
     rejection_counts = {
         "rejected_due_to_costs": int(latest_run.rejected_due_to_costs or 0) if latest_run else 0,
         "rejected_due_to_concentration": int(latest_run.rejected_due_to_concentration or 0) if latest_run else 0,
@@ -851,7 +910,7 @@ def intraday_snapshot_summary(db: Session, *, now: datetime | None = None) -> di
     if not latest_run:
         inactivity_reason = "No intraday run has completed."
         next_action = "Wait for the bounded backend worker or invoke the explicit manual POST."
-    elif not rows:
+    elif not all_rows:
         latest_blockers = latest_run.data_blockers or []
         inactivity_reason = str((latest_blockers[0] if latest_blockers else {}).get("reason") or "No strategy passed all forward gates.")
         next_action = "Resolve the recorded data/promotion blocker; do not force a paper trade."
@@ -877,6 +936,11 @@ def intraday_snapshot_summary(db: Session, *, now: datetime | None = None) -> di
         "distinct_markets_traded_today": len({row.market for row in today_rows if row.market}),
         "distinct_tickers_traded_today": len({row.ticker for row in today_rows if row.ticker}),
         "closed_sample_size": len(closed),
+        "experimental_closed_sample_size": len(experimental_closed),
+        "experimental_candidates_today": sum(1 for row in today_rows if row.evidence_type == PAPER_FORWARD_INTRADAY_EXPERIMENTAL),
+        "certified_candidates_today": sum(1 for row in today_rows if row.evidence_type == PAPER_FORWARD_INTRADAY),
+        "experimental_realized_pnl": round(sum(float(row.net_pnl_eur or 0.0) for row in experimental_closed), 4) if experimental_closed else None,
+        "experimental_average_r": round(sum(float(row.r_multiple or 0.0) for row in experimental_closed) / len(experimental_closed), 4) if experimental_closed else None,
         "realized_pnl": round(sum(float(row.net_pnl_eur or 0.0) for row in closed), 4) if closed else None,
         "average_r": round(sum(float(row.r_multiple or 0.0) for row in closed) / len(closed), 4) if closed else None,
         "benchmark_excess": average_present([row.excess_return_vs_benchmark for row in closed]),
@@ -891,12 +955,13 @@ def intraday_snapshot_summary(db: Session, *, now: datetime | None = None) -> di
         **rejection_counts,
         "reason_if_no_intraday_trades": inactivity_reason,
         "next_intraday_action": next_action,
-        "markets": dict(Counter(row.market or "UNKNOWN" for row in rows)),
-        "desks": dict(Counter(row.desk or "UNKNOWN" for row in rows)),
-        "setups": dict(Counter(row.setup_type for row in rows)),
+        "markets": dict(Counter(row.market or "UNKNOWN" for row in all_rows)),
+        "desks": dict(Counter(row.desk or "UNKNOWN" for row in all_rows)),
+        "setups": dict(Counter(row.setup_type for row in all_rows)),
         "latest_blockers": latest_run.data_blockers if latest_run else ["No intraday run has completed."],
         "strategy_registry": strategy_registry,
         "evidence_type": PAPER_FORWARD_INTRADAY,
+        "experimental_evidence_type": PAPER_FORWARD_INTRADAY_EXPERIMENTAL,
         "policy": "Read-only forward paper evidence. No trade or recalculation is triggered by this snapshot.",
     }
 

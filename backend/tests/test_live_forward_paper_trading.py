@@ -356,6 +356,51 @@ def test_paper_forward_wait_for_trigger_status_is_not_error():
         assert event is not None
 
 
+def test_waiting_candidate_opens_after_later_frozen_trigger_is_confirmed():
+    with setup_db() as db:
+        asset = seed_asset(db, close=100.0)
+        service = LiveForwardPaperTradingService()
+        payload = candidate(
+            actionability="wait_for_trigger",
+            entry_type="ABOVE_TRIGGER",
+            trigger_price=101.0,
+        )
+        payload["paper_forward_classification"] = WATCHLIST_CANDIDATE
+        trade = service.create_candidate(db, payload)
+        db.commit()
+        assert trade.status == "WAITING_FOR_TRIGGER"
+
+        add_price(db, asset, 1, 102.0)
+        result = service.open_eligible_trades(db)
+        db.commit()
+
+        stored = db.get(PaperForwardTrade, trade.id)
+        assert [row["trade_id"] for row in result["opened"]] == [trade.id]
+        assert stored.status == "OPEN"
+        assert stored.entry_price == 102.0
+        assert stored.decision_payload_frozen["trade_plan"]["trigger_price"] == 101.0
+
+
+def test_new_market_snapshot_creates_new_candidate_without_overwriting_frozen_decision():
+    with setup_db() as db:
+        service = LiveForwardPaperTradingService()
+        first_payload = candidate(price=100.0, actionability="wait_for_trigger")
+        first_payload["paper_forward_classification"] = WATCHLIST_CANDIDATE
+        first_payload["price_context"]["data_timestamp"] = "2026-07-20T14:00:00"
+        first = service.create_candidate(db, first_payload)
+
+        second_payload = candidate(price=102.0, actionability="active_setup")
+        second_payload["paper_forward_classification"] = TRADE_CANDIDATE
+        second_payload["price_context"]["data_timestamp"] = "2026-07-20T14:05:00"
+        second = service.create_candidate(db, second_payload)
+        db.commit()
+
+        assert second.id != first.id
+        assert first.decision_payload_frozen["price_context"]["latest_price"] == 100.0
+        assert second.decision_payload_frozen["price_context"]["latest_price"] == 102.0
+        assert db.scalar(select(func.count(PaperForwardTrade.id)).where(PaperForwardTrade.ticker == "NVDA")) == 2
+
+
 def test_paper_forward_append_event_uses_event_log():
     with setup_db() as db:
         service = LiveForwardPaperTradingService()

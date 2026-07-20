@@ -1280,12 +1280,22 @@ def _bounded_limit(value: int, *, maximum: int) -> int:
 def _identified_as_intraday():
     return or_(
         LiveForwardPaperTrade.evidence_type.in_(("PAPER_FORWARD_INTRADAY", INTRADAY_FORWARD_EVIDENCE)),
-        LiveForwardPaperTrade.trading_mode.ilike("%INTRADAY%"),
+        and_(
+            LiveForwardPaperTrade.trading_mode.ilike("%INTRADAY%"),
+            or_(
+                LiveForwardPaperTrade.evidence_type.is_(None),
+                LiveForwardPaperTrade.evidence_type != "PAPER_FORWARD_INTRADAY_EXPERIMENTAL",
+            ),
+        ),
     )
 
 
 def _not_identified_as_intraday():
     return and_(
+        or_(
+            LiveForwardPaperTrade.evidence_type.is_(None),
+            LiveForwardPaperTrade.evidence_type != "PAPER_FORWARD_INTRADAY_EXPERIMENTAL",
+        ),
         or_(
             LiveForwardPaperTrade.evidence_type.is_(None),
             LiveForwardPaperTrade.evidence_type.not_in(("PAPER_FORWARD_INTRADAY", INTRADAY_FORWARD_EVIDENCE)),

@@ -4,6 +4,7 @@ from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta
 import hashlib
+import json
 import math
 from statistics import mean, median
 from uuid import uuid4
@@ -1662,16 +1663,43 @@ def compact_candidate(candidate: dict) -> dict:
     )
 
 
-def live_forward_duplicate_key(*, ticker: str | None, decision_date: date, model_version: str, setup_type: str, entry_trigger: str) -> str:
-    raw = "|".join(
-        [
-            (ticker or "").upper(),
-            decision_date.isoformat(),
-            model_version or "base-static",
-            setup_type or "unknown_setup",
-            entry_trigger or "unknown_trigger",
-        ]
+def candidate_evidence_fingerprint(candidate: dict) -> str:
+    price_context = candidate.get("price_context") if isinstance(candidate.get("price_context"), dict) else {}
+    observed_at = next(
+        (
+            price_context.get(key)
+            for key in ("data_timestamp", "as_of", "timestamp", "latest_date", "price_timestamp")
+            if price_context.get(key)
+        ),
+        "",
     )
+    material_state = {
+        "observed_at": observed_at,
+        "latest_price": safe_float(price_context.get("latest_price"), None),
+        "source_rows": price_context.get("rows"),
+    }
+    return hashlib.sha256(json.dumps(material_state, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:20]
+
+
+def live_forward_duplicate_key(
+    *,
+    ticker: str | None,
+    decision_date: date,
+    model_version: str,
+    setup_type: str,
+    entry_trigger: str,
+    evidence_fingerprint: str | None = None,
+) -> str:
+    parts = [
+        (ticker or "").upper(),
+        decision_date.isoformat(),
+        model_version or "base-static",
+        setup_type or "unknown_setup",
+        entry_trigger or "unknown_trigger",
+    ]
+    if evidence_fingerprint:
+        parts.append(evidence_fingerprint)
+    raw = "|".join(parts)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
