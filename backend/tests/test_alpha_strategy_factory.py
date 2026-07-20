@@ -344,6 +344,67 @@ def test_candidate_evidence_requires_the_exact_replay_timeframe_stack() -> None:
     assert requires_revalidation is True
 
 
+def test_candidate_evidence_cannot_borrow_results_from_another_strategy_fingerprint() -> None:
+    with setup_db() as db:
+        asset = Asset(
+            ticker="NVDA",
+            name="NVIDIA",
+            category="Stock",
+            sector="Technology",
+            asset_type="Stock",
+            country="USA",
+            currency="USD",
+            exchange="NASDAQ",
+            is_active=True,
+        )
+        replay_run = HyperbolicReplayRun(run_id="fingerprint-isolation", status="COMPLETED")
+        factory_run = StrategyFactoryRun(
+            run_uid="fingerprint-isolation-factory",
+            hypothesis_family="intraday_scalping",
+            generation_seed=1,
+            status="RUNNING",
+        )
+        db.add_all([asset, replay_run, factory_run])
+        db.flush()
+        strategies = StrategyFamilyRegistry().variants("intraday_scalping", max_variants=2, seed=7)
+        selected = strategies[0]
+        candidate = StrategyCandidateVariant(
+            factory_run_id=factory_run.id,
+            fingerprint=selected["strategy_fingerprint"],
+            family="intraday_scalping",
+            setup_type=selected["setup_type"],
+            timeframe_stack=selected["timeframe_stack"],
+            specification_json=selected,
+        )
+        db.add(candidate)
+        for index, (fingerprint, r_multiple) in enumerate(
+            ((selected["strategy_fingerprint"], 0.7), (strategies[1]["strategy_fingerprint"], -0.9))
+        ):
+            db.add(
+                HyperbolicReplayTrade(
+                    run_id=replay_run.id,
+                    asset_id=asset.id,
+                    ticker=asset.ticker,
+                    market="USA",
+                    setup_type=selected["setup_type"],
+                    strategy_fingerprint=fingerprint,
+                    timeframe="1m",
+                    state="REPLAY_EVALUATED",
+                    decision_timestamp=datetime(2025, 1, 1) + timedelta(minutes=index),
+                    r_multiple=r_multiple,
+                    data_quality_score=95.0,
+                    decision_payload={"required_timeframes": selected["timeframe_stack"], "regime": "trend_up"},
+                    execution_payload={"cost_profile": {"round_trip_bps": 4.0}},
+                )
+            )
+        db.flush()
+
+        evidence = AlphaStrategyFactory._candidate_evidence(db, candidate)
+
+    assert evidence["sample_size"] == 1
+    assert evidence["returns_r"] == [0.7]
+
+
 def test_candidate_evidence_applies_only_point_in_time_regime_filter() -> None:
     with setup_db() as db:
         asset = Asset(

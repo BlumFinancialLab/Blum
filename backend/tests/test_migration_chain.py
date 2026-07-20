@@ -45,7 +45,7 @@ def test_full_migration_chain_reaches_head_on_sqlite(tmp_path):
 
     assert required_tables.issubset(tables)
     with engine.connect() as connection:
-        assert connection.execute(text("select version_num from alembic_version")).scalar_one() == "0034_realistic_execution_market"
+        assert connection.execute(text("select version_num from alembic_version")).scalar_one() == "0035_decision_execution_parity"
 
     downgrade = subprocess.run(
         [sys.executable, "-m", "alembic", "downgrade", "base"],

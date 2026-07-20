@@ -117,3 +117,18 @@ def test_trade_geometry_uses_strategy_atr_stop_and_target_r():
     assert geometry.stop_price == pytest.approx(112.0 - expected_distance)
     assert geometry.target_price == pytest.approx(112.0 + expected_distance * 2.5)
     assert geometry.risk_distance == pytest.approx(expected_distance)
+
+
+def test_europe_market_filter_accepts_supported_european_country():
+    spec = ExecutableStrategySpec.from_payload(
+        payload(market_filter="europe_only", minimum_relative_volume=0.0)
+    )
+
+    result = StrategySignalEvaluator().evaluate(
+        spec,
+        aligned_bars(),
+        as_of=START + timedelta(minutes=20),
+        market="Italy",
+    )
+
+    assert result.status == "triggered"

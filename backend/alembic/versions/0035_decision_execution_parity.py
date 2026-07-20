@@ -15,6 +15,12 @@ depends_on = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    if "hyperbolic_replay_trades" not in sa.inspect(bind).get_table_names():
+        # Some supported legacy installations were stamped after the replay
+        # migration without creating its optional tables. Keep this migration
+        # additive; a future replay bootstrap can create the current model.
+        return
     op.add_column(
         "hyperbolic_replay_trades",
         sa.Column("strategy_fingerprint", sa.String(length=96), nullable=True),
@@ -44,6 +50,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    bind = op.get_bind()
+    if "hyperbolic_replay_trades" not in sa.inspect(bind).get_table_names():
+        return
     with op.batch_alter_table("hyperbolic_replay_trades") as batch:
         batch.drop_index("ix_hyperbolic_replay_trades_strategy_fingerprint")
         batch.drop_constraint("uq_replay_trade_strategy_decision", type_="unique")

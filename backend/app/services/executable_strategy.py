@@ -421,4 +421,11 @@ def normalize_market(value: str) -> str:
         "NASDAQ": "USA",
         "NYSE": "USA",
         "EUROPE": "EUROPE",
+        "ITALY": "EUROPE",
+        "GERMANY": "EUROPE",
+        "FRANCE": "EUROPE",
+        "SPAIN": "EUROPE",
+        "NETHERLANDS": "EUROPE",
+        "UNITED KINGDOM": "EUROPE",
+        "UK": "EUROPE",
     }.get(key, key)
