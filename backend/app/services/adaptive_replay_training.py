@@ -19,6 +19,7 @@ from app.services.performance import performance_recorder
 from app.services.replay_validation import ReplayExperimentService, ReplayLearningFeedbackService, ReplayWalkForwardValidator
 from app.services.worker_runtime import runtime_worker_coordinator
 from app.services.alpha_strategy_factory import strategy_factory_snapshot
+from app.services.strategy_promotion_frontier import StrategyPromotionFrontierService
 
 
 REPLAY_SNAPSHOT_TYPE = "hyperbolic_replay_training_summary"
@@ -146,6 +147,8 @@ class ReplayTrainingSnapshotService:
             "snapshot_status": snapshot_status,
             "evidence_policy": "Replay evidence remains separate from paper-forward and live-forward evidence.",
             "strategy_factory": {"status": "NO_FACTORY_RUNS", "examined_variants": 0, "promoted_to_paper": 0},
+            "promotion_frontier": {"status": "NO_EXECUTABLE_CANDIDATES", "candidates": []},
+            "research_strategy_fingerprints": [],
         }
 
 
@@ -166,10 +169,14 @@ class BlumAdaptiveTrainingController:
         engine: BlumHyperbolicReplayEngine | None = None,
         resource_monitor: ReplayResourceMonitor | None = None,
         config: ReplayTrainingConfig | None = None,
+        promotion_frontier: StrategyPromotionFrontierService | None = None,
     ):
         self.engine = engine or BlumHyperbolicReplayEngine()
         self.resource_monitor = resource_monitor or ReplayResourceMonitor()
         self.config = config or ReplayTrainingConfig.from_settings()
+        self.promotion_frontier = promotion_frontier or StrategyPromotionFrontierService(
+            minimum_samples=self.config.min_promotion_samples
+        )
 
     def run_once(self, db: Session, trigger: str = "manual") -> dict:
         started = time.perf_counter()
@@ -207,6 +214,11 @@ class BlumAdaptiveTrainingController:
             cursor=cursor,
         )
         try:
+            research_plan = self.promotion_frontier.research_plan(
+                db,
+                limit=limits["max_experiments"],
+                seed=int(datetime.utcnow().strftime("%Y%m%d")),
+            )
             run_summary = self.engine.run_cycle(
                 db,
                 ReplayRunRequest(
@@ -218,8 +230,13 @@ class BlumAdaptiveTrainingController:
                     after_asset_id=cursor.get("asset_id"),
                     markets=list(self.config.markets),
                     timeframes=self.config.timeframes,
+                    strategy_specs=tuple(research_plan["specs"]) or None,
                 ),
             )
+            run_summary["research_strategy_fingerprints"] = [
+                row["strategy_fingerprint"] for row in research_plan["reasons"]
+            ]
+            run_summary["research_selection"] = research_plan
         except Exception as exc:
             duration_ms = (time.perf_counter() - started) * 1000
             job_state.fail(
@@ -288,14 +305,23 @@ class BlumAdaptiveTrainingController:
             memory_updates += int(result.get("status") == "applied")
         grouped: dict[str, list[HyperbolicReplayTrade]] = {}
         for trade in trades:
-            grouped.setdefault(trade.setup_type, []).append(trade)
+            grouped.setdefault(trade.strategy_fingerprint, []).append(trade)
         experiments_run = 0
         promoted = 0
         rejected = 0
         experiment_service = ReplayExperimentService(self._limits("RUNNING")["max_experiments"])
         validator = ReplayWalkForwardValidator(min_sample_size=self.config.min_promotion_samples)
-        for setup_type, rows in list(grouped.items())[: self.config.max_experiments_per_cycle]:
-            variant = experiment_service.bounded_variants({"setup_type": setup_type, "market": rows[0].market, "timeframes": [rows[0].timeframe]})[0]
+        for strategy_fingerprint, rows in list(grouped.items())[: self.config.max_experiments_per_cycle]:
+            setup_type = rows[0].setup_type
+            variant = experiment_service.bounded_variants(
+                {
+                    "setup_type": setup_type,
+                    "strategy_fingerprint": strategy_fingerprint,
+                    "executable_strategy": (rows[0].decision_payload or {}).get("executable_strategy"),
+                    "market": rows[0].market,
+                    "timeframes": [rows[0].timeframe],
+                }
+            )[0]
             experiment = experiment_service.persist(
                 db,
                 variant,
@@ -304,7 +330,10 @@ class BlumAdaptiveTrainingController:
             )
             all_rows = db.scalars(
                 select(HyperbolicReplayTrade)
-                .where(HyperbolicReplayTrade.setup_type == setup_type, HyperbolicReplayTrade.state == "REPLAY_EVALUATED")
+                .where(
+                    HyperbolicReplayTrade.strategy_fingerprint == strategy_fingerprint,
+                    HyperbolicReplayTrade.state == "REPLAY_EVALUATED",
+                )
                 .order_by(HyperbolicReplayTrade.decision_timestamp)
                 .limit(5000)
             ).all()
@@ -317,6 +346,7 @@ class BlumAdaptiveTrainingController:
         run.experiments_run = experiments_run
         summary = dict(run.summary_json or {})
         summary["learning_feedback"] = {"memory_updates": memory_updates, "experiments_run": experiments_run, "strategies_promoted": promoted, "strategies_rejected": rejected}
+        summary["research_selection"] = run_summary.get("research_selection") or {}
         run.summary_json = summary
         db.commit()
         return {"memory_updates": memory_updates, "experiments_run": experiments_run, "strategies_promoted": promoted, "strategies_rejected": rejected}
@@ -371,6 +401,8 @@ class BlumAdaptiveTrainingController:
             "blockers": run_summary.get("blockers") or [],
             "warnings": [reason] if reason and validated_today < self.config.target_trades_per_day else [],
             "strategy_factory": strategy_factory_snapshot(db),
+            "promotion_frontier": self.promotion_frontier.snapshot(db),
+            "research_strategy_fingerprints": run_summary.get("research_strategy_fingerprints") or [],
         }
 
     def _miss_reason(self, summary: dict, state: str) -> str:

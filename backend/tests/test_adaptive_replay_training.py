@@ -14,6 +14,7 @@ from app.services.adaptive_replay_training import (
     ReplayTrainingSnapshotService,
     refresh_strategy_factory_state,
 )
+from app.services.executable_strategy import canonical_strategy_spec
 
 
 def setup_db() -> Session:
@@ -54,6 +55,19 @@ class RecordingEngine:
             "next_cursor": {"asset_id": 99},
             "next_action": "continue",
         }
+
+
+class StaticPromotionFrontier:
+    def research_plan(self, db, *, limit, seed):
+        spec = canonical_strategy_spec("intraday_breakout").to_payload()
+        return {
+            "specs": [spec],
+            "reasons": [{"strategy_fingerprint": spec["strategy_fingerprint"], "reason": "near_frontier"}],
+            "selection_mix": {"near_frontier": 1, "broad_exploration": 0},
+        }
+
+    def snapshot(self, db, limit=20):
+        return {"status": "READY", "candidates": []}
 
 
 def config() -> ReplayTrainingConfig:
@@ -124,6 +138,21 @@ def test_controller_resumes_from_persisted_cursor_and_checkpoints_next_slice():
     assert engine.calls[0].after_asset_id == 42
     assert state.cursor_json == {"asset_id": 99}
     assert state.status == "completed"
+
+
+def test_controller_passes_promotion_frontier_specs_to_bounded_replay():
+    engine = RecordingEngine()
+    controller = BlumAdaptiveTrainingController(
+        engine=engine,
+        resource_monitor=StaticResourceMonitor(cpu=20, memory=30, api_p95_ms=120),
+        config=config(),
+        promotion_frontier=StaticPromotionFrontier(),
+    )
+    with setup_db() as db:
+        controller.run_once(db, trigger="test")
+
+    assert engine.calls[0].strategy_specs
+    assert engine.calls[0].strategy_specs[0]["strategy_fingerprint"]
 
 
 def test_runtime_pause_preserves_existing_replay_cursor():

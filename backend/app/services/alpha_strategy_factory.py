@@ -158,16 +158,19 @@ class StrategyFamilyRegistry:
         random.Random(int(seed)).shuffle(remainder)
         combinations = canonical + remainder
         variants: list[dict] = []
-        for index, (setup_type, regime_filter, market_filter) in enumerate(combinations):
+        for setup_type, regime_filter, market_filter in combinations:
+            setup_index = ("intraday_breakout", "intraday_trend").index(setup_type)
+            regime_index = REPLAY_REGIME_FILTERS.index(regime_filter)
+            market_index = REPLAY_MARKET_FILTERS.index(market_filter)
             canonical = canonical_strategy_spec(setup_type)
             spec = ExecutableStrategySpec.from_payload(
                 {
                     **canonical.to_payload(),
-                    "lookback": (5, 10, 20)[index % 3],
-                    "minimum_relative_volume": (0.0, 1.2)[index % 2],
-                    "stop_atr_multiple": (1.0, 1.5)[(index // 2) % 2],
-                    "target_r_multiple": (1.5, 2.0, 2.5)[(index // 3) % 3],
-                    "maximum_holding_bars": (15, 30)[(index // 6) % 2],
+                    "lookback": (5, 10, 20)[(regime_index + market_index) % 3],
+                    "minimum_relative_volume": (0.0, 1.2)[(setup_index + regime_index) % 2],
+                    "stop_atr_multiple": (1.0, 1.5)[(regime_index + market_index) % 2],
+                    "target_r_multiple": (1.5, 2.0, 2.5)[(setup_index + regime_index + market_index) % 3],
+                    "maximum_holding_bars": (15, 30)[(setup_index + market_index) % 2],
                     "regime_filter": regime_filter,
                     "market_filter": market_filter,
                 }
