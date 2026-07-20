@@ -122,7 +122,9 @@ The selected research reason and strategy fingerprint are persisted with replay 
 
 ## Data and Compatibility
 
-The initial implementation stores the executable specification inside existing JSON payloads and metrics. No destructive migration is required.
+An additive migration adds `strategy_fingerprint` to replay trades and changes replay identity from `(asset, setup, timeframe, decision timestamp)` to `(asset, strategy fingerprint, timeframe, decision timestamp)`. This is required because two executable variants may legitimately evaluate the same signal timestamp. Existing rows are backfilled with a deterministic legacy fingerprint before the new uniqueness rule is applied.
+
+The full executable specification remains stored inside existing JSON payloads and validation metrics. No destructive data removal is allowed.
 
 Existing replay rows without a strategy specification remain readable and are treated as legacy evidence. They cannot certify a new executable strategy unless the factory can map them unambiguously to the canonical legacy contract.
 
@@ -159,4 +161,3 @@ Required tests:
 - Every promoted or experimental paper decision identifies the exact strategy fingerprint and parameters used.
 - BLUM can explain why a candidate is not promoted and what evidence is required next.
 - Paper positions still open only after real forward confirmation and executable future data.
-
