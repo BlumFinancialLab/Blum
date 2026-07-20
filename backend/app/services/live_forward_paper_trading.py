@@ -6,7 +6,7 @@ import re
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import case, desc, func, or_, select
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -640,23 +640,20 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
         return {"opened": opened, "waiting": waiting, "data_blocked": data_blocked, "skipped": skipped}
 
     def lifecycle_candidates(self, db: Session, game: LiveForwardPaperGame) -> list[LiveForwardPaperTrade]:
-        """Select executable candidates before watchlist rows, then rank by quality and freshness."""
+        """Use the scanner's persisted composite rank before watchlist and recency tie-breakers."""
 
-        return list(
+        rows = list(
             db.scalars(
                 select(LiveForwardPaperTrade)
                 .where(
                     LiveForwardPaperTrade.game_id == game.id,
                     LiveForwardPaperTrade.status.in_(["CANDIDATE", "WAITING_FOR_TRIGGER"]),
                 )
-                .order_by(
-                    case((LiveForwardPaperTrade.status == "CANDIDATE", 0), else_=1),
-                    desc(LiveForwardPaperTrade.sniper_score),
-                    desc(LiveForwardPaperTrade.decision_timestamp),
-                )
-                .limit(50)
+                .order_by(desc(LiveForwardPaperTrade.decision_timestamp))
+                .limit(250)
             ).all()
         )
+        return sorted(rows, key=lifecycle_candidate_priority)[:50]
 
     def entry_risk_geometry_status(self, trade: LiveForwardPaperTrade, entry_price: float) -> dict[str, Any]:
         stop = safe_float(trade.stop_loss or trade.invalidation_level)
@@ -1840,6 +1837,19 @@ def waiting_candidate_can_mature(row: LiveForwardPaperTrade) -> bool:
         and scanner_original_status == "WAITING_FOR_TRIGGER"
         and bool(diagnosis.get("should_wait"))
         and explicit_condition
+    )
+
+
+def lifecycle_candidate_priority(row: LiveForwardPaperTrade) -> tuple[float, float, float, float]:
+    payload = row.frozen_decision_payload if isinstance(row.frozen_decision_payload, dict) else {}
+    scanner = payload.get("opportunity_scanner") if isinstance(payload.get("opportunity_scanner"), dict) else {}
+    composite_score = safe_float(scanner.get("score"), safe_float(row.sniper_score))
+    timestamp = row.decision_timestamp.timestamp() if row.decision_timestamp else 0.0
+    return (
+        0.0 if row.status == "CANDIDATE" else 1.0,
+        -composite_score,
+        -safe_float(row.sniper_score),
+        -timestamp,
     )
 
 

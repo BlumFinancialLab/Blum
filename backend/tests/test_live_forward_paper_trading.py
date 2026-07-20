@@ -625,8 +625,20 @@ def test_lifecycle_selection_prioritizes_active_candidate_over_old_waiting_rows(
             status="CANDIDATE",
             decision_timestamp=datetime(2026, 2, 1),
             sniper_score=70.0,
+            frozen_decision_payload={"opportunity_scanner": {"score": 95.0}},
         )
-        db.add(active)
+        lower_ranked = PaperForwardTrade(
+            trade_uid="lower-composite-priority",
+            duplicate_key="lower-composite-priority",
+            game_id=game.id,
+            ticker="META",
+            setup_type="momentum_breakout",
+            status="CANDIDATE",
+            decision_timestamp=datetime(2026, 2, 2),
+            sniper_score=99.0,
+            frozen_decision_payload={"opportunity_scanner": {"score": 50.0}},
+        )
+        db.add_all([active, lower_ranked])
         db.commit()
 
         selected = service.lifecycle_candidates(db, game)
