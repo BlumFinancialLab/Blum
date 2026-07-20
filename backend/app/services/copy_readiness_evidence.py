@@ -1284,7 +1284,10 @@ def _identified_as_intraday():
             LiveForwardPaperTrade.trading_mode.ilike("%INTRADAY%"),
             or_(
                 LiveForwardPaperTrade.evidence_type.is_(None),
-                LiveForwardPaperTrade.evidence_type != "PAPER_FORWARD_INTRADAY_EXPERIMENTAL",
+                LiveForwardPaperTrade.evidence_type.not_in((
+                    "PAPER_FORWARD_INTRADAY_EXPERIMENTAL",
+                    "PAPER_FORWARD_INVALID_ENTRY_GEOMETRY",
+                )),
             ),
         ),
     )
@@ -1294,7 +1297,10 @@ def _not_identified_as_intraday():
     return and_(
         or_(
             LiveForwardPaperTrade.evidence_type.is_(None),
-            LiveForwardPaperTrade.evidence_type != "PAPER_FORWARD_INTRADAY_EXPERIMENTAL",
+            LiveForwardPaperTrade.evidence_type.not_in((
+                "PAPER_FORWARD_INTRADAY_EXPERIMENTAL",
+                "PAPER_FORWARD_INVALID_ENTRY_GEOMETRY",
+            )),
         ),
         or_(
             LiveForwardPaperTrade.evidence_type.is_(None),

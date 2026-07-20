@@ -364,6 +364,8 @@ def test_waiting_candidate_opens_after_later_frozen_trigger_is_confirmed():
             actionability="wait_for_trigger",
             entry_type="ABOVE_TRIGGER",
             trigger_price=101.0,
+            target_1=110.0,
+            target_2=116.0,
         )
         payload["paper_forward_classification"] = WATCHLIST_CANDIDATE
         trade = service.create_candidate(db, payload)
@@ -378,7 +380,91 @@ def test_waiting_candidate_opens_after_later_frozen_trigger_is_confirmed():
         assert [row["trade_id"] for row in result["opened"]] == [trade.id]
         assert stored.status == "OPEN"
         assert stored.entry_price == 102.0
+        assert stored.expected_risk <= stored.risk_amount
         assert stored.decision_payload_frozen["trade_plan"]["trigger_price"] == 101.0
+
+
+def test_waiting_candidate_is_skipped_when_entry_risk_reward_has_deteriorated():
+    with setup_db() as db:
+        asset = seed_asset(db, close=100.0)
+        service = LiveForwardPaperTradingService()
+        payload = candidate(
+            actionability="wait_for_trigger",
+            entry_type="ABOVE_TRIGGER",
+            trigger_price=101.0,
+            invalidation_level=96.0,
+            target_1=105.0,
+            target_2=112.0,
+        )
+        payload["paper_forward_classification"] = WATCHLIST_CANDIDATE
+        trade = service.create_candidate(db, payload)
+        db.commit()
+
+        add_price(db, asset, 1, 104.0)
+        result = service.open_eligible_trades(db)
+        db.commit()
+
+        stored = db.get(PaperForwardTrade, trade.id)
+        event = db.scalar(
+            select(PaperForwardTradeEvent).where(
+                PaperForwardTradeEvent.paper_trade_id == trade.id,
+                PaperForwardTradeEvent.event_type == "ENTRY_RISK_REWARD_DETERIORATED",
+            )
+        )
+        assert result["opened"] == []
+        assert result["skipped"][0]["reason"] == "entry_risk_reward_deteriorated"
+        assert stored.status == "SKIPPED"
+        assert stored.outcome_label == "NO_TRADE_ENTRY_GEOMETRY"
+        assert stored.ledger_trade_id is None
+        assert event is not None
+        assert event.payload["actual_risk_reward"] < 1.0
+
+
+def test_lifecycle_quarantines_closed_watchlist_trade_with_invalid_entry_geometry():
+    with setup_db() as db:
+        seed_asset(db, close=100.0)
+        service = LiveForwardPaperTradingService()
+        payload = candidate(
+            actionability="wait_for_trigger",
+            entry_type="ABOVE_TRIGGER",
+            trigger_price=101.0,
+            invalidation_level=96.0,
+            target_1=105.0,
+            target_2=112.0,
+        )
+        payload["paper_forward_classification"] = WATCHLIST_CANDIDATE
+        trade = service.create_candidate(db, payload)
+        trade.status = "CLOSED"
+        trade.entry_price = 104.0
+        trade.exit_price = 104.0
+        trade.closed_at = datetime.utcnow()
+        trade.close_reason = "TARGET_1_HIT"
+        trade.outcome_label = "BREAKEVEN"
+        db.add(
+            PaperForwardTradeEvent(
+                paper_trade_id=trade.id,
+                event_type="WATCHLIST_TRIGGER_CONFIRMED",
+                price_used=104.0,
+                reason="Legacy watchlist entry.",
+                payload={},
+            )
+        )
+        db.commit()
+
+        result = service.quarantine_invalid_entry_geometry(db)
+        db.commit()
+
+        stored = db.get(PaperForwardTrade, trade.id)
+        event = db.scalar(
+            select(PaperForwardTradeEvent).where(
+                PaperForwardTradeEvent.paper_trade_id == trade.id,
+                PaperForwardTradeEvent.event_type == "EVIDENCE_QUARANTINED",
+            )
+        )
+        assert result["quarantined"] == [trade.id]
+        assert stored.evidence_type == "PAPER_FORWARD_INVALID_ENTRY_GEOMETRY"
+        assert stored.outcome_label == "EVIDENCE_QUARANTINED"
+        assert event is not None
 
 
 def test_new_market_snapshot_creates_new_candidate_without_overwriting_frozen_decision():

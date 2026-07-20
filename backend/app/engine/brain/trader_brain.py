@@ -256,18 +256,23 @@ class TraderBrainService:
         live_game = latest_row(db, LiveForwardPaperGame)
         benchmarks = latest_benchmarks(db)
         paper_rows = db.scalars(select(LiveForwardPaperTrade).order_by(desc(LiveForwardPaperTrade.created_at)).limit(500)).all()
-        intraday_rows = [row for row in paper_rows if row.evidence_type == "PAPER_FORWARD_INTRADAY"]
-        standard_paper_rows = [row for row in paper_rows if row.evidence_type != "PAPER_FORWARD_INTRADAY"]
+        excluded_evidence_types = {
+            "PAPER_FORWARD_INTRADAY_EXPERIMENTAL",
+            "PAPER_FORWARD_INVALID_ENTRY_GEOMETRY",
+        }
+        eligible_paper_rows = [row for row in paper_rows if row.evidence_type not in excluded_evidence_types]
+        intraday_rows = [row for row in eligible_paper_rows if row.evidence_type == "PAPER_FORWARD_INTRADAY"]
+        standard_paper_rows = [row for row in eligible_paper_rows if row.evidence_type != "PAPER_FORWARD_INTRADAY"]
         lesson_rows = dedupe_lessons(
             db.scalars(select(TradeLearningEvidence).order_by(desc(TradeLearningEvidence.created_at)).limit(60)).all()
         )
-        closed_rows = [row for row in paper_rows if paper_forward_trade_is_closed(row)]
-        open_rows = [row for row in paper_rows if paper_forward_trade_is_open(row)]
+        closed_rows = [row for row in eligible_paper_rows if paper_forward_trade_is_closed(row)]
+        open_rows = [row for row in eligible_paper_rows if paper_forward_trade_is_open(row)]
         all_benchmark_rows = [row for row in closed_rows if row.benchmark_return_same_period is not None or row.excess_return_vs_benchmark is not None]
-        paper_summary = paper_forward_alpha_summary(paper_rows, live_game)
-        actionability_summary = paper_forward_actionability_summary(paper_rows)
+        paper_summary = paper_forward_alpha_summary(eligible_paper_rows, live_game)
+        actionability_summary = paper_forward_actionability_summary(eligible_paper_rows)
         lifecycle_mode = paper_forward_lifecycle_mode(actionability_summary)
-        blocker_rows = alpha_blockers(paper_rows, closed_rows, benchmarks, paper_summary, actionability_summary=actionability_summary, lifecycle_mode=lifecycle_mode)
+        blocker_rows = alpha_blockers(eligible_paper_rows, closed_rows, benchmarks, paper_summary, actionability_summary=actionability_summary, lifecycle_mode=lifecycle_mode)
         historical_split = historical_replay_evidence_split(db, benchmarks)
         walk_forward_split = walk_forward_evidence_split(db, benchmarks)
         standard_actionability = paper_forward_actionability_summary(standard_paper_rows)
@@ -283,7 +288,7 @@ class TraderBrainService:
         }
         evidence_grade, evidence_reason = alpha_grade_from_splits(evidence_split)
         verdict = alpha_verdict_from_splits(evidence_split, evidence_grade)
-        latest_update = latest_alpha_update_from_splits(evidence_split) or latest_paper_forward_update(paper_rows, benchmarks)
+        latest_update = latest_alpha_update_from_splits(evidence_split) or latest_paper_forward_update(eligible_paper_rows, benchmarks)
         primary_evidence = primary_alpha_evidence(evidence_split)
         total_evidence_sample = sum(int(split.get("sample_size") or 0) for split in evidence_split.values() if isinstance(split, dict))
         return {
@@ -332,8 +337,8 @@ class TraderBrainService:
                 walk_forward_split.get("benchmark_excess"),
             ),
             "live_forward_alpha": live_split.get("benchmark_excess"),
-            "best_edge": edge_summary(paper_rows, "best"),
-            "worst_edge": edge_summary(paper_rows, "worst"),
+            "best_edge": edge_summary(eligible_paper_rows, "best"),
+            "worst_edge": edge_summary(eligible_paper_rows, "worst"),
             "biggest_weakness": blocker_rows[0] if blocker_rows else None,
             "current_blocker": blocker_rows[0]["title"] if blocker_rows else None,
             "current_risk_warning": alpha_risk_warning(paper_summary, blocker_rows),
@@ -347,8 +352,8 @@ class TraderBrainService:
             "live_forward": live_split,
             "current_alpha_readiness": alpha_readiness,
             "copy_readiness": copy_readiness,
-            "edge_map": alpha_edge_map(paper_rows),
-            "weakness_map": alpha_weakness_map(paper_rows, closed_rows, benchmarks, paper_summary),
+            "edge_map": alpha_edge_map(eligible_paper_rows),
+            "weakness_map": alpha_weakness_map(eligible_paper_rows, closed_rows, benchmarks, paper_summary),
             "current_blockers": blocker_rows,
             "latest_alpha_lessons": alpha_lessons(closed_rows, lesson_rows),
             "gates": gates,
@@ -1837,11 +1842,8 @@ def paper_forward_alpha_summary(rows: list[LiveForwardPaperTrade], game: LiveFor
     realized_pnl = round(sum(value for value in pnl_values if value is not None), 4)
     unrealized_pnl = round(sum(safe_float(row.unrealized_pnl, 0.0) or 0.0 for row in open_rows), 4)
     start_capital = safe_float(getattr(game, "starting_capital", None), None)
-    current_capital = safe_float(getattr(game, "current_capital", None), None)
-    if start_capital and current_capital is not None:
-        blum_return = round(((current_capital - start_capital) / start_capital) * 100.0, 4)
-    elif start_capital:
-        blum_return = round((realized_pnl / start_capital) * 100.0, 4)
+    if start_capital:
+        blum_return = round(((realized_pnl + unrealized_pnl) / start_capital) * 100.0, 4)
     else:
         blum_return = average_present([row.pnl_percent for row in closed if row.pnl_percent is not None])
     wins = sum(1 for row in closed if paper_forward_trade_won(row))

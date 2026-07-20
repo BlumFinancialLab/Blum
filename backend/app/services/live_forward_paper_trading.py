@@ -6,7 +6,7 @@ import re
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -56,6 +56,7 @@ from app.services.copy_readiness_evidence import CopyReadinessSummaryService
 
 
 settings = get_settings()
+PAPER_FORWARD_INVALID_ENTRY_GEOMETRY = "PAPER_FORWARD_INVALID_ENTRY_GEOMETRY"
 
 
 class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
@@ -151,7 +152,11 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
             research_priority_used=feedback["research_priority_used"],
             frozen_decision_payload=freeze_decision_payload(decision_payload_with_diagnosis, feedback, now),
             actionability_state=decision_payload.get("actionability"),
-            confidence=decision_payload.get("confidence"),
+            confidence=(
+                decision_payload.get("confidence")
+                if decision_payload.get("confidence") is not None
+                else diagnosis_payload.get("confidence")
+            ),
             sniper_score=decision_payload.get("sniper_score"),
             benchmark_ticker=game.benchmark_ticker,
             entry_trigger=entry_trigger,
@@ -490,6 +495,7 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
             opened = self.open_eligible_trades(db)
             updated = self.update_open_trades(db)
             closed = self.close_resolved_trades(db)
+            quarantined = self.quarantine_invalid_entry_geometry(db)
             lessons = self.publish_lessons(db)
             self.refresh_live_game_counts(db, game)
             events_after = int(db.scalar(select(func.count(LiveForwardPaperTradeEvent.id))) or 0)
@@ -503,6 +509,7 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
                     "open_eligible_trades": opened,
                     "update_open_trades": updated,
                     "close_resolved_trades": closed,
+                    "quarantine_invalid_entry_geometry": quarantined,
                     "publish_lessons": {"created": len(lessons), "lessons": lessons[:8]},
                 },
                 "candidates_checked": len(opened.get("opened", [])) + len(opened.get("waiting", [])) + len(opened.get("data_blocked", [])) + len(opened.get("skipped", [])),
@@ -597,6 +604,31 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
                 waiting.append({"trade_id": trade.id, "ticker": trade.ticker, **condition})
                 continue
 
+            geometry = self.entry_risk_geometry_status(trade, latest_price)
+            if not geometry["valid"]:
+                trade.status = "SKIPPED"
+                trade.outcome_label = "NO_TRADE_ENTRY_GEOMETRY"
+                trade.lesson_learned = geometry["reason"]
+                trade.updated_at = datetime.utcnow()
+                self.append_event_once(
+                    db,
+                    trade,
+                    "ENTRY_RISK_REWARD_DETERIORATED",
+                    geometry["reason"],
+                    payload=geometry,
+                    price_used=latest_price,
+                )
+                skipped.append(
+                    {
+                        "trade_id": trade.id,
+                        "ticker": trade.ticker,
+                        **geometry,
+                        "reason": "entry_risk_reward_deteriorated",
+                        "explanation": geometry["reason"],
+                    }
+                )
+                continue
+
             if watchlist_can_mature:
                 self.append_event_once(
                     db,
@@ -611,6 +643,110 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
             open_tickers.add(trade.ticker.upper())
 
         return {"opened": opened, "waiting": waiting, "data_blocked": data_blocked, "skipped": skipped}
+
+    def entry_risk_geometry_status(self, trade: LiveForwardPaperTrade, entry_price: float) -> dict[str, Any]:
+        stop = safe_float(trade.stop_loss or trade.invalidation_level)
+        target = safe_float(trade.target_1)
+        risk = entry_price - stop
+        reward = target - entry_price
+        risk_reward = reward / risk if risk > 0 else None
+        valid = bool(
+            entry_price > 0
+            and stop > 0
+            and target > 0
+            and risk > 0
+            and reward > 0
+            and risk_reward is not None
+            and risk_reward >= settings.paper_forward_min_risk_reward
+        )
+        reason = (
+            "Entry geometry remains valid at the observed execution price."
+            if valid
+            else (
+                "No trade: the frozen stop/target geometry deteriorated at the observed entry price "
+                f"(actual R/R {risk_reward:.2f}, minimum {settings.paper_forward_min_risk_reward:.2f})."
+                if risk_reward is not None
+                else "No trade: the frozen stop/target geometry is invalid at the observed entry price."
+            )
+        )
+        return {
+            "valid": valid,
+            "entry_price": entry_price,
+            "stop_loss": stop or None,
+            "target_1": target or None,
+            "actual_risk": risk if risk > 0 else None,
+            "actual_reward": reward if reward > 0 else None,
+            "actual_risk_reward": round(risk_reward, 4) if risk_reward is not None else None,
+            "minimum_risk_reward": settings.paper_forward_min_risk_reward,
+            "reason": reason,
+        }
+
+    def quarantine_invalid_entry_geometry(self, db: Session) -> dict[str, Any]:
+        rows = db.scalars(
+            select(LiveForwardPaperTrade)
+            .join(
+                LiveForwardPaperTradeEvent,
+                LiveForwardPaperTradeEvent.paper_trade_id == LiveForwardPaperTrade.id,
+            )
+            .where(
+                LiveForwardPaperTrade.status.in_(["CLOSED", "EXPIRED", "INVALIDATED"]),
+                LiveForwardPaperTrade.entry_price.is_not(None),
+                or_(
+                    LiveForwardPaperTrade.evidence_type.is_(None),
+                    LiveForwardPaperTrade.evidence_type != PAPER_FORWARD_INVALID_ENTRY_GEOMETRY,
+                ),
+                LiveForwardPaperTradeEvent.event_type == "WATCHLIST_TRIGGER_CONFIRMED",
+            )
+            .order_by(desc(LiveForwardPaperTrade.closed_at), desc(LiveForwardPaperTrade.id))
+            .limit(100)
+        ).all()
+        quarantined: list[int] = []
+        for trade in rows:
+            geometry = self.entry_risk_geometry_status(trade, safe_float(trade.entry_price))
+            if geometry["valid"]:
+                continue
+            trade.evidence_type = PAPER_FORWARD_INVALID_ENTRY_GEOMETRY
+            trade.outcome_label = "EVIDENCE_QUARANTINED"
+            trade.lesson_learned = (
+                "Evidence quarantined: the watchlist setup opened after its frozen risk/reward geometry had deteriorated."
+            )
+            trade.updated_at = datetime.utcnow()
+            ledger_trade = db.get(TradingGameTrade, trade.ledger_trade_id) if trade.ledger_trade_id else None
+            if ledger_trade is not None:
+                ledger_trade.outcome_label = "EVIDENCE_QUARANTINED"
+                ledger_trade.lesson_generated = trade.lesson_learned
+                ledger_trade.payload = {
+                    **(ledger_trade.payload or {}),
+                    "evidence_quarantined": True,
+                    "quarantine_reason": "invalid_entry_geometry",
+                    "entry_geometry": geometry,
+                }
+            learning_evidence = db.scalars(
+                select(TradeLearningEvidence).where(TradeLearningEvidence.trade_id == trade.ledger_trade_id)
+            ).all() if trade.ledger_trade_id else []
+            for evidence in learning_evidence:
+                evidence.lesson_type = "paper_forward_quarantined"
+                evidence.action_taken = "excluded_from_learning_evidence"
+                evidence.observation = trade.lesson_learned
+            self.append_event_once(
+                db,
+                trade,
+                "EVIDENCE_QUARANTINED",
+                trade.lesson_learned,
+                payload={"reason": "invalid_entry_geometry", "entry_geometry": geometry},
+                price_used=trade.entry_price,
+            )
+            db.add(
+                LearningEvent(
+                    event_type="paper_forward_evidence_quarantined",
+                    severity="Warning",
+                    title=f"{trade.ticker} paper-forward evidence quarantined",
+                    description=trade.lesson_learned,
+                    payload={"paper_forward_trade_id": trade.id, "entry_geometry": geometry},
+                )
+            )
+            quarantined.append(trade.id)
+        return {"quarantined": quarantined, "count": len(quarantined)}
 
     def update_open_trades(self, db: Session, game: LiveForwardPaperGame | None = None) -> dict:
         """Mark open persisted paper trades to market without closing them."""
@@ -763,6 +899,8 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
         }
 
     def create_lesson_from_trade(self, db: Session, trade: LiveForwardPaperTrade) -> dict | None:
+        if trade.evidence_type == PAPER_FORWARD_INVALID_ENTRY_GEOMETRY:
+            return None
         if trade.status not in {"CLOSED", "EXPIRED", "INVALIDATED"} or not trade.ledger_trade_id:
             return None
         existing = db.scalar(
@@ -1042,6 +1180,21 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
         if trade.status not in {"CANDIDATE", "WAITING_FOR_TRIGGER"}:
             return serialize_paper_forward_trade(trade, compact=True)
 
+        geometry = self.entry_risk_geometry_status(trade, latest_price)
+        actual_risk_per_share = safe_float(geometry.get("actual_risk"))
+        if actual_risk_per_share > 0:
+            risk_adjusted_size = safe_float(trade.risk_amount) / actual_risk_per_share
+            frozen_size = safe_float(trade.position_size)
+            trade.position_size = round(
+                min(frozen_size, risk_adjusted_size) if frozen_size > 0 else risk_adjusted_size,
+                6,
+            )
+            condition = {
+                **condition,
+                "risk_adjusted_position_size": trade.position_size,
+                "actual_risk_per_share": actual_risk_per_share,
+            }
+
         ledger_game = ensure_live_trade_game(db)
         ledger_trade = db.get(TradingGameTrade, trade.ledger_trade_id) if trade.ledger_trade_id else None
         if ledger_trade is None:
@@ -1272,13 +1425,18 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
         }
 
     def close_reason_for_trade(self, trade: LiveForwardPaperTrade, latest_price: float) -> str | None:
-        if trade.stop_loss and latest_price <= safe_float(trade.stop_loss):
+        entry_price = safe_float(trade.entry_price)
+        stop_loss = safe_float(trade.stop_loss)
+        invalidation = safe_float(trade.invalidation_level)
+        target_1 = safe_float(trade.target_1)
+        target_2 = safe_float(trade.target_2)
+        if stop_loss and (not entry_price or stop_loss < entry_price) and latest_price <= stop_loss:
             return "STOP_HIT"
-        if trade.invalidation_level and latest_price <= safe_float(trade.invalidation_level):
+        if invalidation and (not entry_price or invalidation < entry_price) and latest_price <= invalidation:
             return "INVALIDATION_HIT"
-        if trade.target_2 and latest_price >= safe_float(trade.target_2):
+        if target_2 and (not entry_price or target_2 > entry_price) and latest_price >= target_2:
             return "TARGET_2_HIT"
-        if trade.target_1 and latest_price >= safe_float(trade.target_1):
+        if target_1 and (not entry_price or target_1 > entry_price) and latest_price >= target_1:
             return "TARGET_1_HIT"
         if trade.expires_at and datetime.utcnow() >= trade.expires_at:
             return "TIME_EXIT"

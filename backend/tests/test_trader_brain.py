@@ -524,6 +524,50 @@ def test_alpha_snapshot_uses_closed_paper_forward_evidence_without_blending_hist
     assert payload["latest_alpha_lessons"][0]["ticker"] == "NVDA"
 
 
+def test_alpha_snapshot_excludes_experimental_and_quarantined_paper_evidence():
+    with setup_db() as db:
+        game = LiveForwardPaperGame(game_id="alpha-evidence-isolation", starting_capital=100.0, current_capital=152.0)
+        db.add(game)
+        db.flush()
+        for index, evidence_type in enumerate(
+            [None, "PAPER_FORWARD_INTRADAY_EXPERIMENTAL", "PAPER_FORWARD_INVALID_ENTRY_GEOMETRY"],
+            start=1,
+        ):
+            db.add(
+                LiveForwardPaperTrade(
+                    trade_uid=f"pf-isolated-{index}",
+                    duplicate_key=f"pf-isolated-{index}",
+                    game_id=game.id,
+                    ticker=f"TEST{index}",
+                    setup_type="momentum_breakout",
+                    status="CLOSED",
+                    close_reason="TARGET_1_HIT",
+                    decision_timestamp=datetime.utcnow(),
+                    decision_date=date(2026, 1, index),
+                    entry_price=100.0,
+                    exit_price=101.0,
+                    position_size=1.0,
+                    stop_loss=99.0,
+                    target_1=101.0,
+                    net_pnl_eur=1.0 if evidence_type is None else 25.5,
+                    pnl_percent=1.0,
+                    r_multiple=1.0,
+                    benchmark_return_same_period=0.2,
+                    excess_return_vs_benchmark=0.8,
+                    outcome_label="WIN",
+                    evidence_type=evidence_type,
+                )
+            )
+        db.commit()
+
+        payload = TraderBrainService().alpha(db)
+
+    assert payload["sample_size"] == 1
+    assert payload["blum_return"] == 1.0
+    assert payload["evidence_split"]["paper_forward"]["sample_size"] == 1
+    assert payload["evidence_split"]["intraday_paper_forward"]["sample_size"] == 0
+
+
 def test_product_surface_is_reduced_to_four_primary_pages():
     root = Path(__file__).resolve().parents[2] / "frontend" / "components" / "AppShell.tsx"
     text = root.read_text()
