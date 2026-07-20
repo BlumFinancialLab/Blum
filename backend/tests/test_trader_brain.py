@@ -195,6 +195,13 @@ def test_brain_snapshot_exposes_measurable_learning_trading_and_copy_readiness_p
     assert readiness["observation_progress"] == pytest.approx(10 / 90, abs=0.0001)
     assert readiness["blockers"] == ["observation_days", "strategy_forward_trades"]
 
+    pilot = payload["institutional_pilot"]
+    assert pilot["status"] == "NOT_ELIGIBLE"
+    assert pilot["capital_envelope"]["eligible_capital_percent"] == 0.0
+    assert pilot["capital_envelope"]["max_capital_percent"] == 5.0
+    assert pilot["kill_switch"]["active"] is True
+    assert "stale_or_missing_evidence" in pilot["kill_switch"]["triggers"]
+
 
 def test_training_ground_exposes_hypothesis_validation_and_lessons():
     with setup_db() as db:
@@ -599,7 +606,9 @@ def test_brain_page_renders_learning_profit_and_copy_readiness_from_one_snapshot
     assert "Brain Improvement" in charts_text
     assert "P/L vs Benchmark" in charts_text
     assert "Learning Throughput" in charts_text
-    assert "Copy Trading Gate" in charts_text
+    assert "Pilot Capital Gate" in charts_text
+    assert "Kill switch" in charts_text
+    assert "Max pilot capital" in charts_text
     assert "Insufficient evidence" in charts_text
     assert "COPY_READY_PAPER_ONLY" in charts_text
 

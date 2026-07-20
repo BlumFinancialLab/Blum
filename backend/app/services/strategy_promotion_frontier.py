@@ -30,7 +30,14 @@ class StrategyPromotionFrontierService:
     def research_specs(self, db: Session, *, limit: int, seed: int) -> tuple[dict, ...]:
         return tuple(self.research_plan(db, limit=limit, seed=seed)["specs"])
 
-    def research_plan(self, db: Session, *, limit: int, seed: int) -> dict[str, Any]:
+    def research_plan(
+        self,
+        db: Session,
+        *,
+        limit: int,
+        seed: int,
+        selection_history: dict[str, dict] | None = None,
+    ) -> dict[str, Any]:
         bounded_limit = max(1, int(limit))
         rows = self._candidates(db)
         records = [
@@ -38,16 +45,48 @@ class StrategyPromotionFrontierService:
             for candidate, validation in rows
         ]
         records.sort(key=lambda item: (item[2]["frontier_score"], item[2]["sample_size"]), reverse=True)
-        explore_single_slot = bounded_limit == 1 and len(records) > 1 and int(seed) % 10 < 3
-        near_count = 0 if explore_single_slot else (bounded_limit if bounded_limit == 1 else max(1, bounded_limit - 1))
-        selected = records[:near_count]
-        selected_ids = {candidate.id for candidate, _, _ in selected}
-        exploration = [row for row in records if row[0].id not in selected_ids]
-        random.Random(int(seed)).shuffle(exploration)
-        selected.extend(exploration[: bounded_limit - len(selected)])
+        history = selection_history or {}
+        stalled = {
+            candidate.fingerprint
+            for candidate, _, projection in records
+            if _stalled(history.get(candidate.fingerprint), projection["sample_size"])
+        }
+        allow_stalled_probe = int(seed) % 4 == 0
+        preferred = [row for row in records if allow_stalled_probe or row[0].fingerprint not in stalled]
+        deferred = [row for row in records if row[0].fingerprint in stalled and row not in preferred]
+        rng = random.Random(int(seed))
+
+        selected: list[tuple[Any, Any, dict, str]] = []
+        selected_ids: set[int] = set()
+
+        def take(pool, count: int, lane: str, *, shuffle: bool = False) -> None:
+            available = [row for row in pool if row[0].id not in selected_ids]
+            if shuffle:
+                rng.shuffle(available)
+            for row in available[: max(0, count)]:
+                selected.append((*row, lane))
+                selected_ids.add(row[0].id)
+
+        if bounded_limit == 1:
+            explore = len(records) > 1 and int(seed) % 10 < 3
+            pool = list(preferred or deferred)
+            take(pool, 1, "broad_exploration" if explore else "promotion_frontier", shuffle=explore)
+        else:
+            broad_slots = 1
+            failure_slots = max(1, bounded_limit // 4) if bounded_limit >= 3 else 0
+            coverage_slots = max(1, bounded_limit // 8) if bounded_limit >= 4 else 0
+            frontier_slots = max(1, bounded_limit - broad_slots - failure_slots - coverage_slots)
+            promotable = [row for row in preferred if _promising(row[2])]
+            failures = [row for row in preferred if not _promising(row[2])]
+            take(promotable, frontier_slots, "promotion_frontier")
+            take(failures, failure_slots, "failure_replay")
+            take(promotable, coverage_slots, "coverage_gap")
+            take([*preferred, *deferred], broad_slots, "broad_exploration", shuffle=True)
+            take([*preferred, *deferred], bounded_limit - len(selected), "broad_exploration")
+
         specs: list[dict] = []
         reasons: list[dict] = []
-        for index, (candidate, _, projection) in enumerate(selected):
+        for candidate, _, projection, lane in selected[:bounded_limit]:
             specification = dict(candidate.specification_json or {})
             executable = specification.get("executable_strategy")
             if not isinstance(executable, dict) or not executable:
@@ -56,19 +95,18 @@ class StrategyPromotionFrontierService:
             reasons.append(
                 {
                     "strategy_fingerprint": candidate.fingerprint,
-                    "reason": "near_frontier" if index < near_count else "broad_exploration",
+                    "reason": lane,
+                    "sample_size": projection["sample_size"],
                     "sample_gap": projection["sample_gap"],
                     "frontier_score": projection["frontier_score"],
                 }
             )
-        exploration_count = sum(1 for row in reasons if row["reason"] == "broad_exploration")
+        lanes = ("promotion_frontier", "failure_replay", "coverage_gap", "broad_exploration")
         return {
             "specs": specs,
             "reasons": reasons,
-            "selection_mix": {
-                "near_frontier": len(reasons) - exploration_count,
-                "broad_exploration": exploration_count,
-            },
+            "selection_mix": {lane: sum(1 for row in reasons if row["reason"] == lane) for lane in lanes},
+            "stalled_rotations": len(stalled) if not allow_stalled_probe else 0,
         }
 
     @staticmethod
@@ -152,3 +190,21 @@ def number(value: Any, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _promising(projection: dict[str, Any]) -> bool:
+    return (
+        number(projection.get("expectancy_r"), 0.0) > 0
+        and number(projection.get("benchmark_excess"), 0.0) > 0
+        and number(projection.get("cost_coverage"), 0.0) >= 1.0
+        and number(projection.get("overfitting_score"), 100.0) < 70.0
+    )
+
+
+def _stalled(history: dict | None, current_sample_size: int) -> bool:
+    if not isinstance(history, dict):
+        return False
+    return (
+        int(history.get("consecutive_no_progress") or 0) >= 3
+        and int(history.get("last_sample_size") or 0) >= int(current_sample_size)
+    )

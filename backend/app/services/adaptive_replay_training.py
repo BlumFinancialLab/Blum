@@ -218,6 +218,7 @@ class BlumAdaptiveTrainingController:
                 db,
                 limit=limits["max_experiments"],
                 seed=int(datetime.utcnow().timestamp() // 900),
+                selection_history=dict(cursor.get("research_selection_history") or {}),
             )
             run_summary = self.engine.run_cycle(
                 db,
@@ -237,6 +238,10 @@ class BlumAdaptiveTrainingController:
                 row["strategy_fingerprint"] for row in research_plan["reasons"]
             ]
             run_summary["research_selection"] = research_plan
+            selection_history = _updated_selection_history(
+                dict(cursor.get("research_selection_history") or {}),
+                research_plan.get("reasons") or [],
+            )
         except Exception as exc:
             duration_ms = (time.perf_counter() - started) * 1000
             job_state.fail(
@@ -270,7 +275,10 @@ class BlumAdaptiveTrainingController:
             stage_name="replay_slice",
             duration_ms=(time.perf_counter() - started) * 1000,
             items_processed=int(run_summary.get("trades_validated") or 0),
-            cursor=run_summary.get("next_cursor") or {},
+            cursor={
+                **dict(run_summary.get("next_cursor") or {}),
+                "research_selection_history": selection_history,
+            },
             payload={"run_id": run_summary.get("run_id"), "state": state},
         )
         return {**run_summary, **snapshot, "adaptive_training_state": state, "resource_limits_applied": limits}
@@ -403,6 +411,19 @@ class BlumAdaptiveTrainingController:
             "strategy_factory": strategy_factory_snapshot(db),
             "promotion_frontier": self.promotion_frontier.snapshot(db),
             "research_strategy_fingerprints": run_summary.get("research_strategy_fingerprints") or [],
+            "useful_evidence_ratio": round(
+                int(run_summary.get("trades_validated") or 0)
+                / max(1, int(run_summary.get("trades_generated") or 0)),
+                4,
+            ),
+            "research_selection_mix": (run_summary.get("research_selection") or {}).get("selection_mix") or {},
+            "stalled_strategy_rotations": int(
+                (run_summary.get("research_selection") or {}).get("stalled_rotations") or 0
+            ),
+            "research_queue_starved": bool(
+                (run_summary.get("research_selection") or {}).get("specs") == []
+                and (run_summary.get("research_selection") or {}).get("reasons") == []
+            ),
         }
 
     def _miss_reason(self, summary: dict, state: str) -> str:
@@ -476,6 +497,30 @@ def _stability_score(windows: list[dict]) -> float:
         return 0.0
     positive = sum(1 for row in windows if float(row["expectancy_r"]) > 0)
     return round(positive / len(windows) * 100, 2)
+
+
+def _updated_selection_history(existing: dict, reasons: list[dict], *, maximum: int = 100) -> dict:
+    history = {
+        str(key): dict(value)
+        for key, value in existing.items()
+        if isinstance(value, dict)
+    }
+    for row in reasons:
+        fingerprint = str(row.get("strategy_fingerprint") or "")
+        if not fingerprint:
+            continue
+        sample_size = int(row.get("sample_size") or 0)
+        previous = history.get(fingerprint) or {}
+        no_progress = (
+            int(previous.get("consecutive_no_progress") or 0) + 1
+            if previous and sample_size <= int(previous.get("last_sample_size") or 0)
+            else 0
+        )
+        history[fingerprint] = {
+            "last_sample_size": sample_size,
+            "consecutive_no_progress": no_progress,
+        }
+    return dict(list(history.items())[-max(1, int(maximum)):])
 
 
 def _standard_deviation(values: list[float]) -> float:

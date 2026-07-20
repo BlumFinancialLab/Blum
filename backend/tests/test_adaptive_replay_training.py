@@ -58,12 +58,13 @@ class RecordingEngine:
 
 
 class StaticPromotionFrontier:
-    def research_plan(self, db, *, limit, seed):
+    def research_plan(self, db, *, limit, seed, selection_history=None):
         spec = canonical_strategy_spec("intraday_breakout").to_payload()
         return {
             "specs": [spec],
-            "reasons": [{"strategy_fingerprint": spec["strategy_fingerprint"], "reason": "near_frontier"}],
-            "selection_mix": {"near_frontier": 1, "broad_exploration": 0},
+            "reasons": [{"strategy_fingerprint": spec["strategy_fingerprint"], "reason": "promotion_frontier", "sample_size": 12}],
+            "selection_mix": {"promotion_frontier": 1, "failure_replay": 0, "coverage_gap": 0, "broad_exploration": 0},
+            "stalled_rotations": 0,
         }
 
     def snapshot(self, db, limit=20):
@@ -136,7 +137,8 @@ def test_controller_resumes_from_persisted_cursor_and_checkpoints_next_slice():
         ).one()
 
     assert engine.calls[0].after_asset_id == 42
-    assert state.cursor_json == {"asset_id": 99}
+    assert state.cursor_json["asset_id"] == 99
+    assert state.cursor_json["research_selection_history"] == {}
     assert state.status == "completed"
 
 
@@ -153,6 +155,26 @@ def test_controller_passes_promotion_frontier_specs_to_bounded_replay():
 
     assert engine.calls[0].strategy_specs
     assert engine.calls[0].strategy_specs[0]["strategy_fingerprint"]
+
+
+def test_controller_checkpoints_research_progress_history_with_asset_cursor():
+    engine = RecordingEngine()
+    controller = BlumAdaptiveTrainingController(
+        engine=engine,
+        resource_monitor=StaticResourceMonitor(cpu=20, memory=30, api_p95_ms=120),
+        config=config(),
+        promotion_frontier=StaticPromotionFrontier(),
+    )
+    with setup_db() as db:
+        controller.run_once(db, trigger="test")
+        state = db.query(BackgroundJobState).filter_by(
+            job_name="hyperbolic_replay_training", stage_name="replay_slice"
+        ).one()
+
+    assert state.cursor_json["asset_id"] == 99
+    history = state.cursor_json["research_selection_history"]
+    assert len(history) == 1
+    assert next(iter(history.values())) == {"last_sample_size": 12, "consecutive_no_progress": 0}
 
 
 def test_runtime_pause_preserves_existing_replay_cursor():

@@ -11,6 +11,7 @@ export function BrainEvidenceCharts({ data }: { data: any }) {
   const learning = data?.learning_proof ?? {};
   const trading = data?.trading_proof ?? {};
   const readiness = data?.copy_readiness ?? {};
+  const pilot = data?.institutional_pilot ?? {};
 
   return (
     <section className="brain-proof-grid" aria-label="BLUM learning and trading evidence">
@@ -73,47 +74,56 @@ export function BrainEvidenceCharts({ data }: { data: any }) {
       </BloombergPanel>
 
       <BloombergPanel
-        title="Copy Trading Gate"
-        value={<ReadinessLabel status={readiness.copy_readiness_status} />}
-        subtitle="Copy readiness means mature paper evidence, never guaranteed profit."
+        title="Pilot Capital Gate"
+        value={<ReadinessLabel status={pilot.status ?? readiness.copy_readiness_status} />}
+        subtitle="Controlled pilot eligibility requires mature forward evidence and active risk controls."
       >
         <div className="copy-gate-status">
           <div>
-            <span>Real-capital eligibility</span>
-            <strong>{humanize(readiness.real_capital_eligibility ?? "NOT_ELIGIBLE")}</strong>
+            <span>Kill switch</span>
+            <strong>{pilot.kill_switch?.active ? "ACTIVE" : "CLEAR"}</strong>
           </div>
           <div>
-            <span>Evidence maturity</span>
-            <strong>{formatNumber(readiness.maturity_score, "/100")}</strong>
+            <span>Max pilot capital</span>
+            <strong>{formatNumber(pilot.capital_envelope?.eligible_capital_percent, "%")}</strong>
+          </div>
+          <div>
+            <span>Risk per trade</span>
+            <strong>{formatNumber(pilot.capital_envelope?.max_risk_per_trade_percent, "%")}</strong>
+          </div>
+          <div>
+            <span>Pilot readiness</span>
+            <strong>{formatNumber(pilot.readiness_score, "/100")}</strong>
           </div>
         </div>
         <div className="copy-gate-progress">
           <ProgressRow
             label="Strategy forward sample"
             value={readiness.strategy_forward_trades}
-            target={readiness.required_strategy_forward_trades}
-            progress={readiness.strategy_forward_progress}
+            target={readiness.required_capital_strategy_forward_trades}
+            progress={readiness.capital_strategy_forward_progress}
           />
           <ProgressRow
             label="Global forward sample"
             value={readiness.global_forward_trades}
-            target={readiness.required_global_forward_trades}
-            progress={readiness.global_forward_progress}
+            target={readiness.required_capital_global_forward_trades}
+            progress={readiness.capital_global_forward_progress}
           />
           <ProgressRow
             label="Observation days"
             value={readiness.observation_days}
-            target={readiness.required_observation_days}
-            progress={readiness.observation_progress}
+            target={readiness.required_capital_observation_days}
+            progress={readiness.capital_observation_progress}
           />
         </div>
-        {!!readiness.blockers?.length && (
+        {!!pilot.blockers?.length && (
           <div className="copy-gate-blockers">
             <AlertTriangle size={14} />
-            <span>Blocked by: {readiness.blockers.slice(0, 3).map(humanize).join(", ")}</span>
+            <span>Blocked by: {pilot.blockers.slice(0, 3).map(humanize).join(", ")}</span>
           </div>
         )}
-        <p className="copy-gate-next">Next milestone: {readiness.next_milestone ?? "Collect more verified forward evidence."}</p>
+        <p className="copy-gate-next">Next milestone: {pilot.next_milestone ?? "Collect more verified forward evidence."}</p>
+        <p className="copy-gate-next">Controlled external validation only. No guaranteed profit or automatic broker execution.</p>
       </BloombergPanel>
     </section>
   );

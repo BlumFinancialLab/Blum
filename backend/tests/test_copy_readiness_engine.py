@@ -354,6 +354,10 @@ def test_summary_uses_only_latest_readiness_per_strategy(db):
     assert summary["real_capital_eligibility"] == "ELIGIBLE_FOR_LIMITED_EXTERNAL_VALIDATION"
     assert summary["decay_summary"] == {"CONSISTENT": 2}
     assert summary["required_strategy_forward_trades"] == 30
+    assert summary["required_capital_global_forward_trades"] == 500
+    assert summary["required_capital_strategy_forward_trades"] == 150
+    assert summary["required_capital_observation_days"] == 270
+    assert summary["selected_strategy_id"] == "validation:1"
     assert summary["threshold_version"] == "copy-readiness-v1"
 
 

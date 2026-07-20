@@ -638,6 +638,24 @@ class CopyReadinessSummaryService:
                 "required_global_forward_trades": thresholds.global_forward_trades,
                 "required_strategy_forward_trades": thresholds.strategy_forward_trades,
                 "required_observation_days": thresholds.observation_days,
+                "required_capital_global_forward_trades": thresholds.capital_global_forward_trades,
+                "required_capital_strategy_forward_trades": thresholds.capital_strategy_forward_trades,
+                "required_capital_observation_days": thresholds.capital_observation_days,
+                "selected_strategy_id": None,
+                "passed_gates": [],
+                "failed_gates": [],
+                "exact_fingerprint_match": None,
+                "net_expectancy": None,
+                "benchmark_excess": None,
+                "max_drawdown": None,
+                "replay_forward_decay_pct": None,
+                "ticker_count": None,
+                "regime_count": None,
+                "ticker_concentration": None,
+                "market_concentration": None,
+                "costs_available": False,
+                "slippage_available": False,
+                "data_quality_available": False,
                 "total_strategies": 0,
                 "ready_strategies": 0,
                 "not_ready_strategies": 0,
@@ -654,6 +672,36 @@ class CopyReadinessSummaryService:
         blockers = sorted({blocker for row in rows for blocker in (row.blockers_json or [])})
         decay_summary = dict(sorted(Counter(row.decay_status or "INSUFFICIENT_EVIDENCE" for row in rows).items()))
         evaluated_at = max((row.evaluated_at for row in rows if row.evaluated_at is not None), default=None)
+        selected = max(
+            rows,
+            key=lambda row: (
+                row.real_capital_eligibility == "ELIGIBLE_FOR_LIMITED_EXTERNAL_VALIDATION",
+                row.copy_readiness_status == "COPY_READY_HIGH_CONFIDENCE",
+                row.maturity_score or 0.0,
+                row.evaluated_at or datetime.min,
+                row.id,
+            ),
+        )
+        selected_cards = [
+            card
+            for card in _latest_evidence_cards(db, max_strategies=min(MAX_READINESS_STRATEGIES, max(1, len(rows))))
+            if card.strategy_id == selected.strategy_id
+        ]
+        replay_card = _newest_card(card for card in selected_cards if card.evidence_class in REPLAY_EVIDENCE_CLASSES)
+        forward_card = _newest_card(card for card in selected_cards if card.evidence_class in FORWARD_EVIDENCE_CLASSES)
+        compatible = _cards_are_compatible(replay_card, forward_card)
+        replay_provenance = _replay_provenance(replay_card) if replay_card is not None else None
+        forward_provenance = (
+            _forward_provenance(forward_card, compatible=compatible) if forward_card is not None else None
+        )
+        decay = evaluate_decay(
+            _decay_payload(replay_card, replay_provenance),
+            _decay_payload(forward_card, forward_provenance),
+            thresholds,
+        )
+        concentration_values = forward_card.concentration_json if forward_card is not None else {}
+        ticker_concentration = (concentration_values or {}).get("tickers") or {}
+        market_concentration = (concentration_values or {}).get("markets") or {}
         return {
             "copy_readiness_status": _aggregate_readiness_status(statuses),
             "real_capital_eligibility": _aggregate_eligibility(eligibilities),
@@ -676,6 +724,24 @@ class CopyReadinessSummaryService:
             "required_global_forward_trades": thresholds.global_forward_trades,
             "required_strategy_forward_trades": thresholds.strategy_forward_trades,
             "required_observation_days": thresholds.observation_days,
+            "required_capital_global_forward_trades": thresholds.capital_global_forward_trades,
+            "required_capital_strategy_forward_trades": thresholds.capital_strategy_forward_trades,
+            "required_capital_observation_days": thresholds.capital_observation_days,
+            "selected_strategy_id": selected.strategy_id,
+            "passed_gates": list(selected.passed_gates_json or []),
+            "failed_gates": list(selected.failed_gates_json or []),
+            "exact_fingerprint_match": "strategy_forward_provenance" in (selected.passed_gates_json or []),
+            "net_expectancy": forward_card.net_expectancy if forward_card is not None else None,
+            "benchmark_excess": forward_card.benchmark_excess if forward_card is not None else None,
+            "max_drawdown": forward_card.max_drawdown if forward_card is not None else None,
+            "replay_forward_decay_pct": decay.get("performance_decay_pct"),
+            "ticker_count": _optional_non_negative_int(ticker_concentration.get("distinct_count")),
+            "regime_count": len(forward_card.regimes_json or []) if forward_card is not None else None,
+            "ticker_concentration": _number(ticker_concentration.get("top_share")),
+            "market_concentration": _number(market_concentration.get("top_share")),
+            "costs_available": forward_card is not None and forward_card.total_costs is not None,
+            "slippage_available": forward_card is not None and forward_card.average_slippage is not None,
+            "data_quality_available": _data_quality_available(forward_card),
             "total_strategies": len(rows),
             "ready_strategies": ready_count,
             "not_ready_strategies": len(rows) - ready_count,

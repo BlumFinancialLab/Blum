@@ -90,7 +90,7 @@ def test_research_specs_preserve_exploration_beside_near_frontier_candidate() ->
 
     assert result["specs"][0]["strategy_fingerprint"] == near.fingerprint
     assert len(result["specs"]) == 2
-    assert result["selection_mix"]["near_frontier"] == 1
+    assert result["selection_mix"]["promotion_frontier"] == 1
     assert result["selection_mix"]["broad_exploration"] == 1
 
 
@@ -104,7 +104,12 @@ def test_single_slot_budget_periodically_preserves_broad_exploration() -> None:
         )
 
     assert len(result["specs"]) == 1
-    assert result["selection_mix"] == {"near_frontier": 0, "broad_exploration": 1}
+    assert result["selection_mix"] == {
+        "promotion_frontier": 0,
+        "failure_replay": 0,
+        "coverage_gap": 0,
+        "broad_exploration": 1,
+    }
 
 
 def test_frontier_excludes_legacy_self_contradictory_contract() -> None:
@@ -122,3 +127,40 @@ def test_frontier_excludes_legacy_self_contradictory_contract() -> None:
         snapshot = StrategyPromotionFrontierService(minimum_samples=300).snapshot(db)
 
     assert snapshot["status"] == "NO_EXECUTABLE_CANDIDATES"
+
+
+def test_research_plan_uses_four_evidence_lanes_without_duplicate_fingerprints() -> None:
+    with setup_db() as db:
+        for index in range(6):
+            add_candidate(db, target_r=2.0 + index / 10, sample_size=220 - index, expectancy=0.12)
+        for index in range(2):
+            add_candidate(db, target_r=3.0 + index / 10, sample_size=180 - index, expectancy=-0.05)
+
+        result = StrategyPromotionFrontierService(minimum_samples=300).research_plan(db, limit=8, seed=7)
+
+    fingerprints = [row["strategy_fingerprint"] for row in result["reasons"]]
+    assert len(fingerprints) == len(set(fingerprints)) == 8
+    assert result["selection_mix"] == {
+        "promotion_frontier": 4,
+        "failure_replay": 2,
+        "coverage_gap": 1,
+        "broad_exploration": 1,
+    }
+
+
+def test_stalled_frontier_candidate_rotates_but_remains_periodically_probeable() -> None:
+    with setup_db() as db:
+        stalled = add_candidate(db, target_r=2.0, sample_size=280, expectancy=0.18)
+        alternative = add_candidate(db, target_r=2.5, sample_size=250, expectancy=0.12)
+        history = {stalled.fingerprint: {"last_sample_size": 280, "consecutive_no_progress": 3}}
+
+        rotated = StrategyPromotionFrontierService(minimum_samples=300).research_plan(
+            db, limit=1, seed=7, selection_history=history
+        )
+        probe = StrategyPromotionFrontierService(minimum_samples=300).research_plan(
+            db, limit=1, seed=8, selection_history=history
+        )
+
+    assert rotated["reasons"][0]["strategy_fingerprint"] == alternative.fingerprint
+    assert rotated["stalled_rotations"] == 1
+    assert probe["reasons"][0]["strategy_fingerprint"] == stalled.fingerprint
