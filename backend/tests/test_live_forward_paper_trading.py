@@ -12,6 +12,8 @@ from app.models import (
     PaperForwardTrade,
     PaperForwardTradeEvent,
     ModelVersion,
+    PaperExecutionFill,
+    PaperExecutionOrder,
     PriceHistory,
     TradeLearningEvidence,
     LearningEvent,
@@ -377,9 +379,11 @@ def test_waiting_candidate_opens_after_later_frozen_trigger_is_confirmed():
         db.commit()
 
         stored = db.get(PaperForwardTrade, trade.id)
+        order = db.scalar(select(PaperExecutionOrder).where(PaperExecutionOrder.paper_trade_id == trade.id))
         assert [row["trade_id"] for row in result["opened"]] == [trade.id]
         assert stored.status == "OPEN"
-        assert stored.entry_price == 102.0
+        assert stored.entry_price == order.average_fill_price
+        assert stored.entry_price != 102.0
         assert stored.expected_risk <= stored.risk_amount
         assert stored.decision_payload_frozen["trade_plan"]["trigger_price"] == 101.0
 
@@ -869,11 +873,40 @@ def test_paper_forward_lifecycle_opens_candidate_when_trigger_is_met():
 
         assert report["status"] == "ok"
         assert opened.status == "OPEN"
-        assert opened.open_price == 103.0
+        order = db.scalar(select(PaperExecutionOrder).where(PaperExecutionOrder.paper_trade_id == trade.id))
+        assert opened.open_price == order.average_fill_price
+        assert opened.open_price != 103.0
         assert opened.ledger_trade_id is not None
         assert opened.decision_payload_frozen == frozen_before
         assert any(event.event_type == "ENTRY_TRIGGERED" for event in events)
         assert any(event.event_type == "POSITION_OPENED" for event in events)
+
+
+def test_daily_paper_trigger_opens_only_from_persisted_realistic_fill():
+    with setup_db() as db:
+        asset = seed_asset(db)
+        service = LiveForwardPaperTradingService()
+        trade = service.create_candidate(
+            db,
+            candidate(entry_type="ABOVE_TRIGGER", trigger_price=102.0, target_1=130.0, target_2=150.0),
+        )
+        add_price(db, asset, 1, 103.0)
+
+        run_lifecycle(service, db)
+        run_lifecycle(service, db)
+        stored = db.get(PaperForwardTrade, trade.id)
+        order = db.scalar(select(PaperExecutionOrder).where(PaperExecutionOrder.paper_trade_id == trade.id))
+        fills = db.scalars(select(PaperExecutionFill).where(PaperExecutionFill.order_id == order.id)).all() if order else []
+        order_count = db.scalar(select(func.count(PaperExecutionOrder.id)).where(PaperExecutionOrder.paper_trade_id == trade.id))
+
+    assert order is not None
+    assert order_count == 1
+    assert order.status == "FILLED"
+    assert len(fills) == 1
+    assert stored.status == "OPEN"
+    assert stored.entry_price == order.average_fill_price
+    assert stored.entry_price != 103.0
+    assert stored.costs_paid > 0
 
 
 def test_paper_forward_lifecycle_allows_only_one_open_position_per_ticker():
@@ -992,7 +1025,7 @@ def test_paper_forward_lifecycle_stop_hit_closes_trade_and_calculates_pnl():
         assert closed.status == "CLOSED"
         assert closed.close_reason == "STOP_HIT"
         assert closed.outcome == "LOSS"
-        assert closed.pnl_per_share == -6.0
+        assert closed.pnl_per_share == round(94.0 - closed.entry_price, 4)
         assert closed.pnl_percent < 0
         assert closed.r_multiple < 0
         assert any(event.event_type == "STOP_HIT" for event in events)

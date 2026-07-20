@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 import math
 import re
 from typing import Any
@@ -17,6 +17,7 @@ from app.models import (
     LiveForwardPaperPosition,
     LiveForwardPaperTrade,
     LiveForwardPaperTradeEvent,
+    PaperExecutionOrder,
     PriceHistory,
     SniperScore,
     TradeLearningEvidence,
@@ -53,6 +54,8 @@ from app.services.paper_forward_opportunity_scanner import (
     PaperForwardOpportunityScanner,
 )
 from app.services.copy_readiness_evidence import CopyReadinessSummaryService
+from app.services.paper_execution_lifecycle import PaperOrderLifecycleService
+from app.services.realistic_execution import ExecutionMarketBar, ExecutionOrderRequest
 
 
 settings = get_settings()
@@ -492,6 +495,7 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
         game = self.active_or_create_live_game(db)
         try:
             events_before = int(db.scalar(select(func.count(LiveForwardPaperTradeEvent.id))) or 0)
+            execution_orders = self.process_pending_daily_orders(db, game)
             opened = self.open_eligible_trades(db)
             updated = self.update_open_trades(db)
             closed = self.close_resolved_trades(db)
@@ -506,6 +510,7 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
                 "mode": "paper_forward_lifecycle",
                 "paper_forward_lifecycle_mode": "LIFECYCLE_ENABLED",
                 "phases": {
+                    "execution_orders": execution_orders,
                     "open_eligible_trades": opened,
                     "update_open_trades": updated,
                     "close_resolved_trades": closed,
@@ -513,7 +518,7 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
                     "publish_lessons": {"created": len(lessons), "lessons": lessons[:8]},
                 },
                 "candidates_checked": len(opened.get("opened", [])) + len(opened.get("waiting", [])) + len(opened.get("data_blocked", [])) + len(opened.get("skipped", [])),
-                "opened_trades": len(opened.get("opened", [])),
+                "opened_trades": len(execution_orders.get("opened", [])) + len(opened.get("opened", [])),
                 "updated_trades": len(updated.get("updated", [])),
                 "closed_trades": len(closed.get("closed", [])),
                 "blocked_candidates": len(opened.get("data_blocked", [])) + len(opened.get("skipped", [])),
@@ -658,10 +663,196 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
                     price_used=latest_price,
                 )
 
-            opened.append(self.open_candidate_trade(db, live_game, trade, latest_date, latest_price, condition))
-            open_tickers.add(trade.ticker.upper())
+            execution = self.submit_or_process_candidate_order(db, live_game, trade, condition)
+            if execution["status"] == "OPEN":
+                opened.append(execution["trade"])
+                open_tickers.add(trade.ticker.upper())
+            elif execution["status"] in {"EXPIRED", "REJECTED"}:
+                skipped.append(execution)
+            else:
+                waiting.append(execution)
 
         return {"opened": opened, "waiting": waiting, "data_blocked": data_blocked, "skipped": skipped}
+
+    def submit_or_process_candidate_order(
+        self,
+        db: Session,
+        game: LiveForwardPaperGame,
+        trade: LiveForwardPaperTrade,
+        condition: dict[str, Any],
+    ) -> dict[str, Any]:
+        execution = PaperOrderLifecycleService()
+        request = self.daily_execution_request(db, trade, condition)
+        if request is None:
+            trade.status = "SKIPPED"
+            trade.outcome_label = "DATA_BLOCKED"
+            trade.lesson_learned = "Daily execution order could not be constructed from the frozen entry geometry."
+            return {"status": "REJECTED", "trade_id": trade.id, "ticker": trade.ticker, "reason": "unsupported_execution_geometry"}
+        order = execution.submit(
+            db,
+            request,
+            paper_trade_id=trade.id,
+            expires_at=(trade.decision_timestamp or datetime.utcnow()) + timedelta(days=self.expected_holding_days(trade)),
+        )
+        trade.status = "ORDER_SUBMITTED"
+        bars = self.daily_execution_bars(db, trade.ticker, order.decision_timestamp)
+        result = execution.process_order(db, order, bars, now=max((bar.timestamp for bar in bars), default=datetime.utcnow()))
+        return self.project_daily_execution_result(db, game, trade, order, result, condition)
+
+    def process_pending_daily_orders(self, db: Session, game: LiveForwardPaperGame) -> dict[str, Any]:
+        rows = db.scalars(
+            select(PaperExecutionOrder)
+            .join(LiveForwardPaperTrade, LiveForwardPaperTrade.id == PaperExecutionOrder.paper_trade_id)
+            .where(
+                LiveForwardPaperTrade.game_id == game.id,
+                or_(
+                    LiveForwardPaperTrade.trading_mode.is_(None),
+                    LiveForwardPaperTrade.trading_mode != "INTRADAY_PAPER_FORWARD",
+                ),
+                PaperExecutionOrder.status.in_(["SUBMITTED", "PARTIALLY_FILLED"]),
+            )
+            .order_by(PaperExecutionOrder.submitted_at, PaperExecutionOrder.id)
+            .limit(50)
+        ).all()
+        execution = PaperOrderLifecycleService()
+        opened: list[dict] = []
+        waiting: list[dict] = []
+        skipped: list[dict] = []
+        for order in rows:
+            trade = db.get(LiveForwardPaperTrade, order.paper_trade_id)
+            if trade is None:
+                continue
+            bars = self.daily_execution_bars(db, trade.ticker, order.decision_timestamp)
+            result = execution.process_order(db, order, bars, now=max((bar.timestamp for bar in bars), default=datetime.utcnow()))
+            projected = self.project_daily_execution_result(db, game, trade, order, result, {"entry_type": order.order_type})
+            if projected["status"] == "OPEN":
+                opened.append(projected)
+            elif projected["status"] in {"EXPIRED", "REJECTED"}:
+                skipped.append(projected)
+            else:
+                waiting.append(projected)
+        return {"processed": len(rows), "opened": opened, "waiting": waiting, "skipped": skipped}
+
+    def daily_execution_request(
+        self,
+        db: Session,
+        trade: LiveForwardPaperTrade,
+        condition: dict[str, Any],
+    ) -> ExecutionOrderRequest | None:
+        entry_type = str(condition.get("entry_type") or "").upper()
+        plan = (trade.frozen_decision_payload or {}).get("trade_plan") or {}
+        if entry_type in {"ABOVE_TRIGGER", "BREAKOUT"}:
+            order_type = "STOP"
+            stop_price = first_positive_float(condition.get("trigger_price"), plan.get("trigger_price"), trade.entry_price)
+            limit_price = None
+            theoretical = stop_price
+        elif entry_type in {"LIMIT", "PULLBACK", "BELOW_TRIGGER"}:
+            order_type = "LIMIT"
+            limit_price = first_positive_float(condition.get("limit_price"), condition.get("trigger_price"), plan.get("limit_price"), trade.entry_price)
+            stop_price = None
+            theoretical = limit_price
+        elif entry_type in {"MARKET", "MKT"}:
+            order_type = "MARKET"
+            limit_price = None
+            stop_price = None
+            theoretical = first_positive_float((trade.frozen_decision_payload or {}).get("price_context", {}).get("latest_price"), trade.entry_price)
+        else:
+            return None
+        if theoretical is None or safe_float(trade.position_size) <= 0:
+            return None
+        asset = db.scalar(select(Asset).where(func.upper(Asset.ticker) == trade.ticker.upper()).limit(1))
+        currency = str(getattr(asset, "currency", None) or "USD").upper()
+        liquidity = safe_float((trade.frozen_decision_payload or {}).get("liquidity_context", {}).get("liquidity_score"), 70.0)
+        quantity = safe_float(trade.position_size)
+        invalidation = safe_float(trade.stop_loss or trade.invalidation_level)
+        if invalidation > 0 and invalidation < theoretical and safe_float(trade.risk_amount) > 0:
+            buffered_entry = theoretical * 1.003
+            risk_limited_quantity = safe_float(trade.risk_amount) / max(0.000001, buffered_entry - invalidation)
+            quantity = min(quantity, risk_limited_quantity)
+        return ExecutionOrderRequest(
+            order_key=f"daily-execution:{trade.duplicate_key or trade.id}",
+            ticker=trade.ticker,
+            side="BUY",
+            order_type=order_type,
+            decision_timestamp=trade.decision_timestamp,
+            theoretical_price=theoretical,
+            quantity=round(quantity, 8),
+            limit_price=limit_price,
+            stop_price=stop_price,
+            target_price=trade.target_1,
+            max_participation_rate=0.05,
+            commission_bps=1.0,
+            currency=currency,
+            account_currency=currency,
+            fx_rate=1.0,
+            liquidity_score=liquidity,
+            expected_holding_days=self.expected_holding_days(trade),
+        )
+
+    def daily_execution_bars(self, db: Session, ticker: str, after: datetime) -> list[ExecutionMarketBar]:
+        asset = db.scalar(select(Asset).where(func.upper(Asset.ticker) == ticker.upper()).limit(1))
+        if asset is None:
+            return []
+        rows = db.scalars(
+            select(PriceHistory)
+            .where(PriceHistory.asset_id == asset.id, PriceHistory.date > after.date())
+            .order_by(PriceHistory.date)
+            .limit(32)
+        ).all()
+        bars: list[ExecutionMarketBar] = []
+        for row in rows:
+            close = safe_float(row.close)
+            open_price = safe_float(row.open or close)
+            high = safe_float(row.high or max(open_price, close))
+            low = safe_float(row.low or min(open_price, close))
+            volume = safe_float(row.volume)
+            if min(open_price, high, low, close, volume) <= 0:
+                continue
+            volatility_bps = abs(high - low) / max(close, 0.0001) * 10_000
+            spread_bps = max(2.0, min(25.0, volatility_bps * 0.03))
+            bars.append(
+                ExecutionMarketBar(
+                    timestamp=datetime.combine(row.date, time(hour=16)),
+                    open=open_price,
+                    high=high,
+                    low=low,
+                    close=close,
+                    volume=volume,
+                    spread_bps=spread_bps,
+                    volatility_bps=volatility_bps,
+                )
+            )
+        return bars
+
+    def project_daily_execution_result(
+        self,
+        db: Session,
+        game: LiveForwardPaperGame,
+        trade: LiveForwardPaperTrade,
+        order: PaperExecutionOrder,
+        result: dict[str, Any],
+        condition: dict[str, Any],
+    ) -> dict[str, Any]:
+        status = str(result.get("status") or order.status)
+        if status in {"FILLED", "PARTIALLY_FILLED_EXPIRED"} and live_position_for_paper_trade(db, game, trade) is None:
+            opened = self.open_candidate_trade(
+                db,
+                game,
+                trade,
+                trade.entry_date or (trade.opened_at or datetime.utcnow()).date(),
+                safe_float(order.average_fill_price),
+                {**condition, "execution_order_id": order.id, "theoretical_price": order.theoretical_price},
+                from_execution=True,
+            )
+            return {"status": "OPEN", "trade_id": trade.id, "ticker": trade.ticker, "order_id": order.id, "trade": opened}
+        if status in {"EXPIRED", "REJECTED"}:
+            trade.status = "SKIPPED"
+            trade.outcome_label = "ORDER_NOT_FILLED"
+            trade.lesson_learned = f"Realistic daily order ended as {status}: {result.get('rejection_reason') or 'ORDER_NOT_FILLED'}."
+            self.append_event_once(db, trade, "ORDER_NOT_FILLED", trade.lesson_learned, payload=result)
+            return {"status": status, "trade_id": trade.id, "ticker": trade.ticker, "reason": "order_not_filled", "order_id": order.id}
+        trade.status = "PARTIALLY_FILLED" if status == "PARTIALLY_FILLED" else "ORDER_SUBMITTED"
+        return {"status": trade.status, "trade_id": trade.id, "ticker": trade.ticker, "reason": "awaiting_execution", "order_id": order.id}
 
     def lifecycle_candidates(self, db: Session, game: LiveForwardPaperGame) -> list[LiveForwardPaperTrade]:
         """Use the scanner's persisted composite rank before watchlist and recency tie-breakers."""
@@ -1210,14 +1401,16 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
         latest_date: date,
         latest_price: float,
         condition: dict,
+        *,
+        from_execution: bool = False,
     ) -> dict:
-        now = datetime.utcnow()
-        if trade.status not in {"CANDIDATE", "WAITING_FOR_TRIGGER"}:
+        now = trade.opened_at if from_execution and trade.opened_at is not None else datetime.utcnow()
+        if not from_execution and trade.status not in {"CANDIDATE", "WAITING_FOR_TRIGGER"}:
             return serialize_paper_forward_trade(trade, compact=True)
 
         geometry = self.entry_risk_geometry_status(trade, latest_price)
         actual_risk_per_share = safe_float(geometry.get("actual_risk"))
-        if actual_risk_per_share > 0:
+        if actual_risk_per_share > 0 and not from_execution:
             risk_adjusted_size = safe_float(trade.risk_amount) / actual_risk_per_share
             frozen_size = safe_float(trade.position_size)
             trade.position_size = round(
