@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -23,7 +23,7 @@ from app.models import (
     TradingIntelligenceMetric,
 )
 from app.services.trader_brain import TRADER_BRAIN_FEATURE_SET, TRADER_BRAIN_VERSION, TraderBrainService
-from app.services.brain_learning_proof import _first_present_number
+from app.services.brain_learning_proof import BrainLearningProofService, PAPER_TRADE_LIMIT, _first_present_number
 
 
 def setup_db() -> Session:
@@ -35,6 +35,54 @@ def setup_db() -> Session:
 def test_pilot_projection_preserves_observed_zero_instead_of_using_fallback():
     assert _first_present_number(0.0, 2.5) == 0.0
     assert _first_present_number(None, 2.5) == 2.5
+
+
+def test_brain_trading_proof_does_not_lose_closed_trades_behind_recent_candidates():
+    with setup_db() as db:
+        game = LiveForwardPaperGame(
+            game_id="bounded-terminal-evidence",
+            starting_capital=100.0,
+            current_capital=102.0,
+        )
+        db.add(game)
+        db.flush()
+        db.add(
+            LiveForwardPaperTrade(
+                trade_uid="older-closed-trade",
+                duplicate_key="older-closed-trade",
+                game_id=game.id,
+                ticker="NVDA",
+                setup_type="momentum_breakout",
+                status="CLOSED",
+                decision_timestamp=datetime(2026, 1, 1, 10, 0, 0),
+                closed_at=datetime(2026, 1, 2, 10, 0, 0),
+                entry_price=100.0,
+                exit_price=102.0,
+                position_size=1.0,
+                net_pnl_eur=2.0,
+                r_multiple=1.0,
+                benchmark_return_same_period=0.5,
+            )
+        )
+        for index in range(PAPER_TRADE_LIMIT + 1):
+            db.add(
+                LiveForwardPaperTrade(
+                    trade_uid=f"recent-skipped-{index}",
+                    duplicate_key=f"recent-skipped-{index}",
+                    game_id=game.id,
+                    ticker="SPY",
+                    setup_type="avoid_no_edge",
+                    status="SKIPPED",
+                    decision_timestamp=datetime(2026, 2, 1, 10, 0, 0) + timedelta(minutes=index),
+                    entry_price=100.0,
+                )
+            )
+        db.commit()
+
+        proof = BrainLearningProofService().snapshot(db)["trading_proof"]
+
+    assert proof["closed_trades"] == 1
+    assert proof["realized_pnl_eur"] == 2.0
 
 
 def test_brain_snapshot_is_startup_safe_and_does_not_call_heavy_readiness_services(monkeypatch):

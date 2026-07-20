@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from statistics import mean
 from typing import Any
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -119,17 +119,43 @@ class BrainLearningProofService:
         if game is None:
             return _empty_trading_proof("No paper-forward game exists yet.")
 
-        rows = db.scalars(
+        terminal_statuses = ("CLOSED", "EXITED", "EXPIRED", "INVALIDATED")
+        closed_rows = db.scalars(
             select(LiveForwardPaperTrade)
             .where(LiveForwardPaperTrade.game_id == game.id)
+            .where(
+                or_(
+                    LiveForwardPaperTrade.closed_at.is_not(None),
+                    LiveForwardPaperTrade.exit_price.is_not(None),
+                    LiveForwardPaperTrade.close_reason.is_not(None),
+                    func.upper(LiveForwardPaperTrade.status).in_(terminal_statuses),
+                )
+            )
+            .order_by(
+                desc(
+                    func.coalesce(
+                        LiveForwardPaperTrade.closed_at,
+                        LiveForwardPaperTrade.updated_at,
+                        LiveForwardPaperTrade.decision_timestamp,
+                    )
+                )
+            )
+            .limit(PAPER_TRADE_LIMIT)
+        ).all()
+        open_rows = db.scalars(
+            select(LiveForwardPaperTrade)
+            .where(LiveForwardPaperTrade.game_id == game.id)
+            .where(func.upper(LiveForwardPaperTrade.status) == "OPEN")
+            .where(LiveForwardPaperTrade.closed_at.is_(None))
+            .where(LiveForwardPaperTrade.exit_price.is_(None))
+            .where(LiveForwardPaperTrade.close_reason.is_(None))
             .order_by(desc(LiveForwardPaperTrade.decision_timestamp))
             .limit(PAPER_TRADE_LIMIT)
         ).all()
         closed = sorted(
-            (row for row in rows if _trade_is_closed(row)),
+            closed_rows,
             key=lambda row: row.closed_at or row.updated_at or row.decision_timestamp,
         )
-        open_rows = [row for row in rows if _trade_is_open(row)]
         pnl_values = [_number(row.net_pnl_eur) for row in closed if row.net_pnl_eur is not None]
         r_values = [_number(row.r_multiple) for row in closed if row.r_multiple is not None]
         wins = sum(1 for row in closed if _trade_won(row))
