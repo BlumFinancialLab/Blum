@@ -197,9 +197,9 @@ export default function PaperTradingPage() {
       />
 
       <section className="terminal-command-grid">
-        <MetricCard label="Candidates" value={numberLike(snapshot.candidate_count ?? counts.candidates ?? candidates.length)} subvalue="Frozen or skipped decisions" icon={<Target size={15} />} tone={candidates.length ? "attention" : "neutral"} />
+        <MetricCard label="Candidates" value={numberLike(maxAvailableCount(counts.candidates, candidates.length, snapshot.candidate_count))} subvalue="Frozen or skipped decisions" icon={<Target size={15} />} tone={candidates.length ? "attention" : "neutral"} />
         <MetricCard label="Open" value={numberLike(snapshot.open_count ?? counts.open ?? openPositions.length)} subvalue="Forward paper positions" icon={<Clock size={15} />} tone={openPositions.length ? "positive" : "neutral"} />
-        <MetricCard label="Closed" value={numberLike(snapshot.closed_count ?? counts.closed_total ?? closedTrades.length)} subvalue="Evaluated outcomes" icon={<BookOpen size={15} />} tone={closedTrades.length ? "positive" : "neutral"} />
+        <MetricCard label="Closed" value={numberLike(maxAvailableCount(counts.closed_total, closedTrades.length, snapshot.closed_count))} subvalue="Evaluated outcomes" icon={<BookOpen size={15} />} tone={closedTrades.length ? "positive" : "neutral"} />
         <MetricCard label="Blocked / Errors" value={`${numberLike(snapshot.data_blocked_count ?? counts.data_blocked)} / ${numberLike(snapshot.error_count)}`} subvalue="Data blocked / skipped-error" icon={<ShieldAlert size={15} />} tone={(Number(snapshot.error_count) || Number(snapshot.data_blocked_count)) ? "negative" : "info"} />
         <MetricCard label="Realized P/L" value={formatCurrency(snapshot.realized_pnl ?? metrics.realized_pnl)} subvalue={`Unrealized ${formatCurrency(snapshot.unrealized_pnl ?? metrics.unrealized_pnl)}`} icon={<TrendingUp size={15} />} tone={moneyTone(snapshot.realized_pnl ?? metrics.realized_pnl)} />
         <MetricCard label="Win / Avg R" value={`${formatPercent01(snapshot.win_rate ?? metrics.win_rate)} / ${formatR(snapshot.average_r ?? metrics.avg_r)}`} subvalue={`Benchmark excess ${formatPercent(snapshot.benchmark_excess ?? metrics.benchmark_excess)}`} icon={<TrendingDown size={15} />} tone={moneyTone(snapshot.benchmark_excess ?? metrics.benchmark_excess)} />
@@ -753,6 +753,11 @@ function moneyTone(value: any): "positive" | "attention" | "negative" | "info" {
 function numberLike(value: any) {
   const number = Number(value);
   return Number.isFinite(number) ? String(number) : "0";
+}
+
+function maxAvailableCount(...values: any[]) {
+  const counts = values.map(Number).filter((value) => Number.isFinite(value) && value >= 0);
+  return counts.length ? Math.max(...counts) : 0;
 }
 
 function formatNumber(value: any, digits = 2) {

@@ -693,3 +693,13 @@ def test_paper_trading_page_uses_single_snapshot_and_readiness_states():
     assert "No completed trades" not in text
     assert "No raw JSON" not in text
     assert "Developer payload" in text
+
+
+def test_paper_trading_summary_does_not_prefer_narrow_zero_counts_over_terminal_totals():
+    page = Path(__file__).resolve().parents[2] / "frontend" / "app" / "paper-trading" / "page.tsx"
+    text = page.read_text()
+
+    assert "maxAvailableCount(counts.candidates, candidates.length, snapshot.candidate_count)" in text
+    assert "maxAvailableCount(counts.closed_total, closedTrades.length, snapshot.closed_count)" in text
+    assert "snapshot.candidate_count ?? counts.candidates" not in text
+    assert "snapshot.closed_count ?? counts.closed_total" not in text
