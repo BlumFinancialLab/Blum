@@ -28,6 +28,7 @@ from app.models import (
     TradeLearningEvidence,
 )
 from app.services.intraday_contracts import PAPER_FORWARD_INTRADAY, PAPER_FORWARD_INTRADAY_EXPERIMENTAL
+from app.services.executable_strategy import ExecutableStrategySpec, canonical_strategy_spec
 from app.services.intraday_market_data import StrictIntradayDataGateway
 from app.services.intraday_opportunity import IntradayPortfolioState, BlumIntradayOpportunityEngine
 from app.services.intraday_paper_engine import (
@@ -386,6 +387,45 @@ def test_opportunity_rejects_expected_move_that_costs_destroy():
     assert decision.reason_code in {"EXPECTED_MOVE_TOO_SMALL", "COSTS_KILL_EDGE"}
 
 
+def test_paper_opportunity_executes_the_frozen_replay_strategy_contract():
+    with setup_db() as db:
+        asset = seed_asset(db)
+        canonical = canonical_strategy_spec("intraday_breakout")
+        executable = ExecutableStrategySpec.from_payload(
+            {
+                **canonical.to_payload(),
+                "lookback": 5,
+                "minimum_stop_percent": 0.02,
+                "target_r_multiple": 2.5,
+            }
+        )
+        seed_validation(
+            db,
+            metrics={
+                "strategy_fingerprint": executable.fingerprint,
+                "executable_strategy": executable.to_payload(),
+            },
+        )
+        seed_complete_stack(db, asset)
+        strategy = BlumPromotedStrategyRegistry().list_eligible(db, market="USA", asset_class="Stock")[0]
+        bundle = StrictIntradayDataGateway(refresh_missing=False).load(db, asset=asset, now=NOW)
+
+        decision = BlumIntradayOpportunityEngine().evaluate(
+            strategy=strategy,
+            data=bundle,
+            portfolio=IntradayPortfolioState(capital=10_000.0),
+            desk="NasdaqAgent",
+            benchmark_ticker="QQQ",
+        )
+
+    risk_distance = float(decision.entry_price or 0.0) - float(decision.stop_price or 0.0)
+    reward_distance = float(decision.target_price or 0.0) - float(decision.entry_price or 0.0)
+    assert decision.status == "INTRADAY_TRADE_CANDIDATE"
+    assert strategy.executable_strategy["strategy_fingerprint"] == executable.fingerprint
+    assert decision.evidence["strategy_fingerprint"] == executable.fingerprint
+    assert round(reward_distance / risk_distance, 6) == 2.5
+
+
 def test_intraday_run_persists_evaluable_no_trade_decision() -> None:
     with setup_db() as db:
         asset = seed_asset(db)
@@ -571,6 +611,9 @@ def test_run_opens_only_promoted_triggered_candidate_with_adverse_fill():
     assert execution_fills
     assert sum(fill.spread_cost + fill.slippage_cost + fill.commission_cost for fill in execution_fills) > 0
     assert trade.frozen_decision_payload["evidence_type"] == PAPER_FORWARD_INTRADAY
+    assert trade.frozen_decision_payload["strategy"]["fingerprint"]
+    assert trade.frozen_decision_payload["strategy"]["executable_strategy"]["entry_rule"] == "breakout_close"
+    assert trade.intraday_metadata["maximum_holding_minutes"] == 20
     assert events[0].event_type == "INTRADAY_TRADE_CANDIDATE"
     assert "INTRADAY_TRADE_OPENED" in [event.event_type for event in events]
 

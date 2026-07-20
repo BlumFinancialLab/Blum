@@ -14,6 +14,7 @@ from app.services.intraday_contracts import (
     PromotedIntradayStrategy,
 )
 from app.services.replay_execution import ReplayExecutionModel, ReplayPositionSizer
+from app.services.executable_strategy import ExecutableStrategySpec, StrategySignalEvaluator
 
 
 @dataclass(frozen=True)
@@ -52,6 +53,7 @@ class BlumIntradayOpportunityEngine:
         self.min_volatility_bps = float(min_volatility_bps)
         self.cost_model = ReplayExecutionModel()
         self.sizer = ReplayPositionSizer(max_risk_fraction=0.01)
+        self.signal_evaluator = StrategySignalEvaluator()
 
     def evaluate(
         self,
@@ -89,24 +91,42 @@ class BlumIntradayOpportunityEngine:
         if portfolio.total_risk_percent >= self.max_total_risk_percent:
             return IntradayDecision(INTRADAY_BLOCKED, "TOTAL_RISK_LIMIT", "Portfolio paper-risk limit reached.", **base)
 
-        daily, setup, confirmation, trigger = (data.bars[key] for key in ("1d", "15m", "5m", "1m"))
-        regime_up = daily[-1].close > mean(float(row.close) for row in daily[-20:])
-        setup_up = setup[-1].close > mean(float(row.close) for row in setup[-20:])
-        confirmed = confirmation[-1].close > confirmation[-2].close
-        triggered = trigger[-1].close > trigger[-2].close
-        regime = "trend_up" if regime_up else "trend_down"
-        if not regime_up or not setup_up:
-            return IntradayDecision(INTRADAY_BLOCKED, "REGIME_MISMATCH", "Daily regime or 15-minute setup contradicts the promoted strategy.", regime=regime, **base)
-        if not confirmed or not triggered:
-            return IntradayDecision(INTRADAY_WATCHLIST, "WAITING_FOR_TRIGGER", "Setup exists but 5-minute confirmation or 1-minute trigger is missing.", regime=regime, **base)
+        spec = ExecutableStrategySpec.from_payload(strategy.executable_strategy)
+        signal = self.signal_evaluator.evaluate(
+            spec,
+            data.bars,
+            as_of=data.as_of,
+            market=data.market,
+        )
+        regime = signal.regime
+        if signal.status == "blocked":
+            return IntradayDecision(
+                INTRADAY_BLOCKED,
+                signal.reason_code,
+                "Current point-in-time evidence contradicts the validated strategy contract.",
+                regime=regime,
+                evidence={"strategy_fingerprint": spec.fingerprint, "signal_evidence": signal.evidence},
+                **base,
+            )
+        if signal.status != "triggered":
+            return IntradayDecision(
+                INTRADAY_WATCHLIST,
+                signal.reason_code,
+                "The validated strategy exists, but its exact entry condition has not triggered.",
+                regime=regime,
+                evidence={"strategy_fingerprint": spec.fingerprint, "signal_evidence": signal.evidence},
+                **base,
+            )
 
-        latest = trigger[-1]
+        execution_bars = data.bars[spec.execution_timeframe]
+        latest = execution_bars[-1]
         entry = float(latest.close)
-        true_ranges = [max(float(row.high or row.close) - float(row.low or row.close), abs(float(row.close) - float(row.open or row.close))) for row in trigger[-20:]]
-        atr = max(0.0001, mean(true_ranges))
+        geometry = self.signal_evaluator.geometry(spec, entry_price=entry, execution_history=execution_bars)
+        atr = geometry.atr
         volatility_bps = atr / entry * 10_000
         if volatility_bps < self.min_volatility_bps:
             return IntradayDecision(INTRADAY_BLOCKED, "VOLATILITY_TOO_LOW", "Observed one-minute volatility is too low for costs and execution risk.", volatility_bps=volatility_bps, regime=regime, **base)
+        trigger = data.bars["1m"]
         volumes = [float(row.volume or 0.0) for row in trigger[-20:]]
         latest_volume = volumes[-1]
         average_volume = max(1.0, mean(volumes))
@@ -119,10 +139,8 @@ class BlumIntradayOpportunityEngine:
             return IntradayDecision(INTRADAY_BLOCKED, "SESSION_NOT_ALLOWED", "The current timestamp is outside the permitted regular session.", liquidity_score=liquidity_score, volatility_bps=volatility_bps, regime=regime, session=session, **base)
 
         cost = self.cost_model.profile(market=data.market, asset_type=asset_type, liquidity_score=liquidity_score, session=session)
-        risk_distance = max(atr, entry * 0.0015)
-        target_multiple = float(strategy.target_rules.get("risk_multiple") or 1.8)
-        stop = entry - risk_distance
-        target = entry + risk_distance * target_multiple
+        stop = geometry.stop_price
+        target = geometry.target_price
         expected_move_bps = (target - entry) / entry * 10_000
         net_expectancy_bps = expected_move_bps - cost.total_round_trip_bps
         costs = cost.to_dict()
@@ -169,7 +187,7 @@ class BlumIntradayOpportunityEngine:
             entry_price=entry,
             stop_price=stop,
             target_price=target,
-            trailing_stop=entry - atr * 1.2,
+            trailing_stop=geometry.trailing_stop,
             confidence=confidence,
             edge_score=edge_score,
             expected_move_bps=expected_move_bps,
@@ -182,6 +200,10 @@ class BlumIntradayOpportunityEngine:
             sizing=sizing,
             evidence={
                 "timeframes": list(strategy.timeframe_stack),
+                "strategy_fingerprint": spec.fingerprint,
+                "executable_strategy": spec.to_payload(),
+                "signal_evidence": signal.evidence,
+                "maximum_holding_minutes": spec.maximum_holding_bars * timeframe_minutes(spec.execution_timeframe),
                 "data_timestamps": {key: value.isoformat() if value else None for key, value in data.latest_timestamps.items()},
                 "evidence_lane": evidence_lane,
                 "paper_risk_multiplier": risk_multiplier,
@@ -198,3 +220,7 @@ def session_name(market: str, utc_hour: int) -> str:
     if key in {"ITALY", "GERMANY", "FRANCE", "EUROPE"}:
         return "regular" if 7 <= utc_hour <= 16 else "closed"
     return "closed"
+
+
+def timeframe_minutes(timeframe: str) -> int:
+    return {"1m": 1, "5m": 5, "15m": 15, "1d": 1_440}.get(timeframe, 1)

@@ -34,6 +34,7 @@ class PromotedIntradayStrategy:
     promotion_timestamp: datetime
     model_version: str
     evidence_type: str
+    executable_strategy: dict[str, Any]
     metrics: dict[str, Any]
 
     def to_dict(self) -> dict[str, Any]:

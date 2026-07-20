@@ -300,7 +300,8 @@ class BlumIntradayPaperEngine:
         decision: IntradayDecision,
     ) -> tuple[LiveForwardPaperTrade, bool]:
         trigger_timestamp = (decision.evidence.get("data_timestamps") or {}).get("1m") or decision.decision_timestamp.isoformat()
-        duplicate_key = f"intraday:{asset.ticker}:{decision.validation_id}:{trigger_timestamp}"
+        strategy_fingerprint = str(decision.evidence.get("strategy_fingerprint") or f"validation-{decision.validation_id}")
+        duplicate_key = f"intraday:{asset.ticker}:{strategy_fingerprint}:{trigger_timestamp}"
         existing = db.scalar(select(LiveForwardPaperTrade).where(LiveForwardPaperTrade.duplicate_key == duplicate_key).limit(1))
         if existing:
             return existing, False
@@ -323,6 +324,8 @@ class BlumIntradayPaperEngine:
                 "id": decision.strategy_id,
                 "validation_id": decision.validation_id,
                 "setup_type": decision.setup_type,
+                "fingerprint": strategy_fingerprint,
+                "executable_strategy": decision.evidence.get("executable_strategy") or {},
             },
             "decision_timestamp": decision.decision_timestamp.isoformat(),
             "observed_entry_price": observed_entry,
@@ -400,6 +403,8 @@ class BlumIntradayPaperEngine:
                 "execution_accounted": False,
                 "evidence_lane": evidence_lane,
                 "certified_for_copy_readiness": evidence_lane == "certified_paper",
+                "strategy_fingerprint": strategy_fingerprint,
+                "maximum_holding_minutes": int(decision.evidence.get("maximum_holding_minutes") or self.max_holding_minutes),
             },
         )
         db.add(trade)
@@ -602,7 +607,12 @@ class BlumIntradayPaperEngine:
                     closed += 1
                     self.learning.apply_closed_trade(db, trade)
                     break
-                trade.trailing_stop = max(float(trade.trailing_stop or 0.0), float(bar.close) - max(0.0001, float(bar.high) - float(bar.low)) * 1.2)
+                executable_strategy = ((trade.frozen_decision_payload or {}).get("strategy") or {}).get("executable_strategy") or {}
+                trailing_multiple = float(executable_strategy.get("trailing_atr_multiple") or 1.2)
+                trade.trailing_stop = max(
+                    float(trade.trailing_stop or 0.0),
+                    float(bar.close) - max(0.0001, float(bar.high) - float(bar.low)) * trailing_multiple,
+                )
                 trade.unrealized_pnl = (float(bar.close) - float(trade.entry_price or bar.close)) * float(trade.position_size or 0.0)
                 self.paper.append_event(db, trade.id, "INTRADAY_TRADE_UPDATED", "Position marked using a later one-minute bar.", {"bar_timestamp": bar.bar_timestamp.isoformat()}, float(bar.close))
         return {"trades_updated": updated, "trades_closed": closed}
@@ -622,7 +632,11 @@ class BlumIntradayPaperEngine:
         holding = (bar.bar_timestamp - opened_at).total_seconds() / 60
         if bar.bar_timestamp.date() > opened_at.date() and not self.allow_overnight:
             return "MARKET_CLOSE", float(bar.open or bar.close)
-        if holding >= self.max_holding_minutes:
+        strategy_holding_minutes = float(
+            (trade.intraday_metadata or {}).get("maximum_holding_minutes")
+            or self.max_holding_minutes
+        )
+        if holding >= min(float(self.max_holding_minutes), strategy_holding_minutes):
             return "TIME_STOP", float(bar.close)
         return None, None
 

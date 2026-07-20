@@ -10,6 +10,7 @@ from app.services.intraday_contracts import (
     PromotedIntradayStrategy,
     REQUIRED_INTRADAY_TIMEFRAMES,
 )
+from app.services.executable_strategy import canonical_strategy_spec
 
 
 settings = get_settings()
@@ -134,6 +135,7 @@ class BlumPromotedStrategyRegistry:
             promotion_timestamp=row.created_at,
             model_version=str(metrics.get("model_version") or "replay-validation-v1"),
             evidence_type=row.evidence_type,
+            executable_strategy=self._executable_strategy(row.setup_type, metrics),
             metrics=metrics,
         )
 
@@ -189,8 +191,16 @@ class BlumPromotedStrategyRegistry:
             promotion_timestamp=row.created_at,
             model_version=str(metrics.get("model_version") or "experimental-replay-v1"),
             evidence_type=PAPER_FORWARD_INTRADAY_EXPERIMENTAL,
+            executable_strategy=self._executable_strategy(row.setup_type, metrics),
             metrics=experimental_metrics,
         )
+
+    @staticmethod
+    def _executable_strategy(setup_type: str, metrics: dict) -> dict:
+        payload = metrics.get("executable_strategy")
+        if isinstance(payload, dict) and payload:
+            return dict(payload)
+        return canonical_strategy_spec(setup_type).to_payload()
 
     @staticmethod
     def _supports(strategy: PromotedIntradayStrategy, *, market: str, asset_class: str) -> bool:
