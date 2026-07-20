@@ -1077,6 +1077,9 @@ def test_paper_forward_lifecycle_target_hit_closes_with_lesson_and_audit_events(
         assert closed.close_reason == "TARGET_1_HIT"
         assert closed.outcome == "WIN"
         assert closed.net_pnl_eur > 0
+        assert closed.gross_pnl_eur > closed.net_pnl_eur
+        assert closed.execution_costs["accounting"]["reconciled"] is True
+        assert round(closed.game.current_capital, 4) == round(100.0 + closed.net_pnl_eur, 4)
         assert lesson is not None
         assert lesson.supporting_trades_json["paper_forward_trade_id"] == closed.id
         assert any(event.event_type == "TARGET_HIT" for event in events)

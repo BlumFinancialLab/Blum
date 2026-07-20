@@ -1120,6 +1120,33 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
                         if exit_decision.reason == "STOP_HIT"
                         else "TARGET_1_HIT"
                     )
+                    entry_order = db.scalar(
+                        select(PaperExecutionOrder)
+                        .where(PaperExecutionOrder.paper_trade_id == trade.id)
+                        .order_by(PaperExecutionOrder.id)
+                        .limit(1)
+                    )
+                    asset_currency = str(entry_order.currency if entry_order else "USD").upper()
+                    account_currency = str(entry_order.account_currency if entry_order else settings.paper_execution_account_currency).upper()
+                    exit_fx_rate = self.daily_point_in_time_fx_rate(db, asset_currency, account_currency, fill.timestamp)
+                    if exit_fx_rate is None:
+                        self.append_event_once(
+                            db,
+                            trade,
+                            "DATA_BLOCKED",
+                            "Exit triggered but point-in-time FX was unavailable for account-currency reconciliation.",
+                            payload={"phase": "exit_accounting", "asset_currency": asset_currency, "account_currency": account_currency},
+                        )
+                        data_blocked.append({"trade_id": trade.id, "ticker": trade.ticker, "reason": "exit_fx_rate_unavailable"})
+                        continue
+                    entry_fx_cost = safe_float((trade.execution_costs or {}).get("fx_cost"))
+                    exit_commission = exit_decision.costs.commission_cost / exit_fx_rate
+                    exit_fx_cost = (
+                        abs(fill.reference_price * fill.quantity) / exit_fx_rate * settings.paper_execution_fx_spread_bps / 10_000
+                        if asset_currency != account_currency
+                        else 0.0
+                    )
+                    explicit_costs = safe_float(trade.commission_cost) + entry_fx_cost + exit_commission + exit_fx_cost
                     trade.execution_costs = {
                         **dict(trade.execution_costs or {}),
                         "exit": {
@@ -1133,6 +1160,17 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
                             "slippage_cost": exit_decision.costs.slippage_cost,
                             "commission_cost": exit_decision.costs.commission_cost,
                             "gap_cost": exit_decision.costs.gap_cost,
+                        },
+                        "accounting": {
+                            "account_currency": account_currency,
+                            "entry_fx_rate": entry_order.fx_rate if entry_order else 1.0,
+                            "exit_fx_rate": exit_fx_rate,
+                            "entry_commission": safe_float(trade.commission_cost),
+                            "entry_fx_cost": entry_fx_cost,
+                            "exit_commission": round(exit_commission, 8),
+                            "exit_fx_cost": round(exit_fx_cost, 8),
+                            "explicit_costs": round(explicit_costs, 8),
+                            "reconciled": True,
                         },
                     }
                     trade.costs_paid = round(safe_float(trade.costs_paid) + exit_decision.costs.total_cost, 8)

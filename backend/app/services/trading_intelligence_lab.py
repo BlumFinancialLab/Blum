@@ -770,7 +770,10 @@ class LiveForwardPaperTradingService:
         entry = safe_float(paper_trade.entry_price)
         size = safe_float(paper_trade.position_size)
         pnl_per_share = latest_price - entry
-        net = pnl_per_share * size
+        accounting = (paper_trade.execution_costs or {}).get("accounting") or {}
+        exit_fx_rate = max(0.000001, safe_float(accounting.get("exit_fx_rate"), 1.0))
+        gross = pnl_per_share * size / exit_fx_rate
+        net = gross - safe_float(accounting.get("explicit_costs"))
         risk = max(0.01, safe_float(paper_trade.risk_amount))
         benchmark_return = period_return(db, game.benchmark_ticker, paper_trade.decision_date, latest_date)
         asset_return = ((latest_price / entry) - 1) * 100 if entry else None
@@ -780,7 +783,7 @@ class LiveForwardPaperTradingService:
         paper_trade.exit_price = latest_price
         paper_trade.exit_date = latest_date
         paper_trade.closed_at = now
-        paper_trade.gross_pnl_eur = round(net, 4)
+        paper_trade.gross_pnl_eur = round(gross, 4)
         paper_trade.net_pnl_eur = round(net, 4)
         paper_trade.pnl_per_share = round(pnl_per_share, 4)
         paper_trade.pnl_percent = round(asset_return, 4) if asset_return is not None else None
