@@ -142,7 +142,10 @@ class BlumPromotedStrategyRegistry:
         sample_size = int(row.sample_size or 0)
         expectancy = number(metrics.get("net_expectancy_r"), number(metrics.get("expectancy_r"), 0.0))
         benchmark_excess = number(metrics.get("benchmark_excess"), 0.0)
-        stability = number(metrics.get("stability_score"), 0.0)
+        stability = number(
+            metrics.get("experimental_stability_score"),
+            number(metrics.get("stability_score"), 0.0),
+        )
         data_quality = number(metrics.get("data_quality_score"), 0.0)
         cost_coverage = number(metrics.get("cost_coverage"), 0.0)
         timeframe_stack = tuple(metrics.get("timeframe_stack") or REQUIRED_INTRADAY_TIMEFRAMES)

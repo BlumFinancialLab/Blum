@@ -418,6 +418,17 @@ class AlphaStrategyFactory:
         rank_pairs = [(index + 1, index + 1 if row["expectancy_r"] > 0 else len(windows)) for index, row in enumerate(windows)]
         costs_complete = bool(rows) and all(bool((row.execution_payload or {}).get("cost_profile")) for row in rows)
         quality = mean([float(row.data_quality_score or 0.0) for row in rows]) if rows else 0.0
+        stability_by_window = [100.0 if row["expectancy_r"] > 0 else 0.0 for row in windows]
+        stability_by_market = group_stability(rows, key=lambda row: replay_market_bucket(row.market))
+        stability_by_regime = group_stability(
+            rows,
+            key=lambda row: str((row.decision_payload or {}).get("regime") or "unknown"),
+        )
+        stability_dimensions = [
+            mean(values)
+            for values in (stability_by_window, stability_by_market, stability_by_regime)
+            if values
+        ]
         return {
             "sample_size": len(rows),
             "returns_r": returns,
@@ -433,9 +444,10 @@ class AlphaStrategyFactory:
             "raw_p_value": raw_p,
             "overfitting_probability": backtest_overfitting_probability(rank_pairs, variants=max(2, len(windows))),
             "deflated_sharpe_probability": deflated_sharpe_probability(returns, trials=max(1, len(windows))),
-            "stability_by_window": [100.0 if row["expectancy_r"] > 0 else 0.0 for row in windows],
-            "stability_by_market": group_stability(rows, key=lambda row: row.market),
-            "stability_by_regime": group_stability(rows, key=lambda row: str((row.decision_payload or {}).get("regime") or "unknown")),
+            "stability_by_window": stability_by_window,
+            "stability_by_market": stability_by_market,
+            "stability_by_regime": stability_by_regime,
+            "experimental_stability_score": min(stability_dimensions, default=0.0),
             "asset_pnl_contributions": contributions,
             "cost_coverage": 1.0 if costs_complete else 0.0,
             "data_quality_score": quality,

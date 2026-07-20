@@ -32,6 +32,7 @@ from app.services.strategy_factory_statistics import (
     evaluate_strategy_robustness,
 )
 from app.services.paper_execution_lifecycle import execution_reality_snapshot
+from app.services.promoted_strategy_registry import BlumPromotedStrategyRegistry
 from app.services.worker_runtime import WORKER_DEFINITIONS
 
 
@@ -518,6 +519,68 @@ def test_factory_does_not_persist_fold_timestamps_inside_json_metrics() -> None:
     assert "timestamps" not in validation.metrics_json
     assert "returns_r" not in validation.metrics_json
     assert "benchmark_excess_returns" not in validation.metrics_json
+
+
+def test_factory_exposes_positive_partial_stability_as_experimental_challenger(monkeypatch) -> None:
+    monkeypatch.setattr("app.services.promoted_strategy_registry.settings.intraday_experimental_min_samples", 50)
+    with setup_db() as db:
+        asset = Asset(
+            ticker="NVDA",
+            name="NVIDIA",
+            category="Stock",
+            sector="Technology",
+            asset_type="Stock",
+            country="USA",
+            currency="USD",
+            exchange="NASDAQ",
+            is_active=True,
+        )
+        replay_run = HyperbolicReplayRun(run_id="partial-stability-run", status="COMPLETED")
+        db.add_all([asset, replay_run])
+        db.flush()
+        returns = [0.3] * 50 + [0.2] * 50 + [-0.05] * 50
+        for index, r_multiple in enumerate(returns):
+            db.add(
+                HyperbolicReplayTrade(
+                    run_id=replay_run.id,
+                    asset_id=asset.id,
+                    ticker=asset.ticker,
+                    market="United States",
+                    setup_type="intraday_breakout",
+                    timeframe="1m",
+                    state="REPLAY_EVALUATED",
+                    decision_timestamp=datetime(2025, 3, 1) + timedelta(minutes=index),
+                    r_multiple=r_multiple,
+                    benchmark_excess=0.05,
+                    data_quality_score=95.0,
+                    net_pnl=r_multiple,
+                    decision_payload={
+                        "required_timeframes": ["1d", "15m", "5m", "1m"],
+                        "regime": "trend_up",
+                    },
+                    execution_payload={"cost_profile": {"round_trip_bps": 4.0}},
+                )
+            )
+        db.commit()
+
+        AlphaStrategyFactory().run_once(
+            db,
+            families=["intraday_scalping"],
+            max_variants_per_family=1,
+            seed=7,
+            trigger="test",
+        )
+        validation = db.query(ReplayStrategyValidation).one()
+        experimental = BlumPromotedStrategyRegistry().list_experimental(
+            db,
+            market="USA",
+            asset_class="Stock",
+        )
+
+    assert validation.verdict == "NEEDS_MORE_EVIDENCE"
+    assert validation.metrics_json["stability_score"] == 0.0
+    assert validation.metrics_json["experimental_stability_score"] >= 50.0
+    assert [row.validation_id for row in experimental] == [validation.id]
 
 
 def test_multi_family_factory_run_uses_bounded_index_key_and_preserves_full_selection() -> None:
