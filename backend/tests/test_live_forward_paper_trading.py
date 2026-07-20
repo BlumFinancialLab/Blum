@@ -1,6 +1,7 @@
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+import pytest
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
@@ -27,6 +28,11 @@ from app.services.paper_forward_opportunity_scanner import (
     WATCHLIST_CANDIDATE,
     PaperForwardOpportunityScanner,
 )
+
+
+@pytest.fixture(autouse=True)
+def use_same_currency_test_account(monkeypatch):
+    monkeypatch.setattr("app.services.live_forward_paper_trading.settings.paper_execution_account_currency", "USD")
 
 
 def setup_db() -> Session:
@@ -907,6 +913,25 @@ def test_daily_paper_trigger_opens_only_from_persisted_realistic_fill():
     assert stored.entry_price == order.average_fill_price
     assert stored.entry_price != 103.0
     assert stored.costs_paid > 0
+
+
+def test_daily_paper_execution_blocks_missing_point_in_time_fx(monkeypatch):
+    monkeypatch.setattr("app.services.live_forward_paper_trading.settings.paper_execution_account_currency", "EUR")
+    with setup_db() as db:
+        asset = seed_asset(db)
+        service = LiveForwardPaperTradingService()
+        trade = service.create_candidate(
+            db,
+            candidate(entry_type="ABOVE_TRIGGER", trigger_price=102.0, target_1=130.0, target_2=150.0),
+        )
+        add_price(db, asset, 1, 103.0)
+
+        report = run_lifecycle(service, db)
+        stored = db.get(PaperForwardTrade, trade.id)
+
+    assert stored.status == "SKIPPED"
+    assert stored.outcome_label == "DATA_BLOCKED"
+    assert any(row["reason"] == "fx_rate_unavailable" for row in report["phases"]["open_eligible_trades"]["skipped"])
 
 
 def test_paper_forward_lifecycle_allows_only_one_open_position_per_ticker():

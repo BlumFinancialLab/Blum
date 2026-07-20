@@ -762,6 +762,8 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
             return None
         asset = db.scalar(select(Asset).where(func.upper(Asset.ticker) == trade.ticker.upper()).limit(1))
         currency = str(getattr(asset, "currency", None) or "USD").upper()
+        account_currency = str(settings.paper_execution_account_currency or "EUR").upper()
+        fx_rate = self.daily_point_in_time_fx_rate(db, currency, account_currency, trade.decision_timestamp)
         liquidity = safe_float((trade.frozen_decision_payload or {}).get("liquidity_context", {}).get("liquidity_score"), 70.0)
         quantity = safe_float(trade.position_size)
         invalidation = safe_float(trade.stop_loss or trade.invalidation_level)
@@ -783,11 +785,40 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
             max_participation_rate=0.05,
             commission_bps=1.0,
             currency=currency,
-            account_currency=currency,
-            fx_rate=1.0,
+            account_currency=account_currency,
+            fx_rate=fx_rate,
+            fx_spread_bps=settings.paper_execution_fx_spread_bps,
             liquidity_score=liquidity,
             expected_holding_days=self.expected_holding_days(trade),
         )
+
+    def daily_point_in_time_fx_rate(
+        self,
+        db: Session,
+        asset_currency: str,
+        account_currency: str,
+        at: datetime,
+    ) -> float | None:
+        if asset_currency == account_currency:
+            return 1.0
+        pairs = (
+            ((f"{account_currency}{asset_currency}=X", f"{account_currency}{asset_currency}"), False),
+            ((f"{asset_currency}{account_currency}=X", f"{asset_currency}{account_currency}"), True),
+        )
+        for symbols, invert in pairs:
+            fx_asset = db.scalar(select(Asset).where(func.upper(Asset.ticker).in_(symbols)).limit(1))
+            if fx_asset is None:
+                continue
+            row = db.scalar(
+                select(PriceHistory)
+                .where(PriceHistory.asset_id == fx_asset.id, PriceHistory.date <= at.date())
+                .order_by(desc(PriceHistory.date))
+                .limit(1)
+            )
+            rate = safe_float(row.close if row else None)
+            if rate > 0:
+                return round(1.0 / rate if invert else rate, 8)
+        return None
 
     def daily_execution_bars(self, db: Session, ticker: str, after: datetime) -> list[ExecutionMarketBar]:
         asset = db.scalar(select(Asset).where(func.upper(Asset.ticker) == ticker.upper()).limit(1))
@@ -847,10 +878,12 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
             return {"status": "OPEN", "trade_id": trade.id, "ticker": trade.ticker, "order_id": order.id, "trade": opened}
         if status in {"EXPIRED", "REJECTED"}:
             trade.status = "SKIPPED"
-            trade.outcome_label = "ORDER_NOT_FILLED"
+            rejection = str(result.get("rejection_reason") or "ORDER_NOT_FILLED")
+            trade.outcome_label = "DATA_BLOCKED" if rejection == "FX_RATE_UNAVAILABLE" else "ORDER_NOT_FILLED"
             trade.lesson_learned = f"Realistic daily order ended as {status}: {result.get('rejection_reason') or 'ORDER_NOT_FILLED'}."
-            self.append_event_once(db, trade, "ORDER_NOT_FILLED", trade.lesson_learned, payload=result)
-            return {"status": status, "trade_id": trade.id, "ticker": trade.ticker, "reason": "order_not_filled", "order_id": order.id}
+            event_type = "DATA_BLOCKED" if rejection == "FX_RATE_UNAVAILABLE" else "ORDER_NOT_FILLED"
+            self.append_event_once(db, trade, event_type, trade.lesson_learned, payload=result)
+            return {"status": status, "trade_id": trade.id, "ticker": trade.ticker, "reason": rejection.lower(), "order_id": order.id}
         trade.status = "PARTIALLY_FILLED" if status == "PARTIALLY_FILLED" else "ORDER_SUBMITTED"
         return {"status": trade.status, "trade_id": trade.id, "ticker": trade.ticker, "reason": "awaiting_execution", "order_id": order.id}
 
