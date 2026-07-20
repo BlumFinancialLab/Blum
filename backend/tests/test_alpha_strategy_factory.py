@@ -24,6 +24,7 @@ from app.services.alpha_strategy_factory import (
     StrategyFamilyRegistry,
     strategy_factory_snapshot,
 )
+from app.services.executable_strategy import ExecutableStrategySpec
 from app.services.strategy_factory_statistics import (
     backtest_overfitting_probability,
     benjamini_hochberg,
@@ -244,6 +245,18 @@ def test_initial_strategy_family_registry_is_complete_and_bounded() -> None:
         "europe_only",
     }
     assert all(row["evidence_binding"] == "hyperbolic_replay_v1" for row in first)
+
+
+def test_intraday_factory_variants_are_distinct_executable_strategies() -> None:
+    rows = StrategyFamilyRegistry().variants("intraday_scalping", max_variants=24, seed=11)
+
+    executable = [ExecutableStrategySpec.from_payload(row["executable_strategy"]) for row in rows]
+
+    assert len({row.fingerprint for row in executable}) == 24
+    assert all(row["strategy_fingerprint"] == spec.fingerprint for row, spec in zip(rows, executable))
+    assert {spec.entry_rule for spec in executable} == {"breakout_close", "trend_continuation"}
+    assert len({spec.target_r_multiple for spec in executable}) > 1
+    assert len({spec.stop_atr_multiple for spec in executable}) > 1
 
 
 def test_factory_run_is_idempotent_and_reports_missing_evidence() -> None:
@@ -469,6 +482,9 @@ def test_candidate_evidence_applies_only_point_in_time_market_filter() -> None:
 
 def test_factory_does_not_persist_fold_timestamps_inside_json_metrics() -> None:
     with setup_db() as db:
+        strategy_fingerprint = StrategyFamilyRegistry().variants(
+            "intraday_scalping", max_variants=1, seed=7
+        )[0]["strategy_fingerprint"]
         asset = Asset(
             ticker="MSFT",
             name="Microsoft",
@@ -491,6 +507,7 @@ def test_factory_does_not_persist_fold_timestamps_inside_json_metrics() -> None:
                     ticker=asset.ticker,
                     market="USA",
                     setup_type="intraday_breakout",
+                    strategy_fingerprint=strategy_fingerprint,
                     timeframe="1m",
                     state="REPLAY_EVALUATED",
                     decision_timestamp=datetime(2025, 1, 1) + timedelta(minutes=index),
@@ -524,6 +541,9 @@ def test_factory_does_not_persist_fold_timestamps_inside_json_metrics() -> None:
 def test_factory_exposes_positive_partial_stability_as_experimental_challenger(monkeypatch) -> None:
     monkeypatch.setattr("app.services.promoted_strategy_registry.settings.intraday_experimental_min_samples", 50)
     with setup_db() as db:
+        strategy_fingerprint = StrategyFamilyRegistry().variants(
+            "intraday_scalping", max_variants=1, seed=7
+        )[0]["strategy_fingerprint"]
         asset = Asset(
             ticker="NVDA",
             name="NVIDIA",
@@ -547,6 +567,7 @@ def test_factory_exposes_positive_partial_stability_as_experimental_challenger(m
                     ticker=asset.ticker,
                     market="United States",
                     setup_type="intraday_breakout",
+                    strategy_fingerprint=strategy_fingerprint,
                     timeframe="1m",
                     state="REPLAY_EVALUATED",
                     decision_timestamp=datetime(2025, 3, 1) + timedelta(minutes=index),

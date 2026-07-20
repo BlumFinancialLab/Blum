@@ -28,6 +28,7 @@ from app.services.strategy_factory_statistics import (
     deflated_sharpe_probability,
     evaluate_strategy_robustness,
 )
+from app.services.executable_strategy import ExecutableStrategySpec, canonical_strategy_spec
 
 
 FAMILY_DEFINITIONS: dict[str, dict] = {
@@ -69,6 +70,8 @@ class StrategyFamilyRegistry:
         definition = FAMILY_DEFINITIONS.get(family)
         if definition is None:
             raise KeyError(f"unknown strategy family: {family}")
+        if family == "intraday_scalping":
+            return self._intraday_variants(max_variants=max_variants, seed=seed)
         timeframe_stack = list(definition.get("timeframe_stack") or ["1d"])
         holding_periods = list(definition.get("holding_periods") or [10, 20])
         combinations = [
@@ -134,6 +137,62 @@ class StrategyFamilyRegistry:
             if market_filter != "all":
                 specification["market_filter"] = market_filter
             variants.append(specification)
+            if len(variants) >= max(1, int(max_variants)):
+                break
+        return variants
+
+    @staticmethod
+    def _intraday_variants(*, max_variants: int, seed: int) -> list[dict]:
+        combinations = list(
+            product(
+                ("intraday_breakout", "intraday_trend"),
+                REPLAY_REGIME_FILTERS,
+                REPLAY_MARKET_FILTERS,
+            )
+        )
+        canonical = [
+            ("intraday_breakout", "all", "all"),
+            ("intraday_trend", "all", "all"),
+        ]
+        remainder = [combination for combination in combinations if combination not in canonical]
+        random.Random(int(seed)).shuffle(remainder)
+        combinations = canonical + remainder
+        variants: list[dict] = []
+        for index, (setup_type, regime_filter, market_filter) in enumerate(combinations):
+            canonical = canonical_strategy_spec(setup_type)
+            spec = ExecutableStrategySpec.from_payload(
+                {
+                    **canonical.to_payload(),
+                    "lookback": (5, 10, 20)[index % 3],
+                    "minimum_relative_volume": (0.0, 1.2)[index % 2],
+                    "stop_atr_multiple": (1.0, 1.5)[(index // 2) % 2],
+                    "target_r_multiple": (1.5, 2.0, 2.5)[(index // 3) % 3],
+                    "maximum_holding_bars": (15, 30)[(index // 6) % 2],
+                    "regime_filter": regime_filter,
+                    "market_filter": market_filter,
+                }
+            )
+            variants.append(
+                {
+                    "family": "intraday_scalping",
+                    "setup_type": setup_type,
+                    "market": "global",
+                    "asset_class": "stocks,etfs",
+                    "benchmark_ticker": "SPY",
+                    "timeframe_stack": list(spec.required_timeframes),
+                    "entry_rule": spec.entry_rule,
+                    "stop_rule": f"atr_{spec.stop_atr_multiple:g}",
+                    "target_rule": f"{spec.target_r_multiple:g}_r",
+                    "holding_period": spec.maximum_holding_bars,
+                    "regime_filter": regime_filter,
+                    "market_filter": market_filter,
+                    "complexity": 5,
+                    "execution_model": "realistic_execution_v1",
+                    "evidence_binding": "hyperbolic_replay_v1",
+                    "strategy_fingerprint": spec.fingerprint,
+                    "executable_strategy": spec.to_payload(),
+                }
+            )
             if len(variants) >= max(1, int(max_variants)):
                 break
         return variants
@@ -241,7 +300,7 @@ class AlphaStrategyFactory:
         new_candidates: list[StrategyCandidateVariant] = []
         evaluation_candidates: list[StrategyCandidateVariant] = []
         for specification in specifications:
-            fingerprint = strategy_fingerprint(specification)
+            fingerprint = str(specification.get("strategy_fingerprint") or strategy_fingerprint(specification))
             existing = db.scalar(select(StrategyCandidateVariant).where(StrategyCandidateVariant.fingerprint == fingerprint))
             if existing is not None:
                 if self._has_new_evidence(db, existing):
@@ -357,7 +416,8 @@ class AlphaStrategyFactory:
         if specification.get("evidence_binding") != "hyperbolic_replay_v1":
             return []
         expected_timeframes = tuple(candidate.timeframe_stack or [])
-        cache_key = (candidate.setup_type, expected_timeframes)
+        exact_fingerprint = str(specification.get("strategy_fingerprint") or "")
+        cache_key = (exact_fingerprint or candidate.setup_type, expected_timeframes)
         rows = replay_cache.get(cache_key) if replay_cache is not None else None
         if rows is None:
             stored_rows = db.scalars(
@@ -365,6 +425,11 @@ class AlphaStrategyFactory:
                 .where(
                     HyperbolicReplayTrade.setup_type == candidate.setup_type,
                     HyperbolicReplayTrade.state == "REPLAY_EVALUATED",
+                    *(
+                        (HyperbolicReplayTrade.strategy_fingerprint == exact_fingerprint,)
+                        if exact_fingerprint
+                        else ()
+                    ),
                 )
                 .order_by(HyperbolicReplayTrade.decision_timestamp)
                 .limit(5_000)
@@ -460,6 +525,8 @@ class AlphaStrategyFactory:
             "certification_version": "alpha_strategy_factory_v1",
             "evidence_binding": binding,
             "evidence_binding_status": "EXECUTED_IMPLEMENTATION" if binding == "hyperbolic_replay_v1" else "IMPLEMENTATION_NOT_AVAILABLE",
+            "strategy_fingerprint": specification.get("strategy_fingerprint"),
+            "executable_strategy": specification.get("executable_strategy"),
         }
 
     @staticmethod
