@@ -283,6 +283,11 @@ class AlphaStrategyFactory:
             evidence["multiple_testing_significant"] = correction.significant
             evidence["family_size"] = len(evidence_by_candidate)
             result = evaluate_strategy_robustness(evidence, seed=seed)
+            persisted_metrics = {
+                key: value
+                for key, value in result.metrics.items()
+                if key != "timestamps"
+            }
             validation = ReplayStrategyValidation(
                 experiment_id=None,
                 setup_type=candidate.setup_type,
@@ -290,7 +295,7 @@ class AlphaStrategyFactory:
                 sample_size=result.sample_size,
                 markets_json=list(evidence.get("markets") or []),
                 windows_json=list(evidence.get("windows") or []),
-                metrics_json=result.metrics,
+                metrics_json=persisted_metrics,
                 overfitting_score=round(result.overfitting_probability * 100.0, 4),
                 verdict=result.verdict,
                 explanation=result.reason,

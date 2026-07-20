@@ -393,6 +393,58 @@ def test_candidate_evidence_applies_only_point_in_time_regime_filter() -> None:
     assert evidence["regime_filter"] == "trend_up_only"
 
 
+def test_factory_does_not_persist_fold_timestamps_inside_json_metrics() -> None:
+    with setup_db() as db:
+        asset = Asset(
+            ticker="MSFT",
+            name="Microsoft",
+            category="Stock",
+            sector="Technology",
+            asset_type="Stock",
+            country="USA",
+            currency="USD",
+            exchange="NASDAQ",
+            is_active=True,
+        )
+        replay_run = HyperbolicReplayRun(run_id="json-safe-factory-run", status="COMPLETED")
+        db.add_all([asset, replay_run])
+        db.flush()
+        for index in range(12):
+            db.add(
+                HyperbolicReplayTrade(
+                    run_id=replay_run.id,
+                    asset_id=asset.id,
+                    ticker=asset.ticker,
+                    market="USA",
+                    setup_type="intraday_breakout",
+                    timeframe="1m",
+                    state="REPLAY_EVALUATED",
+                    decision_timestamp=datetime(2025, 1, 1) + timedelta(minutes=index),
+                    r_multiple=0.2,
+                    benchmark_excess=0.1,
+                    data_quality_score=95.0,
+                    decision_payload={
+                        "required_timeframes": ["1d", "15m", "5m", "1m"],
+                        "regime": "trend_up",
+                    },
+                    execution_payload={"cost_profile": {"round_trip_bps": 4.0}},
+                )
+            )
+        db.commit()
+
+        result = AlphaStrategyFactory().run_once(
+            db,
+            families=["intraday_scalping"],
+            max_variants_per_family=1,
+            seed=7,
+            trigger="test",
+        )
+        validation = db.query(ReplayStrategyValidation).one()
+
+    assert result["status"] == "COMPLETED"
+    assert "timestamps" not in validation.metrics_json
+
+
 def test_multi_family_factory_run_uses_bounded_index_key_and_preserves_full_selection() -> None:
     with setup_db() as db:
         families = list(StrategyFamilyRegistry().names())
