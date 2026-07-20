@@ -63,14 +63,16 @@ class BlumPromotedStrategyRegistry:
         They may only create reduced-risk paper-forward observations.
         """
 
-        latest_by_setup: dict[str, ReplayStrategyValidation] = {}
+        latest_by_setup: dict[str, PromotedIntradayStrategy] = {}
         for row in self._experimental_rows(db):
-            latest_by_setup.setdefault(row.setup_type, row)
-        output = []
-        for row in latest_by_setup.values():
             projection = self._project_experimental(row)
-            if projection and self._supports(projection, market=market, asset_class=asset_class):
-                output.append(projection)
+            if (
+                projection
+                and row.setup_type not in latest_by_setup
+                and self._supports(projection, market=market, asset_class=asset_class)
+            ):
+                latest_by_setup[row.setup_type] = projection
+        output = list(latest_by_setup.values())
         return sorted(output, key=lambda item: (item.walk_forward_score, item.validated_trade_count), reverse=True)
 
     @staticmethod

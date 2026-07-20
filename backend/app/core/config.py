@@ -121,7 +121,7 @@ class Settings(BaseSettings):
     intraday_experimental_risk_multiplier: float = Field(default=0.25, alias="BLUM_INTRADAY_EXPERIMENTAL_RISK_MULTIPLIER")
     strategy_factory_enabled: bool = Field(default=True, alias="BLUM_STRATEGY_FACTORY_ENABLED")
     strategy_factory_minutes: int = Field(default=15, alias="BLUM_STRATEGY_FACTORY_MINUTES")
-    strategy_factory_max_variants_per_family: int = Field(default=8, alias="BLUM_STRATEGY_FACTORY_MAX_VARIANTS_PER_FAMILY")
+    strategy_factory_max_variants_per_family: int = Field(default=24, alias="BLUM_STRATEGY_FACTORY_MAX_VARIANTS_PER_FAMILY")
     strategy_factory_seed: int = Field(default=7, alias="BLUM_STRATEGY_FACTORY_SEED")
     paper_execution_lifecycle_minutes: int = Field(default=1, alias="BLUM_PAPER_EXECUTION_LIFECYCLE_MINUTES")
     paper_execution_account_currency: str = Field(default="EUR", alias="BLUM_PAPER_EXECUTION_ACCOUNT_CURRENCY")

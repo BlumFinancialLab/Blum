@@ -225,10 +225,10 @@ def test_initial_strategy_family_registry_is_complete_and_bounded() -> None:
         "cross_sectional_ranking",
         "intraday_scalping",
     }
-    first = registry.variants("intraday_scalping", max_variants=8, seed=11)
-    second = registry.variants("intraday_scalping", max_variants=8, seed=11)
+    first = registry.variants("intraday_scalping", max_variants=24, seed=11)
+    second = registry.variants("intraday_scalping", max_variants=24, seed=11)
     assert first == second
-    assert len(first) == 8
+    assert len(first) == 24
     assert all(row["timeframe_stack"] == ["1d", "15m", "5m", "1m"] for row in first)
     assert {row["setup_type"] for row in first} == {"intraday_breakout", "intraday_trend"}
     assert {row["regime_filter"] for row in first} == {
@@ -236,6 +236,11 @@ def test_initial_strategy_family_registry_is_complete_and_bounded() -> None:
         "trend_up_only",
         "range_bound_only",
         "trend_down_only",
+    }
+    assert {row.get("market_filter", "all") for row in first} == {
+        "all",
+        "usa_only",
+        "europe_only",
     }
     assert all(row["evidence_binding"] == "hyperbolic_replay_v1" for row in first)
 
@@ -393,6 +398,74 @@ def test_candidate_evidence_applies_only_point_in_time_regime_filter() -> None:
     assert evidence["regime_filter"] == "trend_up_only"
 
 
+def test_candidate_evidence_applies_only_point_in_time_market_filter() -> None:
+    with setup_db() as db:
+        asset = Asset(
+            ticker="AAPL",
+            name="Apple",
+            category="Stock",
+            sector="Technology",
+            asset_type="Stock",
+            country="USA",
+            currency="USD",
+            exchange="NASDAQ",
+            is_active=True,
+        )
+        replay_run = HyperbolicReplayRun(run_id="market-filter-run", status="COMPLETED")
+        factory_run = StrategyFactoryRun(
+            run_uid="market-filter-factory",
+            hypothesis_family="intraday_scalping",
+            generation_seed=1,
+            status="RUNNING",
+        )
+        db.add_all([asset, replay_run, factory_run])
+        db.flush()
+        candidate = StrategyCandidateVariant(
+            factory_run_id=factory_run.id,
+            fingerprint="intraday-breakout-usa-only",
+            family="intraday_scalping",
+            setup_type="intraday_breakout",
+            timeframe_stack=["1d", "15m", "5m", "1m"],
+            specification_json={
+                "evidence_binding": "hyperbolic_replay_v1",
+                "regime_filter": "all",
+                "market_filter": "usa_only",
+            },
+        )
+        db.add(candidate)
+        for index, (market, r_multiple) in enumerate(
+            (("United States", 0.7), ("USA", 0.5), ("Germany", -0.8), ("Italy", -0.6))
+        ):
+            db.add(
+                HyperbolicReplayTrade(
+                    run_id=replay_run.id,
+                    asset_id=asset.id,
+                    ticker=asset.ticker,
+                    market=market,
+                    setup_type="intraday_breakout",
+                    timeframe="1m",
+                    state="REPLAY_EVALUATED",
+                    decision_timestamp=datetime(2025, 2, 1) + timedelta(minutes=index),
+                    r_multiple=r_multiple,
+                    benchmark_excess=r_multiple / 2,
+                    data_quality_score=95.0,
+                    decision_payload={
+                        "required_timeframes": ["1d", "15m", "5m", "1m"],
+                        "regime": "trend_up",
+                    },
+                    execution_payload={"cost_profile": {"round_trip_bps": 4.0}},
+                )
+            )
+        db.flush()
+
+        evidence = AlphaStrategyFactory._candidate_evidence(db, candidate)
+
+    assert evidence["sample_size"] == 2
+    assert evidence["returns_r"] == [0.7, 0.5]
+    assert evidence["markets"] == ["USA", "United States"]
+    assert evidence["market_filter"] == "usa_only"
+
+
 def test_factory_does_not_persist_fold_timestamps_inside_json_metrics() -> None:
     with setup_db() as db:
         asset = Asset(
@@ -443,6 +516,8 @@ def test_factory_does_not_persist_fold_timestamps_inside_json_metrics() -> None:
 
     assert result["status"] == "COMPLETED"
     assert "timestamps" not in validation.metrics_json
+    assert "returns_r" not in validation.metrics_json
+    assert "benchmark_excess_returns" not in validation.metrics_json
 
 
 def test_multi_family_factory_run_uses_bounded_index_key_and_preserves_full_selection() -> None:

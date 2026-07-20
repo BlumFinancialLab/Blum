@@ -58,6 +58,7 @@ REPLAY_IMPLEMENTATIONS: dict[str, dict] = {
 }
 
 REPLAY_REGIME_FILTERS = ("all", "trend_up_only", "range_bound_only", "trend_down_only")
+REPLAY_MARKET_FILTERS = ("all", "usa_only", "europe_only")
 
 
 class StrategyFamilyRegistry:
@@ -71,7 +72,7 @@ class StrategyFamilyRegistry:
         timeframe_stack = list(definition.get("timeframe_stack") or ["1d"])
         holding_periods = list(definition.get("holding_periods") or [10, 20])
         combinations = [
-            (definition["setup_type"], *combination)
+            (definition["setup_type"], *combination, "all")
             for combination in product(
                 definition["entries"],
                 ["atr_1_5", "structure"],
@@ -96,20 +97,20 @@ class StrategyFamilyRegistry:
                     )
                 )
         canonical_combinations = [
-            (*canonical, regime_filter)
+            (*canonical, regime_filter, market_filter)
+            for market_filter in REPLAY_MARKET_FILTERS
             for regime_filter in REPLAY_REGIME_FILTERS
             for canonical in canonical_setups
         ]
         combinations = canonical_combinations + combinations
         seen: set[tuple] = set()
-        for setup_type, entry, stop, target, holding, regime_filter in combinations:
-            combination = (setup_type, entry, stop, target, holding, regime_filter)
+        for setup_type, entry, stop, target, holding, regime_filter, market_filter in combinations:
+            combination = (setup_type, entry, stop, target, holding, regime_filter, market_filter)
             if combination in seen:
                 continue
             seen.add(combination)
             canonical = REPLAY_IMPLEMENTATIONS.get(setup_type)
-            variants.append(
-                {
+            specification = {
                     "family": family,
                     "setup_type": setup_type,
                     "market": "global",
@@ -130,7 +131,9 @@ class StrategyFamilyRegistry:
                         canonical["holding_period"],
                     ) else "not_implemented",
                 }
-            )
+            if market_filter != "all":
+                specification["market_filter"] = market_filter
+            variants.append(specification)
             if len(variants) >= max(1, int(max_variants)):
                 break
         return variants
@@ -210,7 +213,7 @@ class AlphaStrategyFactory:
         db: Session,
         *,
         families: list[str] | None = None,
-        max_variants_per_family: int = 8,
+        max_variants_per_family: int = 24,
         seed: int = 7,
         trigger: str = "scheduled",
     ) -> dict:
@@ -286,7 +289,7 @@ class AlphaStrategyFactory:
             persisted_metrics = {
                 key: value
                 for key, value in result.metrics.items()
-                if key != "timestamps"
+                if key not in {"timestamps", "returns_r", "benchmark_excess_returns"}
             }
             validation = ReplayStrategyValidation(
                 experiment_id=None,
@@ -373,6 +376,10 @@ class AlphaStrategyFactory:
             ]
             if replay_cache is not None:
                 replay_cache[cache_key] = rows
+        market_filter = str(specification.get("market_filter") or "all")
+        if market_filter != "all":
+            expected_market = market_filter.removesuffix("_only")
+            rows = [row for row in rows if replay_market_bucket(row.market) == expected_market]
         regime_filter = str(specification.get("regime_filter") or "all")
         if regime_filter == "all":
             return list(rows)
@@ -419,6 +426,7 @@ class AlphaStrategyFactory:
             "tickers": tickers,
             "regimes": regimes,
             "regime_filter": specification.get("regime_filter") or "all",
+            "market_filter": specification.get("market_filter") or "all",
             "timestamps": [row.decision_timestamp for row in rows if row.decision_timestamp is not None],
             "windows": windows,
             "max_drawdown": max_drawdown(returns),
@@ -517,6 +525,15 @@ def group_stability(rows: list[HyperbolicReplayTrade], *, key) -> list[float]:
     for row in rows:
         groups[str(key(row))].append(float(row.r_multiple or 0.0))
     return [100.0 if mean(values) > 0 else 0.0 for values in groups.values()]
+
+
+def replay_market_bucket(value: str | None) -> str:
+    market = str(value or "").strip().upper()
+    if market in {"USA", "US", "UNITED STATES", "NASDAQ", "NYSE"}:
+        return "usa"
+    if market in {"EUROPE", "FRANCE", "GERMANY", "ITALY", "SPAIN", "NETHERLANDS", "UNITED KINGDOM", "UK"}:
+        return "europe"
+    return market.lower()
 
 
 def max_drawdown(values: list[float]) -> float:
