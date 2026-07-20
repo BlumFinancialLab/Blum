@@ -924,6 +924,23 @@ def test_paper_forward_lifecycle_keeps_candidate_when_trigger_not_met():
         assert opened_events == []
 
 
+def test_paper_forward_lifecycle_rejects_trigger_after_frozen_entry_window_expires():
+    with setup_db() as db:
+        asset = seed_asset(db)
+        service = LiveForwardPaperTradingService()
+        payload = candidate(entry_type="ABOVE_TRIGGER", trigger_price=102.0, target_1=130.0, target_2=150.0)
+        payload["trade_plan"]["expected_holding_days"] = 2
+        trade = service.create_candidate(db, payload)
+        add_price(db, asset, 3, 103.0)
+
+        report = run_lifecycle(service, db)
+        stored = db.get(PaperForwardTrade, trade.id)
+
+    assert stored.status == "SKIPPED"
+    assert stored.outcome_label == "SIGNAL_DECAY_BEFORE_ENTRY"
+    assert any(row["reason"] == "signal_decay_before_entry" for row in report["phases"]["open_eligible_trades"]["skipped"])
+
+
 def test_paper_forward_lifecycle_data_blocked_when_market_data_missing():
     with setup_db() as db:
         seed_asset(db)

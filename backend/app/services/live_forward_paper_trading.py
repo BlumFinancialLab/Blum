@@ -594,6 +594,30 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
                 continue
 
             latest_date, latest_price = latest
+            entry_window = self.entry_window_status(trade, latest_date)
+            if not entry_window["valid"]:
+                trade.status = "SKIPPED"
+                trade.outcome_label = "SIGNAL_DECAY_BEFORE_ENTRY"
+                trade.lesson_learned = entry_window["explanation"]
+                trade.updated_at = datetime.utcnow()
+                self.append_event_once(
+                    db,
+                    trade,
+                    "SIGNAL_DECAY_BEFORE_ENTRY",
+                    entry_window["explanation"],
+                    payload=entry_window,
+                    price_used=latest_price,
+                )
+                skipped.append(
+                    {
+                        "trade_id": trade.id,
+                        "ticker": trade.ticker,
+                        **entry_window,
+                        "reason": "signal_decay_before_entry",
+                    }
+                )
+                continue
+
             condition = self.entry_condition_status(trade, latest_price)
             if not condition["eligible"]:
                 waiting.append({"trade_id": trade.id, "ticker": trade.ticker, **condition})
@@ -1354,6 +1378,24 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
             values = [float(value) for value in re.findall(r"\d+(?:\.\d+)?", raw)]
         requested = max(values) if values else float(settings.paper_forward_max_holding_days)
         return max(1, min(int(settings.paper_forward_max_holding_days), int(math.ceil(requested))))
+
+    def entry_window_status(self, trade: LiveForwardPaperTrade, observed_at: date | datetime) -> dict:
+        """Reject an entry signal observed after its frozen decision horizon."""
+
+        decision_at = trade.decision_timestamp or trade.created_at or datetime.utcnow()
+        observed_on = observed_at.date() if isinstance(observed_at, datetime) else observed_at
+        expires_on = decision_at.date() + timedelta(days=self.expected_holding_days(trade))
+        valid = observed_on <= expires_on
+        return {
+            "valid": valid,
+            "entry_window_expires_on": expires_on.isoformat(),
+            "observed_on": observed_on.isoformat(),
+            "explanation": (
+                "The frozen entry window expired before confirmation; opening now would use a stale thesis."
+                if not valid
+                else "The latest observation remains inside the frozen entry window."
+            ),
+        }
 
     def ensure_trade_expiration(self, db: Session, trade: LiveForwardPaperTrade) -> datetime:
         if trade.expires_at is not None:
