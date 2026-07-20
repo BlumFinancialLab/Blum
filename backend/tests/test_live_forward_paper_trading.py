@@ -599,6 +599,42 @@ def test_actionability_summary_does_not_count_skipped_trade_as_operationally_act
     assert summary["skipped_count"] == 1
 
 
+def test_lifecycle_selection_prioritizes_active_candidate_over_old_waiting_rows():
+    with setup_db() as db:
+        service = LiveForwardPaperTradingService()
+        game = service.active_or_create_live_game(db)
+        for index in range(51):
+            db.add(
+                PaperForwardTrade(
+                    trade_uid=f"waiting-{index}",
+                    duplicate_key=f"waiting-{index}",
+                    game_id=game.id,
+                    ticker=f"W{index}",
+                    setup_type="pullback",
+                    status="WAITING_FOR_TRIGGER",
+                    decision_timestamp=datetime(2026, 1, 1) + timedelta(minutes=index),
+                    sniper_score=90.0,
+                )
+            )
+        active = PaperForwardTrade(
+            trade_uid="active-priority",
+            duplicate_key="active-priority",
+            game_id=game.id,
+            ticker="NVDA",
+            setup_type="momentum_breakout",
+            status="CANDIDATE",
+            decision_timestamp=datetime(2026, 2, 1),
+            sniper_score=70.0,
+        )
+        db.add(active)
+        db.commit()
+
+        selected = service.lifecycle_candidates(db, game)
+
+    assert len(selected) == 50
+    assert selected[0].trade_uid == "active-priority"
+
+
 def test_paper_forward_opportunity_scanner_classifies_trade_watchlist_blocked_and_data_blocked():
     with setup_db() as db:
         seed_asset(db, "NVDA")

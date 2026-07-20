@@ -6,7 +6,7 @@ import re
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import desc, func, or_, select
+from sqlalchemy import case, desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -546,12 +546,7 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
             return super().open_eligible_trades(db, game, candidates)
 
         live_game = game or self.active_or_create_live_game(db)
-        rows = db.scalars(
-            select(LiveForwardPaperTrade)
-            .where(LiveForwardPaperTrade.game_id == live_game.id, LiveForwardPaperTrade.status.in_(["CANDIDATE", "WAITING_FOR_TRIGGER"]))
-            .order_by(LiveForwardPaperTrade.created_at)
-            .limit(50)
-        ).all()
+        rows = self.lifecycle_candidates(db, live_game)
         opened: list[dict] = []
         waiting: list[dict] = []
         data_blocked: list[dict] = []
@@ -643,6 +638,25 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
             open_tickers.add(trade.ticker.upper())
 
         return {"opened": opened, "waiting": waiting, "data_blocked": data_blocked, "skipped": skipped}
+
+    def lifecycle_candidates(self, db: Session, game: LiveForwardPaperGame) -> list[LiveForwardPaperTrade]:
+        """Select executable candidates before watchlist rows, then rank by quality and freshness."""
+
+        return list(
+            db.scalars(
+                select(LiveForwardPaperTrade)
+                .where(
+                    LiveForwardPaperTrade.game_id == game.id,
+                    LiveForwardPaperTrade.status.in_(["CANDIDATE", "WAITING_FOR_TRIGGER"]),
+                )
+                .order_by(
+                    case((LiveForwardPaperTrade.status == "CANDIDATE", 0), else_=1),
+                    desc(LiveForwardPaperTrade.sniper_score),
+                    desc(LiveForwardPaperTrade.decision_timestamp),
+                )
+                .limit(50)
+            ).all()
+        )
 
     def entry_risk_geometry_status(self, trade: LiveForwardPaperTrade, entry_price: float) -> dict[str, Any]:
         stop = safe_float(trade.stop_loss or trade.invalidation_level)
