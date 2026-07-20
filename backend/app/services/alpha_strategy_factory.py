@@ -171,6 +171,7 @@ class StrategyFamilyRegistry:
                     "stop_atr_multiple": (1.0, 1.5)[(regime_index + market_index) % 2],
                     "target_r_multiple": (1.5, 2.0, 2.5)[(setup_index + regime_index + market_index) % 3],
                     "maximum_holding_bars": (15, 30)[(setup_index + market_index) % 2],
+                    "higher_timeframe_min_trend": -1.0 if regime_filter == "trend_down_only" else 0.0,
                     "regime_filter": regime_filter,
                     "market_filter": market_filter,
                 }

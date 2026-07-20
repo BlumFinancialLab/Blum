@@ -257,6 +257,11 @@ def test_intraday_factory_variants_are_distinct_executable_strategies() -> None:
     assert {spec.entry_rule for spec in executable} == {"breakout_close", "trend_continuation"}
     assert len({spec.target_r_multiple for spec in executable}) > 1
     assert len({spec.stop_atr_multiple for spec in executable}) > 1
+    assert all(
+        spec.higher_timeframe_min_trend < 0.0
+        for spec in executable
+        if spec.regime_filter == "trend_down_only"
+    )
 
 
 def test_factory_run_is_idempotent_and_reports_missing_evidence() -> None:

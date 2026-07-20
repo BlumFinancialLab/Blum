@@ -92,3 +92,33 @@ def test_research_specs_preserve_exploration_beside_near_frontier_candidate() ->
     assert len(result["specs"]) == 2
     assert result["selection_mix"]["near_frontier"] == 1
     assert result["selection_mix"]["broad_exploration"] == 1
+
+
+def test_single_slot_budget_periodically_preserves_broad_exploration() -> None:
+    with setup_db() as db:
+        add_candidate(db, target_r=2.0, sample_size=280, expectancy=0.18)
+        add_candidate(db, target_r=2.5, sample_size=10, expectancy=0.0)
+
+        result = StrategyPromotionFrontierService(minimum_samples=300).research_plan(
+            db, limit=1, seed=1
+        )
+
+    assert len(result["specs"]) == 1
+    assert result["selection_mix"] == {"near_frontier": 0, "broad_exploration": 1}
+
+
+def test_frontier_excludes_legacy_self_contradictory_contract() -> None:
+    with setup_db() as db:
+        spec = add_candidate(db, target_r=2.0, sample_size=0, expectancy=0.0)
+        candidate = db.query(StrategyCandidateVariant).filter_by(fingerprint=spec.fingerprint).one()
+        payload = dict(candidate.specification_json)
+        executable = dict(payload["executable_strategy"])
+        executable["regime_filter"] = "trend_down_only"
+        executable["higher_timeframe_min_trend"] = 0.0
+        payload["executable_strategy"] = executable
+        candidate.specification_json = payload
+        db.commit()
+
+        snapshot = StrategyPromotionFrontierService(minimum_samples=300).snapshot(db)
+
+    assert snapshot["status"] == "NO_EXECUTABLE_CANDIDATES"

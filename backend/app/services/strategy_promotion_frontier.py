@@ -38,7 +38,8 @@ class StrategyPromotionFrontierService:
             for candidate, validation in rows
         ]
         records.sort(key=lambda item: (item[2]["frontier_score"], item[2]["sample_size"]), reverse=True)
-        near_count = bounded_limit if bounded_limit == 1 else max(1, bounded_limit - 1)
+        explore_single_slot = bounded_limit == 1 and len(records) > 1 and int(seed) % 10 < 3
+        near_count = 0 if explore_single_slot else (bounded_limit if bounded_limit == 1 else max(1, bounded_limit - 1))
         selected = records[:near_count]
         selected_ids = {candidate.id for candidate, _, _ in selected}
         exploration = [row for row in records if row[0].id not in selected_ids]
@@ -81,7 +82,13 @@ class StrategyPromotionFrontierService:
         output = []
         for candidate in rows:
             specification = dict(candidate.specification_json or {})
-            if not isinstance(specification.get("executable_strategy"), dict):
+            executable = specification.get("executable_strategy")
+            if not isinstance(executable, dict):
+                continue
+            if (
+                executable.get("regime_filter") == "trend_down_only"
+                and number(executable.get("higher_timeframe_min_trend"), 0.0) >= 0.0
+            ):
                 continue
             validation = db.get(ReplayStrategyValidation, candidate.validation_id) if candidate.validation_id else None
             output.append((candidate, validation))

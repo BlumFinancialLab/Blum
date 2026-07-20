@@ -217,7 +217,7 @@ class BlumAdaptiveTrainingController:
             research_plan = self.promotion_frontier.research_plan(
                 db,
                 limit=limits["max_experiments"],
-                seed=int(datetime.utcnow().strftime("%Y%m%d")),
+                seed=int(datetime.utcnow().timestamp() // 900),
             )
             run_summary = self.engine.run_cycle(
                 db,
