@@ -13,6 +13,11 @@ from sqlalchemy.orm import Session
 from app.models import Asset, HyperbolicReplayRun, HyperbolicReplayTrade, ReplayMarketBar
 from app.services.replay_data import MultiProviderReplayDataService
 from app.services.replay_execution import ReplayExecutionModel, ReplayPositionSizer
+from app.services.executable_strategy import (
+    ExecutableStrategySpec,
+    StrategySignalEvaluator,
+    canonical_strategy_spec,
+)
 
 
 TIMEFRAME_ORDER = ("1d", "15m", "5m", "1m")
@@ -56,6 +61,7 @@ class ReplayRunRequest:
     trigger: str = "manual"
     capital: float = 10_000.0
     after_asset_id: int | None = None
+    strategy_specs: tuple[dict, ...] | None = None
 
 
 class BlumHyperbolicReplayEngine:
@@ -69,6 +75,7 @@ class BlumHyperbolicReplayEngine:
         self.data_service = data_service or MultiProviderReplayDataService()
         self.execution_model = execution_model or ReplayExecutionModel()
         self.position_sizer = position_sizer or ReplayPositionSizer()
+        self.signal_evaluator = StrategySignalEvaluator()
 
     def run_cycle(self, db: Session, request: ReplayRunRequest) -> dict:
         started = time.perf_counter()
@@ -100,8 +107,8 @@ class BlumHyperbolicReplayEngine:
             markets.add(asset.country or asset.exchange or "UNKNOWN")
             available = self._available_timeframes(db, asset, request, blockers)
             used_timeframes.update(available)
-            eligible_setups = _eligible_setups(available)
-            if not eligible_setups:
+            eligible_specs = self._eligible_strategy_specs(request, available)
+            if not eligible_specs:
                 blockers.append({"ticker": asset.ticker, "code": "COVERAGE_INCOMPLETE", "timeframe": "all"})
                 continue
             bars_by_available_timeframe = {
@@ -111,7 +118,7 @@ class BlumHyperbolicReplayEngine:
             remaining_assets = len(assets) - asset_index
             asset_budget = max(1, ceil((request.max_trades - generated) / remaining_assets))
             asset_generated = 0
-            for setup_index, (setup_type, execution_timeframe) in enumerate(eligible_setups):
+            for setup_index, strategy_spec in enumerate(eligible_specs):
                 if (
                     generated >= request.max_trades
                     or asset_generated >= asset_budget
@@ -120,10 +127,10 @@ class BlumHyperbolicReplayEngine:
                     break
                 bars_by_timeframe = {
                     timeframe: bars_by_available_timeframe[timeframe]
-                    for timeframe in SETUP_REQUIREMENTS[setup_type]
+                    for timeframe in strategy_spec.required_timeframes
                 }
-                bars = bars_by_timeframe[execution_timeframe]
-                remaining_setups = len(eligible_setups) - setup_index
+                bars = bars_by_timeframe[strategy_spec.execution_timeframe]
+                remaining_setups = len(eligible_specs) - setup_index
                 setup_budget = max(1, ceil((asset_budget - asset_generated) / remaining_setups))
                 trades = self._replay_asset(
                     db,
@@ -131,8 +138,7 @@ class BlumHyperbolicReplayEngine:
                     asset,
                     bars,
                     bars_by_timeframe,
-                    setup_type,
-                    execution_timeframe,
+                    strategy_spec,
                     min(setup_budget, request.max_trades - generated),
                     request.capital,
                 )
@@ -141,8 +147,9 @@ class BlumHyperbolicReplayEngine:
                         {
                             "ticker": asset.ticker,
                             "code": "NO_NEW_REPLAY_EVIDENCE",
-                            "timeframe": execution_timeframe,
-                            "setup_type": setup_type,
+                            "timeframe": strategy_spec.execution_timeframe,
+                            "setup_type": strategy_spec.setup_type,
+                            "strategy_fingerprint": strategy_spec.fingerprint,
                         }
                     )
                 asset_generated += len(trades)
@@ -183,7 +190,28 @@ class BlumHyperbolicReplayEngine:
             "lookahead_violations": 0,
             "next_cursor": next_cursor,
             "next_action": "Continue bounded replay coverage and walk-forward validation." if generated else "Acquire verified OHLCV coverage for eligible assets.",
+            "strategy_fingerprints": sorted(
+                {
+                    ExecutableStrategySpec.from_payload(payload).fingerprint
+                    for payload in (request.strategy_specs or ())
+                }
+            ),
         }
+
+    @staticmethod
+    def _eligible_strategy_specs(
+        request: ReplayRunRequest,
+        available: set[str],
+    ) -> list[ExecutableStrategySpec]:
+        if request.strategy_specs:
+            requested = [ExecutableStrategySpec.from_payload(payload) for payload in request.strategy_specs]
+        else:
+            requested = [canonical_strategy_spec(setup_type) for setup_type, _ in _eligible_setups(available)]
+        return [
+            spec
+            for spec in requested
+            if set(spec.required_timeframes).issubset(available)
+        ]
 
     @staticmethod
     def _assets(db: Session, request: ReplayRunRequest) -> list[Asset]:
@@ -240,17 +268,18 @@ class BlumHyperbolicReplayEngine:
         asset: Asset,
         bars: list[ReplayMarketBar],
         bars_by_timeframe: dict[str, list[ReplayMarketBar]],
-        setup_type: str,
-        timeframe: str,
+        strategy_spec: ExecutableStrategySpec,
         limit: int,
         capital: float,
     ) -> list[HyperbolicReplayTrade]:
+        setup_type = strategy_spec.setup_type
+        timeframe = strategy_spec.execution_timeframe
         output: list[HyperbolicReplayTrade] = []
         existing_decisions = set(
             db.scalars(
                 select(HyperbolicReplayTrade.decision_timestamp).where(
                     HyperbolicReplayTrade.asset_id == asset.id,
-                    HyperbolicReplayTrade.setup_type == setup_type,
+                    HyperbolicReplayTrade.strategy_fingerprint == strategy_spec.fingerprint,
                     HyperbolicReplayTrade.timeframe == timeframe,
                 )
             ).all()
@@ -259,24 +288,38 @@ class BlumHyperbolicReplayEngine:
             timeframe: [row.bar_timestamp for row in timeframe_bars]
             for timeframe, timeframe_bars in bars_by_timeframe.items()
         }
-        for index in range(20, len(bars) - 1):
+        history_size = max(20, strategy_spec.lookback + 1, strategy_spec.atr_period + 1)
+        for index in range(history_size, len(bars) - 1):
             if len(output) >= limit:
                 break
-            history = bars[max(0, index - 20) : index]
+            history = bars[max(0, index - history_size) : index]
             decision_bar = bars[index]
             if decision_bar.bar_timestamp in existing_decisions:
                 continue
-            if not _setup_signal(setup_type, history, decision_bar):
-                continue
-            context = _context_at(bars_by_timeframe, timestamps_by_timeframe, decision_bar.bar_timestamp)
-            confirmation = _multi_timeframe_confirmation(setup_type, context, timeframe)
-            if not confirmation["confirmed"]:
+            context = _context_at(
+                bars_by_timeframe,
+                timestamps_by_timeframe,
+                decision_bar.bar_timestamp,
+                history_size=history_size,
+            )
+            signal = self.signal_evaluator.evaluate(
+                strategy_spec,
+                context,
+                as_of=decision_bar.bar_timestamp,
+                market=asset.country or asset.exchange,
+            )
+            if signal.status != "triggered":
                 continue
             entry_bar = bars[index + 1]
-            atr = _atr(history)
             theoretical_entry = float(entry_bar.open if entry_bar.open is not None else entry_bar.close)
-            stop = theoretical_entry - max(atr, theoretical_entry * 0.01)
-            target = theoretical_entry + (theoretical_entry - stop) * 2
+            geometry = self.signal_evaluator.geometry(
+                strategy_spec,
+                entry_price=theoretical_entry,
+                execution_history=[*history, decision_bar],
+            )
+            atr = geometry.atr
+            stop = geometry.stop_price
+            target = geometry.target_price
             liquidity = _liquidity_score(history)
             quality = sum(float(row.data_quality_score or 0.0) for row in history) / len(history)
             profile = self.execution_model.profile(market=asset.country, asset_type=asset.asset_type, liquidity_score=liquidity)
@@ -294,7 +337,13 @@ class BlumHyperbolicReplayEngine:
             )
             if sizing.units <= 0:
                 continue
-            exit_bar, raw_exit, exit_reason = _manage_trade(bars, index + 1, stop, target)
+            exit_bar, raw_exit, exit_reason = _manage_trade(
+                bars,
+                index + 1,
+                stop,
+                target,
+                maximum_holding_bars=strategy_spec.maximum_holding_bars,
+            )
             exit_price = raw_exit * (1 - profile.one_way_bps / 10_000)
             gross_pnl = (raw_exit - theoretical_entry) * sizing.units
             net_pnl = (exit_price - entry) * sizing.units
@@ -313,6 +362,7 @@ class BlumHyperbolicReplayEngine:
                 ticker=asset.ticker,
                 market=asset.country or asset.exchange or "UNKNOWN",
                 setup_type=setup_type,
+                strategy_fingerprint=strategy_spec.fingerprint,
                 timeframe=timeframe,
                 state="REPLAY_EVALUATED",
                 evidence_type="REPLAY_EVIDENCE",
@@ -337,9 +387,16 @@ class BlumHyperbolicReplayEngine:
                     },
                     "signal_bar_timestamp": decision_bar.bar_timestamp.isoformat(),
                     "setup_type": setup_type,
-                    "required_timeframes": list(SETUP_REQUIREMENTS[setup_type]),
-                    "regime": _regime(context.get("1d") or context.get(timeframe) or history),
-                    "multi_timeframe_confirmation": confirmation,
+                    "strategy_fingerprint": strategy_spec.fingerprint,
+                    "executable_strategy": strategy_spec.to_payload(),
+                    "required_timeframes": list(strategy_spec.required_timeframes),
+                    "regime": signal.regime,
+                    "signal_evidence": signal.evidence,
+                    "multi_timeframe_confirmation": {
+                        "confirmed": signal.status == "triggered",
+                        "trends": signal.higher_timeframe_trends,
+                        "blockers": [],
+                    },
                     "benchmark_ticker": benchmark_ticker,
                     "benchmark_status": "available" if benchmark_excess is not None else "missing",
                     "state_transitions": [
@@ -354,6 +411,13 @@ class BlumHyperbolicReplayEngine:
                     "cost_profile": profile.to_dict(),
                     "position_sizing": sizing.to_dict(),
                     "theoretical_entry": theoretical_entry,
+                    "trade_geometry": {
+                        "stop_price": stop,
+                        "target_price": target,
+                        "trailing_stop": geometry.trailing_stop,
+                        "risk_distance": geometry.risk_distance,
+                        "atr": geometry.atr,
+                    },
                 },
                 outcome_payload={"exit_reason": exit_reason, "evaluated_after_close": True},
             )
@@ -439,11 +503,12 @@ def _context_at(
     bars_by_timeframe: dict[str, list[ReplayMarketBar]],
     timestamps_by_timeframe: dict[str, list[datetime]],
     replay_timestamp: datetime,
+    history_size: int = 20,
 ) -> dict[str, list[ReplayMarketBar]]:
     output: dict[str, list[ReplayMarketBar]] = {}
     for timeframe, bars in bars_by_timeframe.items():
         stop = bisect_right(timestamps_by_timeframe[timeframe], replay_timestamp)
-        output[timeframe] = bars[max(0, stop - 20) : stop]
+        output[timeframe] = bars[max(0, stop - max(2, history_size)) : stop]
     return output
 
 
@@ -503,8 +568,14 @@ def _liquidity_score(history: list[ReplayMarketBar]) -> float:
     return max(20.0, min(100.0, 20 + average / 20_000))
 
 
-def _manage_trade(bars: list[ReplayMarketBar], entry_index: int, stop: float, target: float) -> tuple[ReplayMarketBar, float, str]:
-    last_index = min(len(bars) - 1, entry_index + 20)
+def _manage_trade(
+    bars: list[ReplayMarketBar],
+    entry_index: int,
+    stop: float,
+    target: float,
+    maximum_holding_bars: int = 20,
+) -> tuple[ReplayMarketBar, float, str]:
+    last_index = min(len(bars) - 1, entry_index + max(1, maximum_holding_bars))
     for index in range(entry_index, last_index + 1):
         bar = bars[index]
         if float(bar.low or bar.close) <= stop:

@@ -9,7 +9,12 @@ from typing import Any, Mapping, Sequence
 
 
 SCHEMA_VERSION = "executable-strategy-v1"
-SUPPORTED_ENTRY_RULES = {"breakout_close", "trend_continuation"}
+SUPPORTED_ENTRY_RULES = {
+    "breakout_close",
+    "trend_continuation",
+    "mean_reversion_deviation",
+    "pullback_to_mean",
+}
 SUPPORTED_TIMEFRAMES = {"1d", "15m", "5m", "1m"}
 
 
@@ -224,11 +229,24 @@ class StrategySignalEvaluator:
 
         close = float(current.close)
         if spec.entry_rule == "breakout_close":
-            triggered = close > max(float(getattr(row, "high", row.close) or row.close) for row in prior)
-        else:
+            # The existing BLUM breakout contract is close-to-close. Keeping the
+            # reference explicit preserves replay compatibility while sharing the
+            # exact same trigger with paper-forward evaluation.
+            triggered = close > max(float(row.close) for row in prior)
+        elif spec.entry_rule == "trend_continuation":
             prior_closes = [float(row.close) for row in prior]
             moving_average = mean(prior_closes)
             triggered = close > moving_average and close > float(prior[-1].close) and prior_closes[-1] > prior_closes[0]
+        elif spec.entry_rule == "mean_reversion_deviation":
+            prior_closes = [float(row.close) for row in prior]
+            moving_average = mean(prior_closes)
+            variance = mean([(value - moving_average) ** 2 for value in prior_closes])
+            deviation = variance**0.5
+            triggered = close < moving_average - max(deviation, moving_average * 0.01)
+        else:
+            prior_closes = [float(row.close) for row in prior]
+            moving_average = mean(prior_closes)
+            triggered = prior_closes[-1] > prior_closes[0] and moving_average * 0.97 <= close <= moving_average * 1.01
         if not triggered:
             return self._result(
                 "waiting",
@@ -321,7 +339,7 @@ def canonical_strategy_spec(setup_type: str) -> ExecutableStrategySpec:
             "family": "mean_reversion",
             "required_timeframes": ["15m", "5m"],
             "execution_timeframe": "5m",
-            "entry_rule": "trend_continuation",
+            "entry_rule": "mean_reversion_deviation",
             "lookback": 10,
             "minimum_relative_volume": 0.0,
             "minimum_stop_percent": 0.01,
@@ -331,7 +349,7 @@ def canonical_strategy_spec(setup_type: str) -> ExecutableStrategySpec:
             "family": "pullback",
             "required_timeframes": ["1d", "15m"],
             "execution_timeframe": "15m",
-            "entry_rule": "trend_continuation",
+            "entry_rule": "pullback_to_mean",
             "lookback": 10,
             "minimum_relative_volume": 0.0,
             "minimum_stop_percent": 0.01,

@@ -3832,7 +3832,7 @@ class HyperbolicReplayRun(Base):
 class HyperbolicReplayTrade(Base):
     __tablename__ = "hyperbolic_replay_trades"
     __table_args__ = (
-        UniqueConstraint("asset_id", "setup_type", "timeframe", "decision_timestamp", name="uq_replay_trade_decision"),
+        UniqueConstraint("asset_id", "strategy_fingerprint", "timeframe", "decision_timestamp", name="uq_replay_trade_strategy_decision"),
         Index("ix_hyperbolic_replay_trades_run_state", "run_id", "state"),
         Index("ix_hyperbolic_replay_trades_ticker_decision", "ticker", "decision_timestamp"),
     )
@@ -3843,6 +3843,7 @@ class HyperbolicReplayTrade(Base):
     ticker: Mapped[str] = mapped_column(String(48), index=True)
     market: Mapped[str] = mapped_column(String(40), index=True)
     setup_type: Mapped[str] = mapped_column(String(80), index=True)
+    strategy_fingerprint: Mapped[str] = mapped_column(String(96), default="legacy", index=True)
     timeframe: Mapped[str] = mapped_column(String(16), index=True)
     state: Mapped[str] = mapped_column(String(40), index=True)
     evidence_type: Mapped[str] = mapped_column(String(40), default="REPLAY_EVIDENCE", index=True)

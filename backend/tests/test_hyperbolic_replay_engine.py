@@ -16,6 +16,7 @@ from app.services.hyperbolic_replay import (
 from app.services.replay_execution import ReplayExecutionModel, ReplayPositionSizer
 from app.services.replay_validation import ReplayExperimentService, ReplayLearningFeedbackService, ReplayWalkForwardValidator
 from app.services.adaptive_replay_training import _validation_evidence
+from app.services.executable_strategy import ExecutableStrategySpec, canonical_strategy_spec
 
 
 def setup_db() -> Session:
@@ -197,6 +198,46 @@ def test_full_multi_timeframe_replay_exercises_distinct_intraday_strategies():
         setup_types = set(db.scalars(select(HyperbolicReplayTrade.setup_type)).all())
 
     assert {"intraday_breakout", "intraday_trend"}.issubset(setup_types)
+
+
+def test_distinct_strategy_fingerprints_can_replay_the_same_asset_window():
+    with setup_db() as db:
+        asset = seed_asset(db)
+        start = datetime(2025, 1, 1)
+        seed_trending_bars(db, asset, "1d", start - timedelta(days=60), count=80, minutes=1440)
+        seed_trending_bars(db, asset, "15m", start - timedelta(hours=10), count=80, minutes=15)
+        seed_trending_bars(db, asset, "5m", start - timedelta(hours=3), count=80, minutes=5)
+        seed_trending_bars(db, asset, "1m", start, count=80, minutes=1)
+        canonical = canonical_strategy_spec("intraday_breakout")
+        alternative = ExecutableStrategySpec.from_payload(
+            {**canonical.to_payload(), "target_r_multiple": 2.5}
+        )
+
+        result = BlumHyperbolicReplayEngine().run_cycle(
+            db,
+            ReplayRunRequest(
+                asset_ids=[asset.id],
+                max_assets=1,
+                max_trades=4,
+                fetch_missing=False,
+                strategy_specs=(canonical.to_payload(), alternative.to_payload()),
+            ),
+        )
+        trades = db.scalars(
+            select(HyperbolicReplayTrade).order_by(HyperbolicReplayTrade.decision_timestamp, HyperbolicReplayTrade.id)
+        ).all()
+
+    assert result["trades_generated"] == 4
+    assert {row.strategy_fingerprint for row in trades} == {
+        canonical.fingerprint,
+        alternative.fingerprint,
+    }
+    assert all(row.decision_payload["executable_strategy"]["strategy_fingerprint"] == row.strategy_fingerprint for row in trades)
+    assert all(
+        max(row.decision_payload["signal_evidence"]["feature_bar_timestamps"])
+        <= row.decision_timestamp.isoformat()
+        for row in trades
+    )
 
 
 def test_replay_budget_is_distributed_across_assets_instead_of_exhausted_by_first_ticker():
