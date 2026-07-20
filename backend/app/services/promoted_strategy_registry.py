@@ -104,7 +104,8 @@ class BlumPromotedStrategyRegistry:
         timeframe_stack = tuple(metrics.get("timeframe_stack") or REQUIRED_INTRADAY_TIMEFRAMES)
         if sample_size < settings.replay_min_promotion_samples:
             return None
-        if float(row.overfitting_score or 100.0) >= 70.0:
+        overfitting_score = 100.0 if row.overfitting_score is None else float(row.overfitting_score)
+        if overfitting_score >= 70.0:
             return None
         if stability < 50.0 or expectancy <= 0.0 or benchmark_excess <= 0.0:
             return None
@@ -149,7 +150,8 @@ class BlumPromotedStrategyRegistry:
             return None
         if expectancy <= 0.0 or benchmark_excess <= 0.0 or stability < 50.0:
             return None
-        if data_quality < 70.0 or cost_coverage < 1.0 or float(row.overfitting_score or 100.0) >= 70.0:
+        overfitting_score = 100.0 if row.overfitting_score is None else float(row.overfitting_score)
+        if data_quality < 70.0 or cost_coverage < 1.0 or overfitting_score >= 70.0:
             return None
         if timeframe_stack != REQUIRED_INTRADAY_TIMEFRAMES:
             return None

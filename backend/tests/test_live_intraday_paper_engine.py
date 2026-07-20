@@ -249,6 +249,31 @@ def test_registry_exposes_positive_cost_adjusted_challenger_as_experimental_only
     assert experimental[0].metrics["paper_risk_multiplier"] == 0.25
 
 
+def test_registry_accepts_measured_zero_overfitting_risk(monkeypatch):
+    monkeypatch.setattr("app.services.promoted_strategy_registry.settings.intraday_experimental_min_samples", 100)
+    with setup_db() as db:
+        validation = seed_validation(
+            db,
+            sample_size=150,
+            verdict="NEEDS_MORE_EVIDENCE",
+            overfitting_score=0.0,
+            metrics={
+                "net_expectancy_r": 0.18,
+                "benchmark_excess": 1.5,
+                "stability_score": 62.0,
+                "multiple_testing_significant": False,
+            },
+        )
+
+        experimental = BlumPromotedStrategyRegistry().list_experimental(
+            db,
+            market="USA",
+            asset_class="Stock",
+        )
+
+    assert [row.validation_id for row in experimental] == [validation.id]
+
+
 def test_experimental_intraday_strategy_uses_reduced_paper_risk(monkeypatch):
     monkeypatch.setattr("app.services.promoted_strategy_registry.settings.intraday_experimental_min_samples", 100)
     with setup_db() as db:

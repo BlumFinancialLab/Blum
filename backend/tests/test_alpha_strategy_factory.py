@@ -197,6 +197,19 @@ def test_strong_multi_market_evidence_can_promote() -> None:
     assert result.benchmark_excess > 0
 
 
+def test_zero_overfitting_and_zero_adjusted_p_value_remain_valid_measurements() -> None:
+    result = evaluate_strategy_robustness(
+        strong_evidence(
+            overfitting_probability=0.0,
+            adjusted_p_value=0.0,
+            multiple_testing_significant=True,
+        )
+    )
+
+    assert result.overfitting_probability == 0.0
+    assert result.verdict == "PROMOTED_TO_PAPER"
+
+
 def test_initial_strategy_family_registry_is_complete_and_bounded() -> None:
     registry = StrategyFamilyRegistry()
 
@@ -212,16 +225,19 @@ def test_initial_strategy_family_registry_is_complete_and_bounded() -> None:
         "cross_sectional_ranking",
         "intraday_scalping",
     }
-    first = registry.variants("intraday_scalping", max_variants=4, seed=11)
-    second = registry.variants("intraday_scalping", max_variants=4, seed=11)
+    first = registry.variants("intraday_scalping", max_variants=8, seed=11)
+    second = registry.variants("intraday_scalping", max_variants=8, seed=11)
     assert first == second
-    assert len(first) == 4
+    assert len(first) == 8
     assert all(row["timeframe_stack"] == ["1d", "15m", "5m", "1m"] for row in first)
-    assert first[0]["evidence_binding"] == "hyperbolic_replay_v1"
-    assert first[0]["setup_type"] == "intraday_breakout"
-    assert first[1]["evidence_binding"] == "hyperbolic_replay_v1"
-    assert first[1]["setup_type"] == "intraday_trend"
-    assert all(row["evidence_binding"] == "not_implemented" for row in first[2:])
+    assert {row["setup_type"] for row in first} == {"intraday_breakout", "intraday_trend"}
+    assert {row["regime_filter"] for row in first} == {
+        "all",
+        "trend_up_only",
+        "range_bound_only",
+        "trend_down_only",
+    }
+    assert all(row["evidence_binding"] == "hyperbolic_replay_v1" for row in first)
 
 
 def test_factory_run_is_idempotent_and_reports_missing_evidence() -> None:
@@ -307,6 +323,74 @@ def test_candidate_evidence_requires_the_exact_replay_timeframe_stack() -> None:
     assert evidence["sample_size"] == 1
     assert evidence["returns_r"] == [1.2]
     assert requires_revalidation is True
+
+
+def test_candidate_evidence_applies_only_point_in_time_regime_filter() -> None:
+    with setup_db() as db:
+        asset = Asset(
+            ticker="NVDA",
+            name="NVIDIA",
+            category="Stock",
+            sector="Technology",
+            asset_type="Stock",
+            country="USA",
+            currency="USD",
+            exchange="NASDAQ",
+            is_active=True,
+        )
+        replay_run = HyperbolicReplayRun(run_id="regime-filter-run", status="COMPLETED")
+        factory_run = StrategyFactoryRun(
+            run_uid="regime-filter-factory",
+            hypothesis_family="intraday_scalping",
+            generation_seed=1,
+            status="RUNNING",
+        )
+        db.add_all([asset, replay_run, factory_run])
+        db.flush()
+        candidate = StrategyCandidateVariant(
+            factory_run_id=factory_run.id,
+            fingerprint="intraday-trend-up-only",
+            family="intraday_scalping",
+            setup_type="intraday_trend",
+            timeframe_stack=["1d", "15m", "5m", "1m"],
+            specification_json={
+                "evidence_binding": "hyperbolic_replay_v1",
+                "regime_filter": "trend_up_only",
+            },
+        )
+        db.add(candidate)
+        for index, (regime, r_multiple) in enumerate(
+            (("trend_up", 0.8), ("range_bound", -0.4), ("trend_down", -0.7))
+        ):
+            db.add(
+                HyperbolicReplayTrade(
+                    run_id=replay_run.id,
+                    asset_id=asset.id,
+                    ticker=asset.ticker,
+                    market="USA",
+                    setup_type="intraday_trend",
+                    timeframe="5m",
+                    state="REPLAY_EVALUATED",
+                    decision_timestamp=datetime(2025, 1, 1) + timedelta(minutes=index),
+                    r_multiple=r_multiple,
+                    benchmark_excess=r_multiple / 2,
+                    data_quality_score=95.0,
+                    decision_payload={
+                        "required_timeframes": ["1d", "15m", "5m", "1m"],
+                        "regime": regime,
+                    },
+                    execution_payload={"cost_profile": {"round_trip_bps": 4.0}},
+                )
+            )
+        db.flush()
+
+        evidence = AlphaStrategyFactory._candidate_evidence(db, candidate)
+
+    assert evidence["sample_size"] == 1
+    assert evidence["returns_r"] == [0.8]
+    assert evidence["benchmark_excess_returns"] == [0.4]
+    assert evidence["regimes"] == ["trend_up"]
+    assert evidence["regime_filter"] == "trend_up_only"
 
 
 def test_multi_family_factory_run_uses_bounded_index_key_and_preserves_full_selection() -> None:

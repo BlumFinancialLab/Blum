@@ -57,6 +57,8 @@ REPLAY_IMPLEMENTATIONS: dict[str, dict] = {
     "intraday_trend": {"entry_rule": "five_minute_breakout", "stop_rule": "atr_or_one_percent", "target_rule": "two_r", "holding_period": 20},
 }
 
+REPLAY_REGIME_FILTERS = ("all", "trend_up_only", "range_bound_only", "trend_down_only")
+
 
 class StrategyFamilyRegistry:
     def names(self) -> tuple[str, ...]:
@@ -80,20 +82,24 @@ class StrategyFamilyRegistry:
         ]
         random.Random(int(seed)).shuffle(combinations)
         variants: list[dict] = []
-        canonical_combinations = []
+        canonical_setups = []
         for setup_type in definition.get("replay_setup_types") or [definition["setup_type"]]:
             canonical = REPLAY_IMPLEMENTATIONS.get(setup_type)
             if canonical:
-                canonical_combinations.append(
+                canonical_setups.append(
                     (
                         setup_type,
                         canonical["entry_rule"],
                         canonical["stop_rule"],
                         canonical["target_rule"],
                         canonical["holding_period"],
-                        "all",
                     )
                 )
+        canonical_combinations = [
+            (*canonical, regime_filter)
+            for regime_filter in REPLAY_REGIME_FILTERS
+            for canonical in canonical_setups
+        ]
         combinations = canonical_combinations + combinations
         seen: set[tuple] = set()
         for setup_type, entry, stop, target, holding, regime_filter in combinations:
@@ -204,7 +210,7 @@ class AlphaStrategyFactory:
         db: Session,
         *,
         families: list[str] | None = None,
-        max_variants_per_family: int = 4,
+        max_variants_per_family: int = 8,
         seed: int = 7,
         trigger: str = "scheduled",
     ) -> dict:
@@ -257,9 +263,16 @@ class AlphaStrategyFactory:
             new_candidates.append(candidate)
             evaluation_candidates.append(candidate)
 
-        evidence_by_candidate = [(candidate, self._candidate_evidence(db, candidate)) for candidate in evaluation_candidates]
+        replay_cache: dict[tuple[str, tuple[str, ...]], list[HyperbolicReplayTrade]] = {}
+        evidence_by_candidate = [
+            (candidate, self._candidate_evidence(db, candidate, replay_cache=replay_cache))
+            for candidate in evaluation_candidates
+        ]
         corrections = benjamini_hochberg(
-            [float(evidence.get("raw_p_value") or 1.0) for _, evidence in evidence_by_candidate],
+            [
+                1.0 if evidence.get("raw_p_value") is None else float(evidence["raw_p_value"])
+                for _, evidence in evidence_by_candidate
+            ],
             false_discovery_rate=0.05,
         )
         rejection_counts: Counter[str] = Counter()
@@ -326,31 +339,55 @@ class AlphaStrategyFactory:
         }
 
     @staticmethod
-    def _candidate_replay_rows(db: Session, candidate: StrategyCandidateVariant) -> list[HyperbolicReplayTrade]:
+    def _candidate_replay_rows(
+        db: Session,
+        candidate: StrategyCandidateVariant,
+        *,
+        replay_cache: dict[tuple[str, tuple[str, ...]], list[HyperbolicReplayTrade]] | None = None,
+    ) -> list[HyperbolicReplayTrade]:
         specification = dict(candidate.specification_json or {})
         if specification.get("evidence_binding") != "hyperbolic_replay_v1":
             return []
         expected_timeframes = tuple(candidate.timeframe_stack or [])
-        rows = db.scalars(
-            select(HyperbolicReplayTrade)
-            .where(
-                HyperbolicReplayTrade.setup_type == candidate.setup_type,
-                HyperbolicReplayTrade.state == "REPLAY_EVALUATED",
-            )
-            .order_by(HyperbolicReplayTrade.decision_timestamp)
-            .limit(5_000)
-        ).all()
+        cache_key = (candidate.setup_type, expected_timeframes)
+        rows = replay_cache.get(cache_key) if replay_cache is not None else None
+        if rows is None:
+            stored_rows = db.scalars(
+                select(HyperbolicReplayTrade)
+                .where(
+                    HyperbolicReplayTrade.setup_type == candidate.setup_type,
+                    HyperbolicReplayTrade.state == "REPLAY_EVALUATED",
+                )
+                .order_by(HyperbolicReplayTrade.decision_timestamp)
+                .limit(5_000)
+            ).all()
+            rows = [
+                row
+                for row in stored_rows
+                if tuple((row.decision_payload or {}).get("required_timeframes") or []) == expected_timeframes
+            ]
+            if replay_cache is not None:
+                replay_cache[cache_key] = rows
+        regime_filter = str(specification.get("regime_filter") or "all")
+        if regime_filter == "all":
+            return list(rows)
+        expected_regime = regime_filter.removesuffix("_only")
         return [
             row
             for row in rows
-            if tuple((row.decision_payload or {}).get("required_timeframes") or []) == expected_timeframes
+            if str((row.decision_payload or {}).get("regime") or "unknown") == expected_regime
         ]
 
     @staticmethod
-    def _candidate_evidence(db: Session, candidate: StrategyCandidateVariant) -> dict:
+    def _candidate_evidence(
+        db: Session,
+        candidate: StrategyCandidateVariant,
+        *,
+        replay_cache: dict[tuple[str, tuple[str, ...]], list[HyperbolicReplayTrade]] | None = None,
+    ) -> dict:
         specification = dict(candidate.specification_json or {})
         binding = specification.get("evidence_binding")
-        rows = AlphaStrategyFactory._candidate_replay_rows(db, candidate)
+        rows = AlphaStrategyFactory._candidate_replay_rows(db, candidate, replay_cache=replay_cache)
         returns = [float(row.r_multiple or 0.0) for row in rows]
         excess = [float(row.benchmark_excess) for row in rows if row.benchmark_excess is not None]
         windows = split_windows(returns, 3)
@@ -376,6 +413,8 @@ class AlphaStrategyFactory:
             "markets": markets,
             "tickers": tickers,
             "regimes": regimes,
+            "regime_filter": specification.get("regime_filter") or "all",
+            "timestamps": [row.decision_timestamp for row in rows if row.decision_timestamp is not None],
             "windows": windows,
             "max_drawdown": max_drawdown(returns),
             "raw_p_value": raw_p,

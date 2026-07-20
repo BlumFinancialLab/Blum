@@ -205,8 +205,14 @@ def evaluate_strategy_robustness(
     bootstrap = block_bootstrap_interval(returns, iterations=800, block_size=max(2, min(10, len(returns) // 20 or 2)), seed=seed)
     net_expectancy = float(np.mean(returns)) if returns else float(evidence.get("expectancy_r") or 0.0)
     benchmark_excess = float(np.mean(excess_returns)) if excess_returns else float(evidence.get("benchmark_excess") or 0.0)
-    overfitting_probability = float(evidence.get("overfitting_probability") or 1.0)
-    dsr_probability = float(evidence.get("deflated_sharpe_probability") or deflated_sharpe_probability(returns, trials=max(1, int(evidence.get("family_size") or 1))))
+    measured_overfitting = evidence.get("overfitting_probability")
+    overfitting_probability = 1.0 if measured_overfitting is None else float(measured_overfitting)
+    measured_dsr = evidence.get("deflated_sharpe_probability")
+    dsr_probability = (
+        deflated_sharpe_probability(returns, trials=max(1, int(evidence.get("family_size") or 1)))
+        if measured_dsr is None
+        else float(measured_dsr)
+    )
     contributions = [abs(float(value)) for value in (evidence.get("asset_pnl_contributions") or {}).values()]
     largest_contribution = max(contributions, default=0.0)
     complexity = max(1, int(evidence.get("complexity") or 1))
@@ -232,7 +238,9 @@ def evaluate_strategy_robustness(
         verdict, reason = "REJECTED_DATA_QUALITY", "Execution-cost or point-in-time data coverage is incomplete."
     elif net_expectancy <= 0 or benchmark_excess <= 0 or bootstrap.lower <= 0:
         verdict, reason = "REJECTED_COSTS", "Net cost-adjusted expectancy or benchmark excess is not durable."
-    elif not bool(evidence.get("multiple_testing_significant")) or float(evidence.get("adjusted_p_value") or 1.0) > 0.05:
+    elif not bool(evidence.get("multiple_testing_significant")) or (
+        1.0 if evidence.get("adjusted_p_value") is None else float(evidence["adjusted_p_value"])
+    ) > 0.05:
         verdict, reason = "REJECTED_MULTIPLE_TESTING", "Candidate does not survive multiple-hypothesis correction."
     elif overfitting_probability > max_overfitting_probability:
         verdict, reason = "REJECTED_OVERFITTING", "Estimated probability of backtest overfitting is too high."
@@ -273,4 +281,3 @@ def evaluate_strategy_robustness(
         complexity_penalty=complexity_penalty,
         metrics=metrics,
     )
-
