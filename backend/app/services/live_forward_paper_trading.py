@@ -55,7 +55,7 @@ from app.services.paper_forward_opportunity_scanner import (
 )
 from app.services.copy_readiness_evidence import CopyReadinessSummaryService
 from app.services.paper_execution_lifecycle import PaperOrderLifecycleService
-from app.services.realistic_execution import ExecutionMarketBar, ExecutionOrderRequest
+from app.services.realistic_execution import ExecutionMarketBar, ExecutionOrderRequest, RealisticExecutionEngine
 
 
 settings = get_settings()
@@ -1097,6 +1097,64 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
                 continue
 
             latest_date, latest_price = latest
+            exit_bars = self.daily_execution_bars(db, trade.ticker, trade.opened_at or trade.decision_timestamp)
+            stop_price = safe_float(trade.stop_loss or trade.invalidation_level)
+            target_price = safe_float(trade.target_1 or trade.target_2)
+            if exit_bars and stop_price > 0 and target_price > 0:
+                exit_decision = RealisticExecutionEngine().evaluate_exit(
+                    side="LONG",
+                    quantity=safe_float(trade.position_size),
+                    entry_price=safe_float(trade.entry_price),
+                    stop_price=stop_price,
+                    target_price=target_price,
+                    decision_timestamp=trade.opened_at or trade.decision_timestamp,
+                    bars=exit_bars,
+                    commission_bps=1.0,
+                )
+                if exit_decision.status == "CLOSED" and exit_decision.average_fill_price is not None:
+                    fill = exit_decision.fills[0]
+                    exit_reason = (
+                        "INVALIDATION_HIT"
+                        if exit_decision.reason == "STOP_HIT" and not trade.stop_loss and trade.invalidation_level
+                        else "STOP_HIT"
+                        if exit_decision.reason == "STOP_HIT"
+                        else "TARGET_1_HIT"
+                    )
+                    trade.execution_costs = {
+                        **dict(trade.execution_costs or {}),
+                        "exit": {
+                            "execution_model": "realistic_execution_v1",
+                            "theoretical_price": fill.reference_price,
+                            "executed_price": fill.executed_price,
+                            "spread_bps": fill.spread_bps,
+                            "slippage_bps": fill.slippage_bps,
+                            "commission_bps": fill.commission_bps,
+                            "spread_cost": exit_decision.costs.spread_cost,
+                            "slippage_cost": exit_decision.costs.slippage_cost,
+                            "commission_cost": exit_decision.costs.commission_cost,
+                            "gap_cost": exit_decision.costs.gap_cost,
+                        },
+                    }
+                    trade.costs_paid = round(safe_float(trade.costs_paid) + exit_decision.costs.total_cost, 8)
+                    closed_trade = self.close_trade(
+                        db,
+                        live_game,
+                        trade,
+                        fill.timestamp.date(),
+                        fill.executed_price,
+                        exit_reason,
+                    )
+                    self.append_event_once(
+                        db,
+                        trade,
+                        "REALISTIC_EXIT_FILLED",
+                        f"{exit_reason} executed from persisted OHLCV with modeled costs.",
+                        payload=trade.execution_costs["exit"],
+                        price_used=fill.executed_price,
+                    )
+                    self.evaluate_closed_trade(db, trade)
+                    closed.append(closed_trade)
+                    continue
             close_reason = self.close_reason_for_trade(trade, latest_price)
             if not close_reason:
                 continue

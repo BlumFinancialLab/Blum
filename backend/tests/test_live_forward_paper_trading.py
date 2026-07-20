@@ -1050,7 +1050,9 @@ def test_paper_forward_lifecycle_stop_hit_closes_trade_and_calculates_pnl():
         assert closed.status == "CLOSED"
         assert closed.close_reason == "STOP_HIT"
         assert closed.outcome == "LOSS"
-        assert closed.pnl_per_share == round(94.0 - closed.entry_price, 4)
+        assert closed.exit_price < 93.0
+        assert closed.pnl_per_share == round(closed.exit_price - closed.entry_price, 4)
+        assert closed.execution_costs["exit"]["gap_cost"] > 0
         assert closed.pnl_percent < 0
         assert closed.r_multiple < 0
         assert any(event.event_type == "STOP_HIT" for event in events)
