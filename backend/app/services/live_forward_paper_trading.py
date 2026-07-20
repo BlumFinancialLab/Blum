@@ -688,6 +688,14 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
             trade.outcome_label = "DATA_BLOCKED"
             trade.lesson_learned = "Daily execution order could not be constructed from the frozen entry geometry."
             return {"status": "REJECTED", "trade_id": trade.id, "ticker": trade.ticker, "reason": "unsupported_execution_geometry"}
+        edge = self.cost_adjusted_edge_status(trade, request, condition)
+        trade.execution_costs = {**dict(trade.execution_costs or {}), "pre_trade_edge": edge}
+        if not edge["valid"]:
+            trade.status = "SKIPPED"
+            trade.outcome_label = "EDGE_DESTROYED_BY_COSTS"
+            trade.lesson_learned = edge["explanation"]
+            self.append_event_once(db, trade, "EDGE_DESTROYED_BY_COSTS", edge["explanation"], payload=edge)
+            return {"status": "REJECTED", "trade_id": trade.id, "ticker": trade.ticker, "reason": "non_positive_net_expectancy", "edge": edge}
         order = execution.submit(
             db,
             request,
@@ -698,6 +706,54 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
         bars = self.daily_execution_bars(db, trade.ticker, order.decision_timestamp)
         result = execution.process_order(db, order, bars, now=max((bar.timestamp for bar in bars), default=datetime.utcnow()))
         return self.project_daily_execution_result(db, game, trade, order, result, condition)
+
+    def cost_adjusted_edge_status(
+        self,
+        trade: LiveForwardPaperTrade,
+        request: ExecutionOrderRequest,
+        condition: dict[str, Any],
+    ) -> dict[str, Any]:
+        reference = safe_float(condition.get("latest_price"), request.theoretical_price)
+        stop = safe_float(trade.stop_loss or trade.invalidation_level)
+        target = safe_float(trade.target_1)
+        risk_per_share = reference - stop
+        reward_per_share = target - reference
+        reward_to_risk = reward_per_share / risk_per_share if risk_per_share > 0 else 0.0
+        confidence = max(0.0, min(1.0, safe_float(trade.confidence) / 100.0))
+        plan = (trade.frozen_decision_payload or {}).get("trade_plan") or {}
+        historical = safe_float(plan.get("historical_setup_reliability"), -1.0)
+        historical_sample = int(safe_float(plan.get("historical_sample_size")))
+        if historical >= 0 and historical_sample >= 30:
+            historical_probability = historical / 100.0 if historical > 1 else historical
+            probability = confidence * 0.6 + max(0.0, min(1.0, historical_probability)) * 0.4
+            probability_source = "confidence_plus_historical_reliability"
+        else:
+            probability = max(0.0, confidence - 0.03)
+            probability_source = "confidence_with_insufficient_history_penalty"
+        liquidity = safe_float((trade.frozen_decision_payload or {}).get("liquidity_context", {}).get("liquidity_score"), 70.0)
+        liquidity_penalty_bps = max(0.0, 100.0 - min(100.0, liquidity)) * 0.08
+        round_trip_cost_bps = 22.0 + liquidity_penalty_bps + (2.0 if request.currency == request.account_currency else settings.paper_execution_fx_spread_bps * 2)
+        cost_per_share = reference * round_trip_cost_bps / 10_000.0
+        cost_r = cost_per_share / risk_per_share if risk_per_share > 0 else float("inf")
+        gross_expectancy_r = probability * reward_to_risk - (1.0 - probability)
+        net_expectancy_r = gross_expectancy_r - cost_r
+        valid = bool(risk_per_share > 0 and reward_per_share > 0 and net_expectancy_r > 0.0)
+        return {
+            "valid": valid,
+            "probability": round(probability, 6),
+            "probability_source": probability_source,
+            "historical_sample_size": historical_sample,
+            "reward_to_risk": round(reward_to_risk, 6),
+            "round_trip_cost_bps": round(round_trip_cost_bps, 4),
+            "gross_expectancy_r": round(gross_expectancy_r, 6),
+            "cost_r": round(cost_r, 6) if math.isfinite(cost_r) else None,
+            "net_expectancy_r": round(net_expectancy_r, 6) if math.isfinite(net_expectancy_r) else None,
+            "explanation": (
+                "Setup retained positive expectancy after conservative execution costs."
+                if valid
+                else "No trade: estimated expectancy is not positive after execution costs and evidence penalty."
+            ),
+        }
 
     def process_pending_daily_orders(self, db: Session, game: LiveForwardPaperGame) -> dict[str, Any]:
         rows = db.scalars(

@@ -934,6 +934,31 @@ def test_daily_paper_execution_blocks_missing_point_in_time_fx(monkeypatch):
     assert any(row["reason"] == "fx_rate_unavailable" for row in report["phases"]["open_eligible_trades"]["skipped"])
 
 
+def test_cost_adjusted_edge_gate_rejects_zero_expectancy_setup():
+    with setup_db() as db:
+        asset = seed_asset(db)
+        service = LiveForwardPaperTradingService()
+        trade = service.create_candidate(
+            db,
+            candidate(
+                confidence=50.0,
+                entry_type="ABOVE_TRIGGER",
+                trigger_price=102.0,
+                invalidation_level=96.0,
+                target_1=110.0,
+                target_2=115.0,
+            ),
+        )
+        add_price(db, asset, 1, 103.0)
+
+        report = run_lifecycle(service, db)
+        stored = db.get(PaperForwardTrade, trade.id)
+
+    assert stored.status == "SKIPPED"
+    assert stored.outcome_label == "EDGE_DESTROYED_BY_COSTS"
+    assert any(row["reason"] == "non_positive_net_expectancy" for row in report["phases"]["open_eligible_trades"]["skipped"])
+
+
 def test_paper_forward_lifecycle_allows_only_one_open_position_per_ticker():
     with setup_db() as db:
         asset = seed_asset(db)
