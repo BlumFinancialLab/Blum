@@ -1942,6 +1942,16 @@ These changes do not lower the 30 closed-trade copy-readiness threshold and do n
 
 BLUM does not target an impossible 100% winning-trade rate. A robust trading-research system can have controlled losing trades; professional evidence requires positive net expectancy after costs, acceptable drawdown, benchmark-relative performance, calibration, reproducibility and enough forward observations. Copy readiness is an evidence-maturity status, not a guarantee of future profit or permission to deploy real capital.
 
+### Institutional pilot readiness
+
+The Brain snapshot includes a fail-closed `institutional_pilot` projection. It does not execute orders or declare BLUM profitable. It answers whether stored, exact-strategy evidence is mature enough for a future controlled pilot.
+
+The gate requires a promoted strategy, exact replay/forward fingerprint parity, valid benchmark methodology, fresh execution evidence, measured costs and slippage, positive net expectancy and benchmark excess, controlled drawdown and concentration, sufficient market/regime coverage, and the existing strict forward sample thresholds. Missing or zero evidence is never replaced by a favorable fallback.
+
+When eligible, the projected envelope remains bounded to 5% of designated capital, 0.25% risk per trade, 1% aggregate open risk, 0.5% correlated-theme risk and five simultaneous positions. Stale evidence, methodology failure, persistence/runtime degradation, non-positive edge, excessive drawdown, excessive open risk, fingerprint mismatch or strategy degradation activates the kill switch. This is an auditable research gate only; BLUM still has no broker execution path.
+
+Evidence production is accelerated without lowering gates. The adaptive replay controller allocates bounded experiment slots across promotion-frontier candidates, failure replay, coverage gaps and broad exploration. Unchanged candidates rotate after repeated stalled slices, while random coverage is preserved to reduce selection bias.
+
 ## Limitations
 
 - Public RSS, Google News RSS search, Yahoo and Stooq are demo-grade public data sources, not licensed institutional feeds.

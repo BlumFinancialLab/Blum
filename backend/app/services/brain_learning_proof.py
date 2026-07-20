@@ -251,8 +251,12 @@ def _institutional_pilot_proof(
         data_quality_available=copy_summary.get("data_quality_available"),
         runtime_healthy=True,
         persistence_healthy=True,
-        net_expectancy=_number(copy_summary.get("net_expectancy")) or _number(trading_proof.get("expectancy_r")),
-        benchmark_excess=_number(copy_summary.get("benchmark_excess")) or _number(trading_proof.get("benchmark_excess_pct")),
+        net_expectancy=_first_present_number(
+            copy_summary.get("net_expectancy"), trading_proof.get("expectancy_r")
+        ),
+        benchmark_excess=_first_present_number(
+            copy_summary.get("benchmark_excess"), trading_proof.get("benchmark_excess_pct")
+        ),
         evidence_max_drawdown_pct=_number(copy_summary.get("max_drawdown")),
         replay_forward_decay_pct=_number(copy_summary.get("replay_forward_decay_pct")),
         ticker_count=_integer_or_none(copy_summary.get("ticker_count")),
@@ -497,6 +501,14 @@ def _number(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return round(number, 4)
+
+
+def _first_present_number(*values: Any) -> float | None:
+    for value in values:
+        parsed = _number(value)
+        if parsed is not None:
+            return parsed
+    return None
 
 
 def _iso(value: Any) -> str | None:

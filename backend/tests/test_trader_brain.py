@@ -23,12 +23,18 @@ from app.models import (
     TradingIntelligenceMetric,
 )
 from app.services.trader_brain import TRADER_BRAIN_FEATURE_SET, TRADER_BRAIN_VERSION, TraderBrainService
+from app.services.brain_learning_proof import _first_present_number
 
 
 def setup_db() -> Session:
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
     return Session(engine)
+
+
+def test_pilot_projection_preserves_observed_zero_instead_of_using_fallback():
+    assert _first_present_number(0.0, 2.5) == 0.0
+    assert _first_present_number(None, 2.5) == 2.5
 
 
 def test_brain_snapshot_is_startup_safe_and_does_not_call_heavy_readiness_services(monkeypatch):
