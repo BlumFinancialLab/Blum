@@ -61,9 +61,15 @@ class ReplayExecutionModel:
     def profile(self, *, market: str, asset_type: str, liquidity_score: float, session: str = "regular") -> ExecutionCostProfile:
         market_key = (market or "").upper()
         europe = market_key not in {"USA", "US", "UNITED STATES"}
-        etf = (asset_type or "").lower() == "etf"
+        asset_type_key = (asset_type or "").lower()
+        etf = asset_type_key == "etf"
+        forex = market_key in {"FOREX", "FX", "CURRENCY"} or asset_type_key in {"forex", "fx", "currency"}
         liquid = liquidity_score >= 70
-        if etf and liquid:
+        if forex and liquid:
+            base = (1.0, 0.6, 0.0, 0.2, 0.2, "forex_major_liquid")
+        elif forex:
+            base = (3.0, 1.5, 0.0, 1.5, 0.5, "forex_standard")
+        elif etf and liquid:
             base = (1.2, 0.8, 0.2, 0.2, 0.5, "liquid_etf")
         elif not europe and liquid:
             base = (1.5, 1.0, 0.2, 0.3, 0.8, "us_liquid_large_cap")

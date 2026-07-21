@@ -30,7 +30,7 @@ from app.models import (
 from app.services.intraday_contracts import PAPER_FORWARD_INTRADAY, PAPER_FORWARD_INTRADAY_EXPERIMENTAL
 from app.services.executable_strategy import ExecutableStrategySpec, canonical_strategy_spec
 from app.services.intraday_market_data import StrictIntradayDataGateway
-from app.services.intraday_opportunity import IntradayPortfolioState, BlumIntradayOpportunityEngine
+from app.services.intraday_opportunity import IntradayPortfolioState, BlumIntradayOpportunityEngine, session_name
 from app.services.intraday_paper_engine import (
     BlumIntradayPaperEngine,
     IntradayPaperLearningService,
@@ -41,6 +41,7 @@ from app.services.intraday_paper_engine import (
 )
 from app.services.live_forward_paper_trading import LiveForwardPaperTradingService
 from app.services.promoted_strategy_registry import BlumPromotedStrategyRegistry
+from app.services.replay_execution import ReplayExecutionModel
 from app.services import realtime
 from app.services import intraday_paper_engine as intraday_module
 from app.engine.brain.trader_brain import TraderBrainService
@@ -833,6 +834,49 @@ def test_intraday_discovery_allows_gateway_to_hydrate_assets_without_existing_on
         )._discover_assets(db)
 
     assert discovered == [asset]
+
+
+def test_intraday_discovery_includes_stored_forex_assets(monkeypatch):
+    class StubRegistry:
+        def __init__(self, *, agents):
+            self.agents = agents
+
+        def discover(self, db):
+            return SimpleNamespace(
+                available_agents=[
+                    SimpleNamespace(
+                        agent_name="ForexDeskAgent",
+                        benchmark="UUP",
+                        _eligible_assets=[asset],
+                    )
+                ]
+            )
+
+    with setup_db() as db:
+        asset = seed_asset(db, ticker="EURUSD=X", market="Forex")
+        asset.asset_type = "Forex"
+        asset.category = "Currency"
+        monkeypatch.setattr(intraday_module, "MarketDeskRegistry", StubRegistry)
+        discovered = BlumIntradayPaperEngine(
+            now_provider=lambda: NOW,
+            refresh_missing=False,
+        )._discover_assets(db)
+
+    assert discovered == [asset]
+
+
+def test_forex_intraday_session_and_execution_costs_are_supported():
+    profile = ReplayExecutionModel().profile(
+        market="FOREX",
+        asset_type="Forex",
+        liquidity_score=85.0,
+        session=session_name("FOREX", 23),
+    )
+
+    assert session_name("FOREX", 0) == "regular"
+    assert session_name("FOREX", 23) == "regular"
+    assert profile.profile_name == "forex_major_liquid"
+    assert 0 < profile.total_round_trip_bps < 10
 
 
 def test_intraday_command_is_post_only_and_settings_are_bounded():

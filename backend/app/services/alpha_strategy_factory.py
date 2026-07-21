@@ -14,6 +14,7 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
 from app.models import (
+    Asset,
     HyperbolicReplayTrade,
     ReplayStrategyValidation,
     StrategyCandidateVariant,
@@ -474,6 +475,13 @@ class AlphaStrategyFactory:
         windows = split_windows(returns, 3)
         tickers = sorted({row.ticker for row in rows if row.ticker})
         markets = sorted({row.market for row in rows if row.market})
+        asset_classes = sorted(
+            {
+                str(value)
+                for value in db.scalars(select(Asset.asset_type).where(Asset.ticker.in_(tickers))).all()
+                if value
+            }
+        ) if tickers else []
         regimes = sorted({str((row.decision_payload or {}).get("regime") or "unknown") for row in rows})
         pnl_by_asset: dict[str, float] = defaultdict(float)
         for row in rows:
@@ -522,7 +530,7 @@ class AlphaStrategyFactory:
             "data_quality_score": quality,
             "complexity": candidate.complexity,
             "timeframe_stack": list(candidate.timeframe_stack or []),
-            "supported_asset_classes": ["Stock", "ETF"],
+            "supported_asset_classes": asset_classes or ["Stock", "ETF"],
             "entry_rules": {"trigger": (candidate.specification_json or {}).get("entry_rule")},
             "stop_rules": {"method": (candidate.specification_json or {}).get("stop_rule")},
             "target_rules": {"method": (candidate.specification_json or {}).get("target_rule")},

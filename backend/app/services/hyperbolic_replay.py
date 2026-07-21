@@ -44,6 +44,8 @@ BENCHMARK_BY_MARKET = {
     "GERMANY": "FEZ",
     "FRANCE": "FEZ",
     "EUROPE": "FEZ",
+    "FOREX": "UUP",
+    "FX": "UUP",
 }
 
 

@@ -234,7 +234,7 @@ class BlumIntradayPaperEngine:
         ranked: list[Asset] = []
         seen: set[int] = set()
         for agent in discovery.available_agents:
-            if agent.agent_name not in {"WallStreetAgent", "SP500Agent", "NasdaqAgent", "DowJonesAgent", "Russell2000Agent", "FTSEMIBAgent", "DAXAgent", "CAC40Agent", "ETFDeskAgent"}:
+            if agent.agent_name not in {"WallStreetAgent", "SP500Agent", "NasdaqAgent", "DowJonesAgent", "Russell2000Agent", "FTSEMIBAgent", "DAXAgent", "CAC40Agent", "ETFDeskAgent", "ForexDeskAgent"}:
                 continue
             for asset in list(getattr(agent, "_eligible_assets", None) or []):
                 if asset.id in seen:
@@ -983,6 +983,9 @@ def intraday_snapshot_summary(db: Session, *, now: datetime | None = None) -> di
 def desk_and_benchmark(asset: Asset) -> tuple[str, str]:
     country = normalize_market(asset.country or "")
     exchange = str(asset.exchange or "").upper()
+    asset_type = str(asset.asset_type or asset.category or "").upper()
+    if country == "FOREX" or "FOREX" in asset_type or "CURRENCY" in asset_type:
+        return "ForexDeskAgent", "UUP"
     if country == "USA" and "NASDAQ" in exchange:
         return "NasdaqAgent", "QQQ"
     if country == "USA":

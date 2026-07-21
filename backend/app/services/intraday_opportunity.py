@@ -215,6 +215,8 @@ class BlumIntradayOpportunityEngine:
 
 def session_name(market: str, utc_hour: int) -> str:
     key = str(market or "").upper()
+    if key in {"FOREX", "FX", "CURRENCY"}:
+        return "regular"
     if key in {"USA", "US", "UNITED STATES"}:
         return "regular" if 13 <= utc_hour <= 20 else "closed"
     if key in {"ITALY", "GERMANY", "FRANCE", "EUROPE"}:
