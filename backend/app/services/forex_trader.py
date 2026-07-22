@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timedelta
 from hashlib import sha256
 import json
 import logging
+from math import ceil
 import os
 import subprocess
 import time
@@ -215,6 +216,10 @@ class BlumForexTraderCore:
         macro = self.macro.analyze(market)
         proposal = self.scalper.propose(market, context, price_action, macro, strategy)
         objections = self.contrarian.challenge(market, proposal, context, macro, strategy)
+        proposal = replace(
+            proposal,
+            actionability_status="BLOCKED" if objections.veto else "ACTIONABLE",
+        )
         outputs = serialize_agent_outputs(context=context, price_action=price_action, macro=macro, contrarian=objections)
         return EvaluationOutcome(not objections.veto, proposal, objections.objections, _jsonable(outputs))
 
@@ -693,9 +698,26 @@ class ForexMarketDataRefreshService:
         assets = db.scalars(select(Asset).where(Asset.ticker.in_(tickers), Asset.is_active.is_(True)).order_by(Asset.id)).all()
         if not assets:
             return {"status": "DATA_BLOCKED", "refreshed": [], "blockers": ["NO_FOREX_ASSETS"]}
-        count = min(len(assets), max(1, int(settings.forex_trader_refresh_pairs_per_cycle)))
-        cursor = int(now.timestamp() // 60) % len(assets)
-        selected = [assets[(cursor + index) % len(assets)] for index in range(count)]
+        freshness_budget = max(1, int(settings.forex_trader_freshness_budget_minutes))
+        minimum_required = max(1, ceil(len(assets) / freshness_budget))
+        count = min(
+            len(assets),
+            max(1, int(settings.forex_trader_max_pairs_per_cycle)),
+            max(int(settings.forex_trader_refresh_pairs_per_cycle), minimum_required),
+        )
+        latest_rows = db.execute(
+            select(ReplayMarketBar.asset_id, func.max(ReplayMarketBar.bar_timestamp))
+            .where(
+                ReplayMarketBar.asset_id.in_([asset.id for asset in assets]),
+                ReplayMarketBar.timeframe == "1m",
+            )
+            .group_by(ReplayMarketBar.asset_id)
+        ).all()
+        latest_by_asset = {asset_id: timestamp for asset_id, timestamp in latest_rows}
+        selected = sorted(
+            assets,
+            key=lambda asset: (latest_by_asset.get(asset.id) or datetime.min, asset.id),
+        )[:count]
         results = []
         lookbacks = {
             "1h": timedelta(days=30),
@@ -732,6 +754,9 @@ class ForexMarketDataRefreshService:
             "status": "READY" if any(row["status"] == "READY" for row in results) else "DATA_BLOCKED",
             "refreshed": results,
             "blockers": list(dict.fromkeys(code for row in results for code in row["blockers"])),
+            "freshness_budget_minutes": freshness_budget,
+            "minimum_pairs_required": minimum_required,
+            "pairs_selected": [asset.ticker for asset in selected],
         }
 
 

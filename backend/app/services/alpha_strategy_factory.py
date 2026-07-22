@@ -153,7 +153,9 @@ class StrategyFamilyRegistry:
         )
         canonical = [
             ("intraday_breakout", "all", "all"),
+            ("intraday_breakout", "all", "forex_only"),
             ("intraday_trend", "all", "all"),
+            ("intraday_trend", "all", "forex_only"),
         ]
         remainder = [combination for combination in combinations if combination not in canonical]
         random.Random(int(seed)).shuffle(remainder)

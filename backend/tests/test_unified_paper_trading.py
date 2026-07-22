@@ -119,6 +119,14 @@ def seed_forex_decision(
             "target": 1.11,
             "expected_r": 2.0,
             "confidence": confidence,
+            "confidence_components": {
+                "setup_confidence": 82.0,
+                "data_confidence": 80.0,
+                "strategy_confidence": 44.0,
+                "execution_confidence": 71.0,
+                "decision_confidence": 65.0,
+            },
+            "actionability_status": "BLOCKED" if blockers else "ACTIONABLE",
         },
         evidence_type="PAPER_FORWARD_FOREX",
     )
@@ -156,6 +164,8 @@ def test_forex_confidence_is_normalized_to_dashboard_scale():
 
         assert rows[normalized.id]["confidence"] == 55.0
         assert rows[percent.id]["confidence"] == 74.0
+        assert rows[normalized.id]["confidence_components"]["setup_confidence"] == 82.0
+        assert rows[normalized.id]["actionability_status"] == "BLOCKED"
 
 
 def seed_forex_position(
@@ -252,6 +262,34 @@ def test_projection_combines_standard_and_forex_without_double_counting():
         assert payload["metrics"]["aggregate"]["benchmark_excess"] == 0.03
         assert payload["metrics"]["by_market"]["forex"]["realized_pnl"] == 5.0
         assert payload["metrics"]["by_market"]["standard"]["realized_pnl"] == 10.0
+
+
+def test_visible_projection_reserves_capacity_for_each_market_group():
+    with setup_db() as db:
+        game = seed_game(db)
+        standard = seed_standard_trade(db, game)
+        standard.closed_at = NOW - timedelta(days=2)
+        standard.opened_at = NOW - timedelta(days=2, hours=1)
+        standard.decision_timestamp = NOW - timedelta(days=2, hours=2)
+        cycle = seed_forex_cycle(db)
+        for index in range(60):
+            seed_forex_decision(
+                db,
+                cycle,
+                uid=f"fx-volume-{index}",
+                pair="EURUSD=X",
+                status="REJECTED",
+                blockers=["STRATEGY_NOT_READY"],
+                confidence=0.55,
+            )
+        db.commit()
+
+        payload = UnifiedPaperTradingProjectionService().build(db, limit=50)
+
+        assert len(payload["trades"]) == 50
+        assert f"paper:{standard.id}" in {row["trade_id"] for row in payload["trades"]}
+        assert any(row["market_group"] == "forex" for row in payload["trades"])
+        assert payload["pagination"]["total"] == 61
 
 
 def test_open_forex_position_affects_only_unrealized_metrics():

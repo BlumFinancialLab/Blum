@@ -1992,10 +1992,12 @@ The execution simulator uses directional bid/ask fills, spread, slippage,
 commission, latency, margin, partial fills, gap-through stops and overnight
 swap. It never connects to a broker and never sends real orders.
 
-The isolated scheduler runs one bounded cycle per minute. It rotates one pair
-per cycle and hydrates its complete `1h/15m/5m/1m` stack, while replay workers
-continue deeper research independently. It manages open positions even while
-paused, and persists a heartbeat and idempotent cycle key.
+The isolated scheduler runs one bounded cycle per minute. It refreshes the
+stalest pairs first and dynamically covers at least the configured freshness
+window (four of twelve pairs per minute with the default three-minute budget),
+hydrating each selected pair's complete `1h/15m/5m/1m` stack. Replay workers
+continue deeper research independently. The scheduler manages open positions
+even while paused and persists a heartbeat and idempotent cycle key.
 Historical replay, walk-forward validation and paper-forward Forex evidence are
 kept logically and physically separate.
 
@@ -2012,6 +2014,7 @@ learning or execution. Explicit controls are POST-only:
 Important settings include `BLUM_FOREX_TRADER_ENABLED`,
 `BLUM_FOREX_TRADER_MINUTES`, `BLUM_FOREX_TRADER_MAX_PAIRS_PER_CYCLE`,
 `BLUM_FOREX_TRADER_REFRESH_PAIRS_PER_CYCLE`,
+`BLUM_FOREX_TRADER_FRESHNESS_BUDGET_MINUTES`,
 `BLUM_FOREX_RISK_PER_TRADE_PERCENT`, `BLUM_FOREX_DAILY_LOSS_LIMIT_PERCENT`,
 `BLUM_FOREX_MAX_OPEN_POSITIONS`, `BLUM_FOREX_ALPHA_MIN_FORWARD_TRADES`,
 `BLUM_FOREX_NEWS_BLOCK_BEFORE_MINUTES` and
@@ -2021,6 +2024,14 @@ Forex positions. Alpha eligibility requires at least 100 closed forward Forex
 trades plus positive net expectancy, positive benchmark-relative evidence,
 coverage, replay-forward decay, currency concentration and confidence gates.
 Eligibility is evidence maturity, not a profit guarantee.
+
+Forex confidence is a sample-aware analytical score, not an execution bypass.
+The frozen proposal records setup, timeframe, data, strategy and execution
+confidence separately. A hard blocker such as stale data, strategy immaturity
+or non-positive net edge can reject an order without erasing the useful
+analytical components. The Alpha Strategy Factory always reserves bounded
+research capacity for a Forex `1h/15m/5m/1m` hypothesis, but the existing
+50-sample experimental and 300-sample certification gates remain unchanged.
 
 ### Unified paper-trading evidence
 
@@ -2043,3 +2054,8 @@ paper worker and Forex worker refresh the projection after their own background
 updates. Brain exposes the same aggregate evidence, while Alpha keeps Forex in
 its own `forex_paper_forward` evidence split. None of these GET paths starts a
 scan, lifecycle transition, learning cycle or recalculation.
+
+The Paper Trading page defaults to an `Azioni / ETF` tab and exposes Forex in a
+separate tab. Both views are derived client-side from the same snapshot. The
+projection reserves bounded capacity for each active market group so frequent
+Forex decisions cannot evict all equity rows from the visible journal.

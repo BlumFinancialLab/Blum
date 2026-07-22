@@ -695,6 +695,21 @@ def test_paper_trading_page_uses_single_snapshot_and_readiness_states():
     assert "Developer payload" in text
 
 
+def test_paper_trading_page_separates_equity_and_forex_from_one_snapshot():
+    page = Path(__file__).resolve().parents[2] / "frontend" / "app" / "paper-trading" / "page.tsx"
+    text = page.read_text()
+
+    assert 'useState<PaperMarketTab>("equities")' in text
+    assert 'label: "Azioni / ETF"' in text
+    assert 'label: "Forex"' in text
+    assert 'row.market_group === "forex"' in text
+    assert "const visibleTrades = useMemo" in text
+    assert "Setup confidence" in text
+    assert "Data confidence" in text
+    assert "Strategy confidence" in text
+    assert text.count("api.traderPaperTrading(50)") == 1
+
+
 def test_paper_trading_summary_does_not_prefer_narrow_zero_counts_over_terminal_totals():
     page = Path(__file__).resolve().parents[2] / "frontend" / "app" / "paper-trading" / "page.tsx"
     text = page.read_text()

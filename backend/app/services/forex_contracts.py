@@ -245,6 +245,8 @@ class ForexTradeProposal:
     conflicting_evidence: tuple[str, ...]
     reason_to_trade: str | None
     reason_to_abstain: str | None
+    confidence_components: dict[str, float] = field(default_factory=dict)
+    actionability_status: str = "UNASSESSED"
 
 
 @dataclass(frozen=True)

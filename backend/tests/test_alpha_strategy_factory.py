@@ -63,6 +63,17 @@ def test_intraday_strategy_factory_generates_forex_specific_hypotheses() -> None
     assert all(row["benchmark_ticker"] == "UUP" for row in forex_rows)
 
 
+def test_small_factory_budget_reserves_a_forex_replay_hypothesis() -> None:
+    rows = StrategyFamilyRegistry().variants("intraday_scalping", max_variants=2, seed=7)
+    forex_rows = [row for row in rows if row["market_filter"] == "forex_only"]
+
+    assert len(rows) == 2
+    assert len(forex_rows) == 1
+    assert forex_rows[0]["timeframe_stack"] == ["1h", "15m", "5m", "1m"]
+    assert "forex" in forex_rows[0]["asset_class"]
+    assert forex_rows[0]["benchmark_ticker"] == "UUP"
+
+
 def test_block_bootstrap_interval_is_seeded_and_conservative() -> None:
     values = [0.15, 0.25, 0.1, 0.35, -0.05, 0.3] * 60
 

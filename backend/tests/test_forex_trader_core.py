@@ -7,7 +7,7 @@ from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import sessionmaker
 
 from app.core.database import Base
-from app.models import Asset, ForexDecision, ForexLearningEvidence, ForexPosition, ForexTraderCycle
+from app.models import Asset, ForexDecision, ForexLearningEvidence, ForexPosition, ForexTraderCycle, ReplayMarketBar
 from app.services.forex_agents import (
     BlumForexContrarianRiskAgent,
     BlumForexMacroAgent,
@@ -166,6 +166,40 @@ def test_spread_news_and_stale_data_block_trades():
     assert "NEWS_WINDOW_BLOCKED" not in outside_window.blockers
 
 
+def test_stale_veto_preserves_analytical_confidence_components():
+    outcome = BlumForexTraderCore().evaluate_input(
+        market_input(stale_1m=True),
+        strategy=strategy(),
+    )
+
+    assert outcome.approved is False
+    assert "STALE_DATA" in outcome.blockers
+    assert outcome.proposal.actionability_status == "BLOCKED"
+    assert outcome.proposal.confidence > 0
+    assert outcome.proposal.confidence_components["setup_confidence"] == pytest.approx(82.0)
+    assert outcome.proposal.confidence_components["data_confidence"] == 0.0
+    assert outcome.proposal.confidence_components["decision_confidence"] > 0.0
+
+
+def test_strategy_confidence_is_sample_aware_without_changing_actionability_gate():
+    inputs = market_input()
+    mature = strategy()
+    thin = ForexStrategyEvidence(
+        strategy_id="thin-fx-breakout",
+        readiness=ForexReadiness.TRAINING_SIGNAL,
+        sample_size=5,
+        net_expectancy_r=0.25,
+    )
+
+    mature_outcome = BlumForexTraderCore().evaluate_input(inputs, strategy=mature)
+    thin_outcome = BlumForexTraderCore().evaluate_input(inputs, strategy=thin)
+
+    assert mature_outcome.proposal.confidence_components["strategy_confidence"] > thin_outcome.proposal.confidence_components["strategy_confidence"]
+    assert thin_outcome.approved is False
+    assert "STRATEGY_NOT_READY" in thin_outcome.blockers
+    assert thin_outcome.proposal.actionability_status == "BLOCKED"
+
+
 def test_risk_netting_daily_loss_and_max_positions():
     engine = BlumForexPortfolioRiskEngine()
     proposal = BlumForexTraderCore().evaluate_input(market_input(), strategy=strategy()).proposal
@@ -251,6 +285,65 @@ def test_rotating_market_refresh_hydrates_the_complete_strict_stack(db, monkeypa
     assert result["status"] == "READY"
     assert calls == ["1h", "15m", "5m", "1m"]
     assert [row["timeframe"] for row in result["refreshed"][0]["timeframes"]] == calls
+
+
+def test_forex_refresh_covers_freshness_budget_and_prioritizes_oldest_pairs(db, monkeypatch):
+    assets = []
+    for index, pair in enumerate(pair_config.all()):
+        asset = Asset(
+            ticker=pair.ticker,
+            name=pair.display,
+            category="Forex",
+            sector="Currencies",
+            country="Global",
+            asset_type="Forex",
+            is_active=True,
+        )
+        db.add(asset)
+        db.flush()
+        assets.append(asset)
+        db.add(
+            ReplayMarketBar(
+                asset_id=asset.id,
+                source_symbol=asset.ticker,
+                normalized_symbol=asset.ticker,
+                market="FOREX",
+                timeframe="1m",
+                bar_timestamp=NOW - timedelta(minutes=12 - index),
+                open=1.0,
+                high=1.0,
+                low=1.0,
+                close=1.0,
+                volume=1.0,
+                provider="test",
+                acquired_at=NOW,
+                data_quality_score=95.0,
+                source_metadata={},
+            )
+        )
+    db.commit()
+    refreshed_assets = []
+
+    class Coverage:
+        status = "READY"
+        rows_available = 40
+        provider = "test"
+        blockers = []
+
+    service = ForexMarketDataRefreshService()
+    monkeypatch.setattr(
+        service.data,
+        "ensure_coverage",
+        lambda db, *, asset, timeframe, start, end: refreshed_assets.append(asset.ticker) or Coverage(),
+    )
+
+    result = service.refresh(db, now=NOW)
+
+    selected = list(dict.fromkeys(refreshed_assets))
+    assert len(selected) >= 4
+    assert selected[:4] == [asset.ticker for asset in assets[:4]]
+    assert result["freshness_budget_minutes"] == 3
+    assert result["minimum_pairs_required"] == 4
 
 
 def test_no_trade_persists_append_only_learning_and_snapshot_is_read_only(db):

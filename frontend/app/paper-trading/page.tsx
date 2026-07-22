@@ -38,6 +38,13 @@ type PaperForwardTrade = Record<string, any> & {
   status?: string;
 };
 
+type PaperMarketTab = "equities" | "forex";
+
+const PAPER_MARKET_TABS: Array<{ id: PaperMarketTab; label: string }> = [
+  { id: "equities", label: "Azioni / ETF" },
+  { id: "forex", label: "Forex" },
+];
+
 type DetailState = {
   trade: PaperForwardTrade | null;
   events: any[];
@@ -96,6 +103,7 @@ export default function PaperTradingPage() {
   const [snapshotEnvelope, setSnapshotEnvelope] = useState<any | null>(null);
   const [error, setError] = useState("");
   const [slowLoad, setSlowLoad] = useState(false);
+  const [marketTab, setMarketTab] = useState<PaperMarketTab>("equities");
   const [selectedTrade, setSelectedTrade] = useState<PaperForwardTrade | null>(null);
   const [detailState, setDetailState] = useState<DetailState>({ trade: null, events: [], loading: false, error: "" });
 
@@ -119,11 +127,15 @@ export default function PaperTradingPage() {
 
   const snapshot = useMemo(() => normalizeSnapshot(snapshotEnvelope), [snapshotEnvelope]);
   const trades = useMemo(() => mergeTrades(snapshot), [snapshot]);
-  const candidates = useMemo(() => filterTrades(trades, CANDIDATE_STATUSES), [trades]);
-  const openPositions = useMemo(() => filterTrades(trades, OPEN_STATUSES), [trades]);
-  const closedTrades = useMemo(() => filterTrades(trades, CLOSED_STATUSES), [trades]);
-  const readiness = useMemo(() => deriveReadiness(snapshotEnvelope, snapshot, trades, candidates, openPositions), [snapshotEnvelope, snapshot, trades, candidates, openPositions]);
-  const blockers = useMemo(() => deriveBlockers(readiness, snapshot, candidates, openPositions, trades), [readiness, snapshot, candidates, openPositions, trades]);
+  const visibleTrades = useMemo(
+    () => trades.filter((row) => marketTab === "forex" ? row.market_group === "forex" : row.market_group !== "forex"),
+    [trades, marketTab],
+  );
+  const candidates = useMemo(() => filterTrades(visibleTrades, CANDIDATE_STATUSES), [visibleTrades]);
+  const openPositions = useMemo(() => filterTrades(visibleTrades, OPEN_STATUSES), [visibleTrades]);
+  const closedTrades = useMemo(() => filterTrades(visibleTrades, CLOSED_STATUSES), [visibleTrades]);
+  const readiness = useMemo(() => deriveReadiness(snapshotEnvelope, snapshot, visibleTrades, candidates, openPositions), [snapshotEnvelope, snapshot, visibleTrades, candidates, openPositions]);
+  const blockers = useMemo(() => deriveBlockers(readiness, snapshot, candidates, openPositions, visibleTrades), [readiness, snapshot, candidates, openPositions, visibleTrades]);
   const latestLessons = useMemo(() => deriveLessons(snapshot, closedTrades), [snapshot, closedTrades]);
 
   const openReplay = (trade: PaperForwardTrade) => {
@@ -207,6 +219,24 @@ export default function PaperTradingPage() {
         <MarketEvidenceCard label="Forex" metrics={marketMetrics.forex} counts={snapshot.counts?.by_market?.forex} />
       </section>
 
+      <section className="radar-tabs" style={{ marginTop: 12 }} role="tablist" aria-label="Paper trading market">
+        {PAPER_MARKET_TABS.map((tab) => {
+          const count = trades.filter((row) => tab.id === "forex" ? row.market_group === "forex" : row.market_group !== "forex").length;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={marketTab === tab.id}
+              className={marketTab === tab.id ? "active" : ""}
+              onClick={() => setMarketTab(tab.id)}
+            >
+              {tab.label} <span>{count}</span>
+            </button>
+          );
+        })}
+      </section>
+
       <section className="paper-forward-grid">
         <BloombergPanel title="Paper Forward Status" value={readiness} subtitle="A valid no-trade state is better than fabricated activity.">
           <ReadinessStateCard state={readiness} explanation={snapshot.explanation} compact />
@@ -235,7 +265,7 @@ export default function PaperTradingPage() {
       </section>
 
       <DecisionSection
-        title="Today's Candidates"
+        title={`${marketTab === "forex" ? "Forex" : "Azioni / ETF"} Candidates`}
         value={`${candidates.length} candidates`}
         subtitle="BLUM has not opened these trades unless the frozen entry condition is met."
         rows={candidates}
@@ -265,8 +295,8 @@ export default function PaperTradingPage() {
       />
 
       <section className="grid-2" style={{ marginTop: 12 }}>
-        <BloombergPanel title="Trade Journal" value={`${trades.length} rows`} subtitle="Compact ledger. Trade replay is loaded only when a row is opened.">
-          {trades.length ? <TradeJournal rows={trades.slice(0, 50)} onReplay={openReplay} selectedId={selectedTrade?.trade_id} /> : <ReadinessStateCard state={readiness} compact />}
+        <BloombergPanel title="Trade Journal" value={`${visibleTrades.length} rows`} subtitle="Compact ledger. Trade replay is loaded only when a row is opened.">
+          {visibleTrades.length ? <TradeJournal rows={visibleTrades.slice(0, 50)} onReplay={openReplay} selectedId={selectedTrade?.trade_id} /> : <ReadinessStateCard state={readiness} compact />}
         </BloombergPanel>
 
         <BloombergPanel title="Trade Detail" value={selectedTrade?.ticker ?? "lazy"} subtitle="Frozen decision, lifecycle and event log load only after opening a trade.">
@@ -331,6 +361,7 @@ function DecisionCard({ row, variant, onReplay }: { row: PaperForwardTrade; vari
   const status = normalizeStatus(row.status);
   const frozen = row.frozen_decision_payload ?? {};
   const plan = frozen.trade_plan ?? {};
+  const confidenceComponents = row.confidence_components ?? {};
   const price = row.current_price ?? row.entry_price;
   return (
     <article className={`paper-forward-card ${statusToneClass(status)}`}>
@@ -361,6 +392,11 @@ function DecisionCard({ row, variant, onReplay }: { row: PaperForwardTrade; vari
           <span>Entry trigger: {row.entry_trigger ?? plan.entry_trigger ?? row.confirmation_condition ?? plan.confirmation_condition ?? "not exposed in compact row"}</span>
           <span>For: {displayCompact(reasonForTrade(row))}</span>
           <span>Against: {displayCompact(reasonAgainstTrade(row))}</span>
+          {row.market_group === "forex" && (
+            <span>
+              Setup confidence {formatNumber(confidenceComponents.setup_confidence)} | Data confidence {formatNumber(confidenceComponents.data_confidence)} | Strategy confidence {formatNumber(confidenceComponents.strategy_confidence)}
+            </span>
+          )}
         </div>
       )}
 

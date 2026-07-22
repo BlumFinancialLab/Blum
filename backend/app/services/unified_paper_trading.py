@@ -114,7 +114,7 @@ class UnifiedPaperTradingProjectionService:
         }
         aggregate = self._summarize(rows)
         warnings = self._warnings(aggregate, by_market)
-        visible = rows[:limit]
+        visible = self._balanced_visible_rows(rows, limit)
         return {
             "status": "READY" if rows else "NO_DECISIONS",
             "generated_at": datetime.utcnow().isoformat(),
@@ -143,6 +143,32 @@ class UnifiedPaperTradingProjectionService:
             "evidence_policy": "Observed source records only; open and rejected decisions never contribute realized P/L.",
             "computation_duration_ms": round((perf_counter() - started) * 1000, 3),
         }
+
+    @staticmethod
+    def _balanced_visible_rows(rows: list[dict], limit: int) -> list[dict]:
+        """Keep a noisy high-frequency market from evicting other journals."""
+        buckets = {
+            market: [row for row in rows if row.get("market_group") == market]
+            for market in ("standard", "intraday", "forex")
+        }
+        nonempty = [bucket for bucket in buckets.values() if bucket]
+        if len(nonempty) <= 1:
+            return rows[:limit]
+        quota = max(1, limit // len(nonempty))
+        selected: list[dict] = []
+        selected_ids: set[str] = set()
+        for bucket in nonempty:
+            for row in bucket[:quota]:
+                selected.append(row)
+                selected_ids.add(str(row.get("trade_id")))
+        for row in rows:
+            if len(selected) >= limit:
+                break
+            trade_id = str(row.get("trade_id"))
+            if trade_id not in selected_ids:
+                selected.append(row)
+                selected_ids.add(trade_id)
+        return sorted(selected[:limit], key=lambda row: row.get("sort_timestamp") or "", reverse=True)
 
     def publish(self, db: Session, *, limit: int = 50) -> dict:
         payload = self.build(db, limit=limit)
@@ -382,6 +408,8 @@ class UnifiedPaperTradingProjectionService:
             "blockers": [],
             "confidence": _forex_confidence_score(proposal.get("confidence")),
             "confidence_raw": _float(proposal.get("confidence")),
+            "confidence_components": dict(proposal.get("confidence_components") or {}),
+            "actionability_status": proposal.get("actionability_status") or ("ACTIONABLE" if not decision or not decision.blockers else "BLOCKED"),
             "sniper_score": _float(proposal.get("sniper_score")),
             "evidence_type": (evidence.evidence_type if evidence else None) or (decision.evidence_type if decision else "PAPER_FORWARD_FOREX"),
             "costs": {
@@ -449,6 +477,8 @@ class UnifiedPaperTradingProjectionService:
             "blockers": decision.blockers or [],
             "confidence": _forex_confidence_score(proposal.get("confidence")),
             "confidence_raw": _float(proposal.get("confidence")),
+            "confidence_components": dict(proposal.get("confidence_components") or {}),
+            "actionability_status": proposal.get("actionability_status") or ("BLOCKED" if decision.blockers else "UNASSESSED"),
             "sniper_score": _float(proposal.get("sniper_score")),
             "evidence_type": decision.evidence_type,
             "costs": {},

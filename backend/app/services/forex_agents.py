@@ -136,6 +136,32 @@ class BlumForexScalpingExpertAgent:
         aligned = price_action.direction == context.directional_bias and price_action.direction in {ForexDirection.LONG, ForexDirection.SHORT}
         eligible = strategy.readiness in {strategy.readiness.PAPER_TRADE_ELIGIBLE, strategy.readiness.ALPHA_SIGNAL_ELIGIBLE}
         direction = price_action.direction if aligned and eligible and net > 0 else ForexDirection.ABSTAIN
+        setup_confidence = max(0.0, min(1.0, price_action.confidence))
+        timeframe_confidence = 1.0 if aligned else 0.2
+        data_confidence = max(0.0, min(1.0, context.confidence))
+        expectancy_confidence = max(0.0, min(1.0, strategy.net_expectancy_r + 0.55))
+        sample_weight = max(0.0, min(1.0, strategy.sample_size / 300.0))
+        strategy_confidence = 0.35 + sample_weight * (expectancy_confidence - 0.35)
+        execution_confidence = max(
+            0.0,
+            min(1.0, net / max(price_action.expected_gross_pips, 1e-9)),
+        )
+        decision_confidence = (
+            setup_confidence * 0.30
+            + timeframe_confidence * 0.20
+            + data_confidence * 0.20
+            + strategy_confidence * 0.20
+            + execution_confidence * 0.10
+        )
+        confidence_components = {
+            "setup_confidence": round(setup_confidence * 100.0, 6),
+            "timeframe_confidence": round(timeframe_confidence * 100.0, 6),
+            "data_confidence": round(data_confidence * 100.0, 6),
+            "strategy_confidence": round(strategy_confidence * 100.0, 6),
+            "execution_confidence": round(execution_confidence * 100.0, 6),
+            "decision_confidence": round(decision_confidence * 100.0, 6),
+            "strategy_sample_size": float(strategy.sample_size),
+        }
         return ForexTradeProposal(
             pair=market.pair,
             direction=direction,
@@ -151,11 +177,13 @@ class BlumForexScalpingExpertAgent:
             expected_cost_pips=expected_costs,
             expected_net_pips=net,
             expected_r=net / 5.0,
-            confidence=min(context.confidence, price_action.confidence, max(0.0, strategy.net_expectancy_r + 0.55)),
+            confidence=decision_confidence,
             supporting_evidence=price_action.technical_evidence,
             conflicting_evidence=tuple(item for item in (macro.veto_reason,) if item),
             reason_to_trade="Aligned multi-timeframe setup with positive expected net edge" if direction != ForexDirection.ABSTAIN else None,
             reason_to_abstain=None if direction != ForexDirection.ABSTAIN else "No aligned, eligible positive-net-edge setup",
+            confidence_components=confidence_components,
+            actionability_status="PROPOSED" if direction != ForexDirection.ABSTAIN else "TRAINING_ONLY",
         )
 
 

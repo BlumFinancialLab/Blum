@@ -132,6 +132,7 @@ class Settings(BaseSettings):
     forex_trader_minutes: int = Field(default=1, alias="BLUM_FOREX_TRADER_MINUTES")
     forex_trader_max_pairs_per_cycle: int = Field(default=12, alias="BLUM_FOREX_TRADER_MAX_PAIRS_PER_CYCLE")
     forex_trader_refresh_pairs_per_cycle: int = Field(default=1, alias="BLUM_FOREX_TRADER_REFRESH_PAIRS_PER_CYCLE")
+    forex_trader_freshness_budget_minutes: int = Field(default=3, alias="BLUM_FOREX_TRADER_FRESHNESS_BUDGET_MINUTES")
     forex_risk_per_trade_percent: float = Field(default=0.5, alias="BLUM_FOREX_RISK_PER_TRADE_PERCENT")
     forex_daily_loss_limit_percent: float = Field(default=2.0, alias="BLUM_FOREX_DAILY_LOSS_LIMIT_PERCENT")
     forex_max_open_positions: int = Field(default=4, alias="BLUM_FOREX_MAX_OPEN_POSITIONS")
