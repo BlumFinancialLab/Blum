@@ -101,6 +101,7 @@ def seed_forex_decision(
     pair: str,
     status: str,
     blockers: list[str] | None = None,
+    confidence: float = 74.0,
 ) -> ForexDecision:
     decision = ForexDecision(
         decision_uid=uid,
@@ -117,13 +118,44 @@ def seed_forex_decision(
             "stop": 1.095,
             "target": 1.11,
             "expected_r": 2.0,
-            "confidence": 74.0,
+            "confidence": confidence,
         },
         evidence_type="PAPER_FORWARD_FOREX",
     )
     db.add(decision)
     db.flush()
     return decision
+
+
+def test_forex_confidence_is_normalized_to_dashboard_scale():
+    with setup_db() as db:
+        seed_game(db)
+        cycle = seed_forex_cycle(db)
+        normalized = seed_forex_decision(
+            db,
+            cycle,
+            uid="fx-normalized-confidence",
+            pair="EURUSD=X",
+            status="REJECTED",
+            blockers=["STRATEGY_NOT_READY"],
+            confidence=0.55,
+        )
+        percent = seed_forex_decision(
+            db,
+            cycle,
+            uid="fx-percent-confidence",
+            pair="GBPUSD=X",
+            status="REJECTED",
+            blockers=["NO_NET_EDGE"],
+            confidence=74.0,
+        )
+        db.commit()
+
+        payload = UnifiedPaperTradingProjectionService().build(db)
+        rows = {row["source_trade_id"]: row for row in payload["trades"]}
+
+        assert rows[normalized.id]["confidence"] == 55.0
+        assert rows[percent.id]["confidence"] == 74.0
 
 
 def seed_forex_position(

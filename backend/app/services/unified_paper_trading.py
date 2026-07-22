@@ -33,6 +33,20 @@ def _float(value: Any) -> float | None:
         return None
 
 
+def _forex_confidence_score(value: Any) -> float | None:
+    """Normalize the Forex agent contract (0..1) to the UI contract (0..100).
+
+    Older persisted fixtures and imported decisions may already use the dashboard
+    scale, so values above one are preserved instead of multiplied again.
+    """
+    parsed = _float(value)
+    if parsed is None:
+        return None
+    if 0.0 <= parsed <= 1.0:
+        return round(parsed * 100.0, 6)
+    return parsed
+
+
 def _iso(value: Any) -> str | None:
     return value.isoformat() if value is not None else None
 
@@ -366,7 +380,8 @@ class UnifiedPaperTradingProjectionService:
             "lesson_learned": evidence.lesson if evidence else None,
             "close_reason": position.exit_reason,
             "blockers": [],
-            "confidence": _float(proposal.get("confidence")),
+            "confidence": _forex_confidence_score(proposal.get("confidence")),
+            "confidence_raw": _float(proposal.get("confidence")),
             "sniper_score": _float(proposal.get("sniper_score")),
             "evidence_type": (evidence.evidence_type if evidence else None) or (decision.evidence_type if decision else "PAPER_FORWARD_FOREX"),
             "costs": {
@@ -432,7 +447,8 @@ class UnifiedPaperTradingProjectionService:
             "lesson_learned": evidence.lesson if evidence else None,
             "close_reason": None,
             "blockers": decision.blockers or [],
-            "confidence": _float(proposal.get("confidence")),
+            "confidence": _forex_confidence_score(proposal.get("confidence")),
+            "confidence_raw": _float(proposal.get("confidence")),
             "sniper_score": _float(proposal.get("sniper_score")),
             "evidence_type": decision.evidence_type,
             "costs": {},
