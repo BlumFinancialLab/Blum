@@ -1,11 +1,31 @@
 from __future__ import annotations
 
+import ast
 import os
 from pathlib import Path
 import subprocess
 import sys
 
 from sqlalchemy import create_engine, inspect, text
+
+
+def test_alembic_revision_ids_fit_postgres_version_column():
+    versions_dir = Path(__file__).resolve().parents[1] / "alembic" / "versions"
+    revisions: dict[str, str] = {}
+
+    for migration_path in versions_dir.glob("*.py"):
+        module = ast.parse(migration_path.read_text(encoding="utf-8"))
+        for node in module.body:
+            if not isinstance(node, ast.Assign):
+                continue
+            if not any(isinstance(target, ast.Name) and target.id == "revision" for target in node.targets):
+                continue
+            revision = ast.literal_eval(node.value)
+            revisions[migration_path.name] = revision
+            break
+
+    oversized = {name: revision for name, revision in revisions.items() if len(revision) > 32}
+    assert oversized == {}, f"Revision IDs exceed alembic_version VARCHAR(32): {oversized}"
 
 
 def test_full_migration_chain_reaches_head_on_sqlite(tmp_path):
@@ -51,7 +71,7 @@ def test_full_migration_chain_reaches_head_on_sqlite(tmp_path):
 
     assert required_tables.issubset(tables)
     with engine.connect() as connection:
-        assert connection.execute(text("select version_num from alembic_version")).scalar_one() == "0036_autonomous_forex_alpha_trader"
+        assert connection.execute(text("select version_num from alembic_version")).scalar_one() == "0036_forex_alpha_trader"
 
     downgrade = subprocess.run(
         [sys.executable, "-m", "alembic", "downgrade", "base"],

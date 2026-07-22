@@ -175,11 +175,17 @@ so valid risk-sized orders failed the margin gate. Pair configuration now uses
 explicit named fields. Regression tests require `minimum_lot == 0.01` and the
 correct 5/3 price precision.
 
+Production deployment also exposed a PostgreSQL-specific migration constraint:
+the original revision identifier exceeded `alembic_version.version_num`'s
+32-character limit. The file remains `0036_autonomous_forex_alpha_trader.py`,
+while its revision ID is the compatible `0036_forex_alpha_trader`. The migration
+suite now rejects every oversized revision ID before deployment.
+
 ### Measured verification
 
 - Focused Forex core: `16 passed`.
 - Related replay, runtime and paper suites: `144 passed`.
-- Complete backend suite: `510 passed` in `52.82s`.
+- Complete backend suite: `511 passed` in `50.02s`.
 - Python compilation: passed.
 - Patch whitespace validation: passed.
 - Migration round trip `0035 -> 0036 -> 0035 -> 0036`: passed.

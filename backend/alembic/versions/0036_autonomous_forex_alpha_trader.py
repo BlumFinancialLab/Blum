@@ -1,6 +1,6 @@
 """Add the autonomous paper-only Forex trader core.
 
-Revision ID: 0036_autonomous_forex_alpha_trader
+Revision ID: 0036_forex_alpha_trader
 Revises: 0035_decision_execution_parity
 """
 
@@ -9,7 +9,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 
 
-revision = "0036_autonomous_forex_alpha_trader"
+revision = "0036_forex_alpha_trader"
 down_revision = "0035_decision_execution_parity"
 branch_labels = None
 depends_on = None
