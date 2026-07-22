@@ -15,7 +15,7 @@ SUPPORTED_ENTRY_RULES = {
     "mean_reversion_deviation",
     "pullback_to_mean",
 }
-SUPPORTED_TIMEFRAMES = {"1d", "15m", "5m", "1m"}
+SUPPORTED_TIMEFRAMES = {"1d", "1h", "15m", "5m", "1m"}
 
 
 @dataclass(frozen=True)

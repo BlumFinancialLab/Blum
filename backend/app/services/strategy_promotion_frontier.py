@@ -30,6 +30,28 @@ class StrategyPromotionFrontierService:
     def research_specs(self, db: Session, *, limit: int, seed: int) -> tuple[dict, ...]:
         return tuple(self.research_plan(db, limit=limit, seed=seed)["specs"])
 
+    def priority_specs(
+        self,
+        db: Session,
+        *,
+        market_filter: str,
+        limit: int = 1,
+    ) -> tuple[dict, ...]:
+        """Reserve bounded replay capacity for an explicitly configured market lane."""
+
+        records = [
+            (candidate, self._project(candidate, validation))
+            for candidate, validation in self._candidates(db)
+            if _candidate_market_filter(candidate) == market_filter
+        ]
+        records.sort(key=lambda item: (item[1]["frontier_score"], item[1]["sample_size"]), reverse=True)
+        specs = []
+        for candidate, _ in records[: max(1, int(limit))]:
+            executable = dict((candidate.specification_json or {}).get("executable_strategy") or {})
+            if executable:
+                specs.append(executable)
+        return tuple(specs)
+
     def research_plan(
         self,
         db: Session,
@@ -208,3 +230,11 @@ def _stalled(history: dict | None, current_sample_size: int) -> bool:
         int(history.get("consecutive_no_progress") or 0) >= 3
         and int(history.get("last_sample_size") or 0) >= int(current_sample_size)
     )
+
+
+def _candidate_market_filter(candidate: StrategyCandidateVariant) -> str:
+    specification = dict(candidate.specification_json or {})
+    executable = specification.get("executable_strategy")
+    if isinstance(executable, dict) and executable.get("market_filter"):
+        return str(executable["market_filter"])
+    return str(specification.get("market_filter") or "all")

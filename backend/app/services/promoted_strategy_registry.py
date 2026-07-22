@@ -105,6 +105,8 @@ class BlumPromotedStrategyRegistry:
         deflated_sharpe = number(metrics.get("deflated_sharpe_probability"), 0.0) * 100.0
         derived_walk_forward_score = min(stability, deflated_sharpe) if deflated_sharpe > 0 else stability
         timeframe_stack = tuple(metrics.get("timeframe_stack") or REQUIRED_INTRADAY_TIMEFRAMES)
+        markets = tuple(str(value).upper() for value in (row.markets_json or []))
+        expected_stack = ("1h", "15m", "5m", "1m") if "1h" in timeframe_stack else REQUIRED_INTRADAY_TIMEFRAMES
         if sample_size < settings.replay_min_promotion_samples:
             return None
         overfitting_score = 100.0 if row.overfitting_score is None else float(row.overfitting_score)
@@ -112,9 +114,8 @@ class BlumPromotedStrategyRegistry:
             return None
         if stability < 50.0 or expectancy <= 0.0 or benchmark_excess <= 0.0:
             return None
-        if timeframe_stack != REQUIRED_INTRADAY_TIMEFRAMES:
+        if timeframe_stack != expected_stack:
             return None
-        markets = tuple(str(value).upper() for value in (row.markets_json or []))
         asset_classes = tuple(str(value) for value in (metrics.get("supported_asset_classes") or ["Stock", "ETF"]))
         return PromotedIntradayStrategy(
             validation_id=row.id,
@@ -151,6 +152,8 @@ class BlumPromotedStrategyRegistry:
         data_quality = number(metrics.get("data_quality_score"), 0.0)
         cost_coverage = number(metrics.get("cost_coverage"), 0.0)
         timeframe_stack = tuple(metrics.get("timeframe_stack") or REQUIRED_INTRADAY_TIMEFRAMES)
+        markets = tuple(str(value).upper() for value in (row.markets_json or []))
+        expected_stack = ("1h", "15m", "5m", "1m") if "1h" in timeframe_stack else REQUIRED_INTRADAY_TIMEFRAMES
         if metrics.get("certification_version") != "alpha_strategy_factory_v1":
             return None
         if sample_size < max(30, int(settings.intraday_experimental_min_samples)):
@@ -160,10 +163,9 @@ class BlumPromotedStrategyRegistry:
         overfitting_score = 100.0 if row.overfitting_score is None else float(row.overfitting_score)
         if data_quality < 70.0 or cost_coverage < 1.0 or overfitting_score >= 70.0:
             return None
-        if timeframe_stack != REQUIRED_INTRADAY_TIMEFRAMES:
+        if timeframe_stack != expected_stack:
             return None
         risk_multiplier = max(0.05, min(0.5, float(settings.intraday_experimental_risk_multiplier)))
-        markets = tuple(str(value).upper() for value in (row.markets_json or []))
         asset_classes = tuple(str(value) for value in (metrics.get("supported_asset_classes") or ["Stock", "ETF"]))
         experimental_metrics = {
             **metrics,

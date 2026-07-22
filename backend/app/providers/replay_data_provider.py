@@ -12,8 +12,9 @@ import yfinance as yf
 from app.providers.yfinance_provider import NasdaqHistoricalProvider, StooqProvider, provider_headers
 
 
-REPLAY_TIMEFRAMES = frozenset({"1d", "15m", "5m", "1m"})
+REPLAY_TIMEFRAMES = frozenset({"1d", "1h", "15m", "5m", "1m"})
 INTRADAY_RETENTION_DAYS = {
+    "1h": 729,
     "1m": 7,
     "5m": 59,
     "15m": 59,

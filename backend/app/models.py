@@ -4130,3 +4130,165 @@ class PaperExecutionFill(Base):
     participation_rate: Mapped[float] = mapped_column(Float, default=0.0)
     fill_payload: Mapped[dict] = mapped_column(JsonType, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class ForexTraderCycle(Base):
+    __tablename__ = "forex_trader_cycles"
+    __table_args__ = (
+        UniqueConstraint("cycle_key", name="uq_forex_trader_cycles_key"),
+        Index("ix_forex_cycles_status_started", "status", "started_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    cycle_uid: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    cycle_key: Mapped[str] = mapped_column(String(180), unique=True, index=True)
+    status: Mapped[str] = mapped_column(String(40), default="RUNNING", index=True)
+    session: Mapped[str | None] = mapped_column(String(60), index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    duration_ms: Mapped[float] = mapped_column(Float, default=0.0)
+    pairs_scanned: Mapped[list] = mapped_column(JsonType, default=list)
+    agent_outputs: Mapped[dict] = mapped_column(JsonType, default=dict)
+    candidates_json: Mapped[list] = mapped_column(JsonType, default=list)
+    approved_candidates: Mapped[list] = mapped_column(JsonType, default=list)
+    rejected_candidates: Mapped[list] = mapped_column(JsonType, default=list)
+    orders_json: Mapped[list] = mapped_column(JsonType, default=list)
+    fills_json: Mapped[list] = mapped_column(JsonType, default=list)
+    position_updates: Mapped[list] = mapped_column(JsonType, default=list)
+    closed_trades: Mapped[list] = mapped_column(JsonType, default=list)
+    blockers: Mapped[list] = mapped_column(JsonType, default=list)
+    learning_events: Mapped[list] = mapped_column(JsonType, default=list)
+    next_action: Mapped[str | None] = mapped_column(Text)
+    code_commit: Mapped[str | None] = mapped_column(String(80))
+    strategy_version: Mapped[str] = mapped_column(String(80), default="1")
+    cost_model_version: Mapped[str] = mapped_column(String(80), default="forex-paper-execution-v1")
+    configuration_hash: Mapped[str] = mapped_column(String(64), index=True)
+    data_coverage_hash: Mapped[str] = mapped_column(String(64), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class ForexDecision(Base):
+    __tablename__ = "forex_decisions"
+    __table_args__ = (
+        UniqueConstraint("decision_uid", name="uq_forex_decisions_uid"),
+        Index("ix_forex_decisions_pair_time", "pair", "decision_timestamp"),
+        Index("ix_forex_decisions_status_time", "status", "decision_timestamp"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    decision_uid: Mapped[str] = mapped_column(String(180), unique=True, index=True)
+    cycle_id: Mapped[int] = mapped_column(ForeignKey("forex_trader_cycles.id", ondelete="CASCADE"), index=True)
+    pair: Mapped[str] = mapped_column(String(32), index=True)
+    strategy_id: Mapped[str] = mapped_column(String(120), index=True)
+    status: Mapped[str] = mapped_column(String(40), index=True)
+    direction: Mapped[str] = mapped_column(String(16), index=True)
+    decision_timestamp: Mapped[datetime] = mapped_column(DateTime, index=True)
+    blockers: Mapped[list] = mapped_column(JsonType, default=list)
+    proposal_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    risk_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    execution_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    input_snapshot: Mapped[dict] = mapped_column(JsonType, default=dict)
+    evidence_type: Mapped[str] = mapped_column(String(60), default="PAPER_FORWARD_FOREX", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class ForexPosition(Base):
+    __tablename__ = "forex_positions"
+    __table_args__ = (
+        UniqueConstraint("position_uid", name="uq_forex_positions_uid"),
+        Index("ix_forex_positions_status_pair", "status", "pair"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    position_uid: Mapped[str] = mapped_column(String(180), unique=True, index=True)
+    decision_id: Mapped[int] = mapped_column(ForeignKey("forex_decisions.id", ondelete="RESTRICT"), index=True)
+    pair: Mapped[str] = mapped_column(String(32), index=True)
+    strategy_id: Mapped[str] = mapped_column(String(120), index=True)
+    direction: Mapped[str] = mapped_column(String(16), index=True)
+    status: Mapped[str] = mapped_column(String(32), default="OPEN", index=True)
+    quantity_lots: Mapped[float] = mapped_column(Float)
+    entry_price: Mapped[float] = mapped_column(Float)
+    stop_price: Mapped[float] = mapped_column(Float)
+    target_price: Mapped[float] = mapped_column(Float)
+    current_price: Mapped[float] = mapped_column(Float)
+    opened_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    exit_price: Mapped[float | None] = mapped_column(Float)
+    exit_reason: Mapped[str | None] = mapped_column(String(80), index=True)
+    gross_pnl: Mapped[float] = mapped_column(Float, default=0.0)
+    net_pnl: Mapped[float] = mapped_column(Float, default=0.0)
+    realized_r: Mapped[float | None] = mapped_column(Float)
+    spread_cost: Mapped[float] = mapped_column(Float, default=0.0)
+    slippage_cost: Mapped[float] = mapped_column(Float, default=0.0)
+    commission: Mapped[float] = mapped_column(Float, default=0.0)
+    swap_accrued: Mapped[float] = mapped_column(Float, default=0.0)
+    margin_used: Mapped[float] = mapped_column(Float, default=0.0)
+    mfe: Mapped[float] = mapped_column(Float, default=0.0)
+    mae: Mapped[float] = mapped_column(Float, default=0.0)
+    last_managed_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    contract_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
+class ForexLearningEvidence(Base):
+    __tablename__ = "forex_learning_evidence"
+    __table_args__ = (Index("ix_forex_learning_strategy_time", "strategy_id", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    decision_id: Mapped[int | None] = mapped_column(ForeignKey("forex_decisions.id", ondelete="SET NULL"), index=True)
+    position_id: Mapped[int | None] = mapped_column(ForeignKey("forex_positions.id", ondelete="SET NULL"), index=True)
+    strategy_id: Mapped[str] = mapped_column(String(120), index=True)
+    pair: Mapped[str] = mapped_column(String(32), index=True)
+    session: Mapped[str | None] = mapped_column(String(60), index=True)
+    regime: Mapped[str | None] = mapped_column(String(60), index=True)
+    setup_family: Mapped[str | None] = mapped_column(String(80), index=True)
+    direction: Mapped[str | None] = mapped_column(String(16), index=True)
+    outcome: Mapped[str] = mapped_column(String(80), index=True)
+    expected_result: Mapped[float | None] = mapped_column(Float)
+    realized_result: Mapped[float | None] = mapped_column(Float)
+    difference: Mapped[float | None] = mapped_column(Float)
+    likely_cause: Mapped[str | None] = mapped_column(Text)
+    lesson: Mapped[str] = mapped_column(Text)
+    evidence_strength: Mapped[float] = mapped_column(Float, default=0.0)
+    model_update_justified: Mapped[bool] = mapped_column(Boolean, default=False)
+    evidence_type: Mapped[str] = mapped_column(String(60), default="PAPER_FORWARD_FOREX", index=True)
+    payload_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class ForexStrategyReadiness(Base):
+    __tablename__ = "forex_strategy_readiness"
+    __table_args__ = (Index("ix_forex_readiness_level_updated", "readiness_level", "updated_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    strategy_id: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    readiness_level: Mapped[str] = mapped_column(String(60), default="TRAINING_SIGNAL", index=True)
+    closed_forward_trades: Mapped[int] = mapped_column(Integer, default=0)
+    net_expectancy_r: Mapped[float | None] = mapped_column(Float)
+    risk_adjusted_alpha: Mapped[float | None] = mapped_column(Float)
+    max_drawdown: Mapped[float | None] = mapped_column(Float)
+    pair_count: Mapped[int] = mapped_column(Integer, default=0)
+    session_count: Mapped[int] = mapped_column(Integer, default=0)
+    regime_count: Mapped[int] = mapped_column(Integer, default=0)
+    confidence_interval_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    replay_forward_decay: Mapped[float | None] = mapped_column(Float)
+    blockers: Mapped[list] = mapped_column(JsonType, default=list)
+    threshold_version: Mapped[str] = mapped_column(String(80), default="forex-alpha-readiness-v1")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
+class ForexTraderRuntimeState(Base):
+    __tablename__ = "forex_trader_runtime_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    runtime_key: Mapped[str] = mapped_column(String(80), unique=True, default="default")
+    desired_state: Mapped[str] = mapped_column(String(40), default="RUNNING", index=True)
+    scheduler_status: Mapped[str] = mapped_column(String(40), default="STARTING", index=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    current_cycle_key: Mapped[str | None] = mapped_column(String(180), index=True)
+    lock_expires_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text)
+    next_run_after: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)

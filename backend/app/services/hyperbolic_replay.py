@@ -20,7 +20,7 @@ from app.services.executable_strategy import (
 )
 
 
-TIMEFRAME_ORDER = ("1d", "15m", "5m", "1m")
+TIMEFRAME_ORDER = ("1d", "1h", "15m", "5m", "1m")
 SETUP_REQUIREMENTS = {
     "intraday_breakout": ("1d", "15m", "5m", "1m"),
     "intraday_trend": ("1d", "15m", "5m", "1m"),
@@ -53,7 +53,7 @@ BENCHMARK_BY_MARKET = {
 class ReplayRunRequest:
     asset_ids: list[int] | None = None
     markets: list[str] | None = None
-    timeframes: tuple[str, ...] = TIMEFRAME_ORDER
+    timeframes: tuple[str, ...] = ("1d", "15m", "5m", "1m")
     max_assets: int = 10
     max_trades: int = 100
     max_seconds: float = 120.0
@@ -63,7 +63,16 @@ class ReplayRunRequest:
     trigger: str = "manual"
     capital: float = 10_000.0
     after_asset_id: int | None = None
+    priority_markets: tuple[str, ...] = ()
+    market_cursors: dict[str, int] | None = None
     strategy_specs: tuple[dict, ...] | None = None
+
+
+@dataclass(frozen=True)
+class ReplayAssetSelection:
+    assets: list[Asset]
+    next_asset_id: int | None
+    market_cursors: dict[str, int]
 
 
 class BlumHyperbolicReplayEngine:
@@ -97,7 +106,8 @@ class BlumHyperbolicReplayEngine:
         )
         db.add(run)
         db.flush()
-        assets = self._assets(db, request)
+        selection = self._asset_selection(db, request)
+        assets = selection.assets
         blockers: list[dict] = []
         used_timeframes: set[str] = set()
         markets: set[str] = set()
@@ -172,7 +182,11 @@ class BlumHyperbolicReplayEngine:
             "evidence_type": "REPLAY_EVIDENCE",
             "policy": "Features use closed bars at or before the decision timestamp; entries use a later executable bar.",
         }
-        next_cursor = {"asset_id": assets[-1].id} if len(assets) >= max(1, request.max_assets) else {}
+        next_cursor = {}
+        if selection.next_asset_id is not None:
+            next_cursor["asset_id"] = selection.next_asset_id
+        if selection.market_cursors:
+            next_cursor["market_cursors"] = selection.market_cursors
         run.cursor_json = next_cursor
         db.commit()
         return {
@@ -217,6 +231,70 @@ class BlumHyperbolicReplayEngine:
 
     @staticmethod
     def _assets(db: Session, request: ReplayRunRequest) -> list[Asset]:
+        return BlumHyperbolicReplayEngine._asset_selection(db, request).assets
+
+    @staticmethod
+    def _asset_selection(db: Session, request: ReplayRunRequest) -> ReplayAssetSelection:
+        max_assets = max(1, request.max_assets)
+        requested_markets = {str(market).strip().upper() for market in (request.markets or []) if str(market).strip()}
+        priority_markets = tuple(
+            market
+            for market in dict.fromkeys(str(value).strip().upper() for value in request.priority_markets)
+            if market and (not requested_markets or market in requested_markets)
+        )[:max_assets]
+
+        if request.asset_ids or not priority_markets:
+            rows = BlumHyperbolicReplayEngine._cursor_assets(db, request, limit=max_assets)
+            next_asset_id = rows[-1].id if len(rows) >= max_assets else None
+            return ReplayAssetSelection(assets=rows, next_asset_id=next_asset_id, market_cursors={})
+
+        base_limit = max(0, max_assets - len(priority_markets))
+        base_query = select(Asset).where(Asset.is_active.is_(True))
+        if request.markets:
+            base_query = base_query.where(func.upper(Asset.country).in_(requested_markets))
+        base_query = base_query.where(~func.upper(Asset.country).in_(priority_markets))
+        if request.after_asset_id is not None:
+            base_query = base_query.where(Asset.id > request.after_asset_id)
+        base_rows = db.scalars(base_query.order_by(Asset.id).limit(base_limit)).all() if base_limit else []
+        if not base_rows and request.after_asset_id is not None and base_limit:
+            restart = select(Asset).where(
+                Asset.is_active.is_(True),
+                ~func.upper(Asset.country).in_(priority_markets),
+            )
+            if request.markets:
+                restart = restart.where(func.upper(Asset.country).in_(requested_markets))
+            base_rows = db.scalars(restart.order_by(Asset.id).limit(base_limit)).all()
+
+        market_cursors = dict(request.market_cursors or {})
+        priority_rows: list[Asset] = []
+        for market in priority_markets:
+            query = select(Asset).where(
+                Asset.is_active.is_(True),
+                func.upper(Asset.country) == market,
+            )
+            market_cursor = market_cursors.get(market)
+            if market_cursor is not None:
+                query = query.where(Asset.id > market_cursor)
+            row = db.scalar(query.order_by(Asset.id).limit(1))
+            if row is None and market_cursor is not None:
+                row = db.scalar(
+                    select(Asset)
+                    .where(Asset.is_active.is_(True), func.upper(Asset.country) == market)
+                    .order_by(Asset.id)
+                    .limit(1)
+                )
+            if row is not None:
+                priority_rows.append(row)
+                market_cursors[market] = row.id
+
+        return ReplayAssetSelection(
+            assets=[*base_rows, *priority_rows],
+            next_asset_id=base_rows[-1].id if base_limit and len(base_rows) >= base_limit else None,
+            market_cursors=market_cursors,
+        )
+
+    @staticmethod
+    def _cursor_assets(db: Session, request: ReplayRunRequest, *, limit: int) -> list[Asset]:
         query = select(Asset).where(Asset.is_active.is_(True))
         if request.asset_ids:
             query = query.where(Asset.id.in_(request.asset_ids))
@@ -224,7 +302,7 @@ class BlumHyperbolicReplayEngine:
             query = query.where(func.upper(Asset.country).in_([market.upper() for market in request.markets]))
         if request.after_asset_id is not None:
             query = query.where(Asset.id > request.after_asset_id)
-        rows = db.scalars(query.order_by(Asset.id).limit(max(1, request.max_assets))).all()
+        rows = db.scalars(query.order_by(Asset.id).limit(limit)).all()
         if rows or request.after_asset_id is None:
             return rows
         restart = select(Asset).where(Asset.is_active.is_(True))
@@ -232,7 +310,7 @@ class BlumHyperbolicReplayEngine:
             restart = restart.where(Asset.id.in_(request.asset_ids))
         if request.markets:
             restart = restart.where(func.upper(Asset.country).in_([market.upper() for market in request.markets]))
-        return db.scalars(restart.order_by(Asset.id).limit(max(1, request.max_assets))).all()
+        return db.scalars(restart.order_by(Asset.id).limit(limit)).all()
 
     def _available_timeframes(self, db: Session, asset: Asset, request: ReplayRunRequest, blockers: list[dict]) -> set[str]:
         available: set[str] = set()

@@ -89,6 +89,7 @@ CRITICAL_SNAPSHOT_TYPES = [
     "alpha_gates_summary",
     "paper_copy_summary",
     "paper_forward_snapshot",
+    "forex_trader_summary",
     "copy_readiness_summary",
     "trader_brain_summary",
     "trader_training_ground_summary",
@@ -347,6 +348,9 @@ class SnapshotProducerService:
             from app.services.live_forward_paper_trading import LiveForwardPaperTradingService
 
             return LiveForwardPaperTradingService().snapshot_payload(db)
+        if snapshot_type == "forex_trader_summary":
+            from app.services.forex_trader import ForexTraderSnapshotService
+            return ForexTraderSnapshotService().read(db)
         if snapshot_type == "copy_readiness_summary":
             from app.services.copy_readiness_evidence import CopyReadinessSummaryService
 

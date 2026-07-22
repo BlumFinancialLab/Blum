@@ -242,7 +242,10 @@ def test_initial_strategy_family_registry_is_complete_and_bounded() -> None:
     second = registry.variants("intraday_scalping", max_variants=24, seed=11)
     assert first == second
     assert len(first) == 24
-    assert all(row["timeframe_stack"] == ["1d", "15m", "5m", "1m"] for row in first)
+    assert all(
+        row["timeframe_stack"] == (["1h", "15m", "5m", "1m"] if row["market_filter"] == "forex_only" else ["1d", "15m", "5m", "1m"])
+        for row in first
+    )
     assert {row["setup_type"] for row in first} == {"intraday_breakout", "intraday_trend"}
     assert {row["regime_filter"] for row in first} == {
         "all",

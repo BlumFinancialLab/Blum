@@ -1,0 +1,355 @@
+from __future__ import annotations
+
+from datetime import datetime, timedelta
+
+import pytest
+from sqlalchemy import create_engine, event, select
+from sqlalchemy.orm import sessionmaker
+
+from app.core.database import Base
+from app.models import Asset, ForexDecision, ForexLearningEvidence, ForexPosition, ForexTraderCycle
+from app.services.forex_agents import (
+    BlumForexContrarianRiskAgent,
+    BlumForexMacroAgent,
+    BlumForexMarketContextAgent,
+    BlumForexPriceActionAgent,
+    BlumForexScalpingExpertAgent,
+)
+from app.services.forex_broker import BlumForexBrokerProfileService
+from app.services.forex_contracts import (
+    AgentMarketInput,
+    ForexDirection,
+    ForexOrderRequest,
+    ForexQuote,
+    ForexReadiness,
+    ForexStrategyEvidence,
+    MarketFrame,
+    pair_config,
+)
+from app.services.forex_execution import BlumForexExecutionSimulator
+from app.services.forex_learning import BlumForexLearningEngine
+from app.services.forex_risk import BlumForexPortfolioRiskEngine, ForexPortfolioState
+from app.services.forex_trader import (
+    BlumForexTraderCore,
+    BlumForexTradingScheduler,
+    ForexMarketDataRefreshService,
+    ForexTraderSnapshotService,
+)
+from app.main import app
+
+
+NOW = datetime(2026, 7, 22, 9, 15)
+
+
+@pytest.fixture()
+def db():
+    engine = create_engine("sqlite:///:memory:", future=True)
+    event.listen(engine, "connect", lambda connection, _: connection.execute("PRAGMA foreign_keys=ON"))
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine, future=True)()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+def frames(*, direction: str = "LONG", stale_1m: bool = False) -> dict[str, MarketFrame]:
+    slope = 1 if direction == "LONG" else -1
+    output = {}
+    for timeframe, minutes, size in (("1h", 60, 40), ("15m", 15, 40), ("5m", 5, 40), ("1m", 1, 40)):
+        closes = tuple(1.1000 + slope * index * 0.00008 for index in range(size))
+        timestamp = NOW - timedelta(minutes=10 if timeframe == "1m" and stale_1m else 0)
+        output[timeframe] = MarketFrame(
+            timeframe=timeframe,
+            market_timestamp=timestamp,
+            acquired_at=timestamp,
+            provider="test",
+            opens=closes,
+            highs=tuple(value + 0.00015 for value in closes),
+            lows=tuple(value - 0.00015 for value in closes),
+            closes=closes,
+            quality_score=0.95,
+        )
+    return output
+
+
+def market_input(*, direction: str = "LONG", spread_pips: float = 0.8, stale_1m: bool = False, news: str = "LOW_IMPACT") -> AgentMarketInput:
+    last = frames(direction=direction, stale_1m=stale_1m)
+    mid = last["1m"].closes[-1]
+    pip = pair_config("EURUSD=X").pip_size
+    return AgentMarketInput(
+        pair="EURUSD=X",
+        as_of=NOW,
+        frames=last,
+        quote=ForexQuote(bid=mid - spread_pips * pip / 2, ask=mid + spread_pips * pip / 2, timestamp=NOW, source="test"),
+        session="LONDON",
+        macro_event_impact=news,
+        liquidity_score=0.9,
+        volatility_score=0.7,
+    )
+
+
+def strategy(*, news_strategy: bool = False) -> ForexStrategyEvidence:
+    return ForexStrategyEvidence(
+        strategy_id="fx-breakout-v1",
+        readiness=ForexReadiness.PAPER_TRADE_ELIGIBLE,
+        sample_size=120,
+        net_expectancy_r=0.25,
+        replay_forward_decay=0.15,
+        currency_concentration=0.45,
+        is_news_strategy=news_strategy,
+    )
+
+
+def test_required_pair_universe_and_agent_boundaries():
+    assert pair_config("EURUSD=X").pip_size == 0.0001
+    assert pair_config("EURUSD=X").minimum_lot == 0.01
+    assert pair_config("EURUSD=X").price_precision == 5
+    assert pair_config("USDJPY=X").pip_size == 0.01
+    assert pair_config("USDJPY=X").minimum_lot == 0.01
+    assert pair_config("USDJPY=X").price_precision == 3
+    assert pair_config("EURCHF=X").supported_timeframes == ("1h", "15m", "5m", "1m")
+    assert len(pair_config.all()) == 12
+    assert all(not hasattr(agent, "open_trade") for agent in (
+        BlumForexMarketContextAgent(), BlumForexPriceActionAgent(), BlumForexMacroAgent(),
+        BlumForexScalpingExpertAgent(), BlumForexContrarianRiskAgent(),
+    ))
+
+
+@pytest.mark.parametrize("direction", ["LONG", "SHORT"])
+def test_valid_trade_uses_directional_bid_ask_and_costs(direction):
+    inputs = market_input(direction=direction)
+    context = BlumForexMarketContextAgent().analyze(inputs)
+    price_action = BlumForexPriceActionAgent().analyze(inputs)
+    macro = BlumForexMacroAgent().analyze(inputs)
+    proposal = BlumForexScalpingExpertAgent().propose(inputs, context, price_action, macro, strategy())
+    assert proposal.direction == ForexDirection(direction)
+    broker = BlumForexBrokerProfileService().get("paper_eu_30x")
+    result = BlumForexExecutionSimulator().submit(
+        ForexOrderRequest.from_proposal(proposal, quantity_lots=0.01), inputs.quote, broker, now=NOW
+    )
+    expected = inputs.quote.ask if direction == "LONG" else inputs.quote.bid
+    assert result.status == "FILLED"
+    assert result.fill_price >= expected if direction == "LONG" else result.fill_price <= expected
+    assert result.total_cost > 0
+    assert result.spread_source == "QUOTED"
+    assert result.state_history == ("CREATED", "SUBMITTED", "ACKNOWLEDGED", "FILLED")
+    assert result.execution_latency_ms > 0
+
+
+def test_spread_news_and_stale_data_block_trades():
+    for inputs, expected in (
+        (market_input(spread_pips=20), "SPREAD_TOO_WIDE"),
+        (market_input(news="HIGH_IMPACT"), "NEWS_WINDOW_BLOCKED"),
+        (market_input(stale_1m=True), "STALE_DATA"),
+    ):
+        outcome = BlumForexTraderCore().evaluate_input(inputs, strategy=strategy())
+        assert expected in outcome.blockers
+        assert outcome.approved is False
+
+    promoted_news = BlumForexTraderCore().evaluate_input(
+        market_input(news="HIGH_IMPACT"), strategy=strategy(news_strategy=True)
+    )
+    assert "NEWS_WINDOW_BLOCKED" not in promoted_news.blockers
+
+
+def test_risk_netting_daily_loss_and_max_positions():
+    engine = BlumForexPortfolioRiskEngine()
+    proposal = BlumForexTraderCore().evaluate_input(market_input(), strategy=strategy()).proposal
+    concentrated = ForexPortfolioState(
+        equity=10_000,
+        daily_realized_pnl=-50,
+        open_positions=(
+            {"pair": "GBPUSD=X", "direction": "LONG", "notional": 20_000},
+            {"pair": "USDCHF=X", "direction": "SHORT", "notional": 20_000},
+        ),
+    )
+    reduced = engine.evaluate(proposal, concentrated, BlumForexBrokerProfileService().get("paper_eu_30x"))
+    assert reduced.decision in {"APPROVE_REDUCED_SIZE", "REJECT_CURRENCY_EXPOSURE"}
+
+    assert engine.evaluate(proposal, ForexPortfolioState(equity=10_000, daily_realized_pnl=-200), BlumForexBrokerProfileService().get("paper_eu_30x")).decision == "REJECT_DAILY_LOSS"
+    maxed = ForexPortfolioState(equity=10_000, open_positions=tuple({"pair": f"P{i}", "direction": "LONG", "notional": 1000} for i in range(4)))
+    assert engine.evaluate(proposal, maxed, BlumForexBrokerProfileService().get("paper_eu_30x")).decision == "REJECT_MAX_POSITIONS"
+
+
+def test_stop_gap_through_and_swap_are_realistic():
+    broker = BlumForexBrokerProfileService().get("paper_eu_30x")
+    simulator = BlumForexExecutionSimulator()
+    request = ForexOrderRequest(
+        pair="EURUSD=X", side=ForexDirection.LONG, order_type="STOP", quantity_lots=0.01,
+        theoretical_price=1.1000, stop_price=1.0950, target_price=1.1100,
+    )
+    quote = ForexQuote(bid=1.0938, ask=1.0940, timestamp=NOW, source="gap")
+    stopped = simulator.close(request, quote, broker, reason="STOP_HIT", now=NOW)
+    assert stopped.fill_price < request.stop_price
+    assert stopped.fill_price <= quote.bid
+    assert simulator.accrue_swap(request, broker, nights=2, weekday=2) == pytest.approx(broker.swap_long["EURUSD=X"] * 4 * 0.01)
+
+
+def test_execution_slippage_is_dynamic_and_evidence_bound():
+    broker = BlumForexBrokerProfileService().get("paper_eu_30x")
+    quote = ForexQuote(bid=1.1000, ask=1.1001, timestamp=NOW, source="test")
+    liquid = ForexOrderRequest(
+        pair="EURUSD=X", side=ForexDirection.LONG, order_type="MARKET",
+        quantity_lots=0.01, theoretical_price=1.10005,
+        session="LONDON_NEW_YORK_OVERLAP", liquidity_score=0.95,
+        volatility_score=0.25, event_impact="LOW_IMPACT",
+    )
+    stressed = ForexOrderRequest(
+        pair="EURUSD=X", side=ForexDirection.LONG, order_type="MARKET",
+        quantity_lots=0.01, theoretical_price=1.10005,
+        session="NEW_YORK", liquidity_score=0.35,
+        volatility_score=0.9, event_impact="HIGH_IMPACT",
+    )
+    simulator = BlumForexExecutionSimulator()
+    liquid_fill = simulator.submit(liquid, quote, broker, now=NOW)
+    stressed_fill = simulator.submit(stressed, quote, broker, now=NOW)
+    assert stressed_fill.slippage_pips > liquid_fill.slippage_pips
+    assert stressed_fill.fill_price > liquid_fill.fill_price
+    assert stressed_fill.execution_assumptions["liquidity_score"] == 0.35
+
+
+def test_rotating_market_refresh_hydrates_the_complete_strict_stack(db, monkeypatch):
+    db.add(Asset(
+        ticker="EURUSD=X",
+        name="EUR/USD",
+        category="Forex",
+        sector="Currencies",
+        country="Global",
+        asset_type="Forex",
+        is_active=True,
+    ))
+    db.commit()
+    calls = []
+
+    class Coverage:
+        status = "READY"
+        rows_available = 40
+        provider = "test"
+        blockers = []
+
+    service = ForexMarketDataRefreshService()
+    monkeypatch.setattr(
+        service.data,
+        "ensure_coverage",
+        lambda db, *, asset, timeframe, start, end: calls.append(timeframe) or Coverage(),
+    )
+    result = service.refresh(db, now=NOW)
+    assert result["status"] == "READY"
+    assert calls == ["1h", "15m", "5m", "1m"]
+    assert [row["timeframe"] for row in result["refreshed"][0]["timeframes"]] == calls
+
+
+def test_no_trade_persists_append_only_learning_and_snapshot_is_read_only(db):
+    core = BlumForexTraderCore()
+    result = core.run_cycle(db, inputs=[market_input(spread_pips=20)], strategies={"EURUSD=X": strategy()}, now=NOW)
+    assert result["candidates_rejected"] == 1
+    assert db.scalar(select(ForexDecision)).status == "REJECTED"
+    assert db.scalar(select(ForexLearningEvidence)).outcome == "EDGE_DESTROYED_BY_COSTS"
+    before = db.query(ForexTraderCycle).count()
+    snapshot = ForexTraderSnapshotService().read(db, now=NOW)
+    assert snapshot["exact_reason_if_no_trade_is_open"]
+    assert db.query(ForexTraderCycle).count() == before
+
+
+def test_readiness_promotion_degradation_and_terminal_only_learning(db):
+    learner = BlumForexLearningEngine()
+    evidence = [
+        {"outcome": "WIN" if index % 2 == 0 else "LOSS", "net_r": 1.2 if index % 2 == 0 else -0.5,
+         "pair": "EURUSD=X" if index % 3 else "GBPUSD=X", "session": "LONDON" if index % 2 else "NEW_YORK",
+         "regime": "trend" if index % 4 else "range", "benchmark_excess": 0.15}
+        for index in range(100)
+    ]
+    promoted = learner.assess_readiness(strategy(), evidence)
+    assert promoted.level == ForexReadiness.ALPHA_SIGNAL_ELIGIBLE
+    degraded = learner.assess_readiness(strategy(), [{**row, "net_r": -1.0, "outcome": "LOSS"} for row in evidence])
+    assert degraded.level in {ForexReadiness.DEGRADED, ForexReadiness.SUSPENDED}
+    assert learner.record_outcome(db, decision_id=None, outcome="OPEN", payload={}) is None
+
+
+def test_alpha_readiness_rejects_replay_decay_concentration_and_active_blockers():
+    learner = BlumForexLearningEngine()
+    evidence = [
+        {"outcome": "WIN", "net_r": 0.4, "pair": "EURUSD=X" if index % 2 else "GBPUSD=X",
+         "session": "LONDON" if index % 2 else "NEW_YORK", "regime": "trend" if index % 3 else "range",
+         "benchmark_excess": 0.1}
+        for index in range(100)
+    ]
+    weak = ForexStrategyEvidence(
+        "weak-forward", ForexReadiness.PAPER_TRADE_ELIGIBLE, 300, 0.2,
+        replay_forward_decay=0.8, currency_concentration=0.9,
+        active_blockers=("DATA_QUALITY_BLOCK",),
+    )
+    assessment = learner.assess_readiness(weak, evidence)
+    assert assessment.level != ForexReadiness.ALPHA_SIGNAL_ELIGIBLE
+    assert {"REPLAY_FORWARD_DECAY", "CURRENCY_CONCENTRATION", "ACTIVE_STRATEGY_BLOCKER"}.issubset(assessment.blockers)
+
+
+def test_risk_sizing_reduces_for_drawdown_weak_evidence_and_pair_correlation():
+    engine = BlumForexPortfolioRiskEngine()
+    proposal = BlumForexTraderCore().evaluate_input(market_input(), strategy=strategy()).proposal
+    broker = BlumForexBrokerProfileService().get("paper_eu_30x")
+    clean = engine.evaluate(proposal, ForexPortfolioState(equity=10_000), broker)
+    stressed = engine.evaluate(
+        proposal,
+        ForexPortfolioState(equity=10_000, drawdown_percent=8.0, pair_correlations={"EURUSD=X": 0.92}),
+        broker,
+    )
+    assert stressed.quantity_lots < clean.quantity_lots
+    assert "CORRELATION_LIMIT" in stressed.blockers
+    assert stressed.risk_percent < clean.risk_percent
+
+
+def test_core_cycle_is_idempotent_and_recovers_incomplete_cycle(db):
+    core = BlumForexTraderCore()
+    first = core.run_cycle(db, inputs=[market_input()], strategies={"EURUSD=X": strategy()}, now=NOW, cycle_key="fixed")
+    second = core.run_cycle(db, inputs=[market_input()], strategies={"EURUSD=X": strategy()}, now=NOW, cycle_key="fixed")
+    assert first["cycle_id"] == second["cycle_id"]
+    assert db.query(ForexTraderCycle).count() == 1
+    assert db.query(ForexPosition).count() == 1
+
+    interrupted = ForexTraderCycle(
+        cycle_uid="interrupted", cycle_key="interrupted", status="RUNNING",
+        started_at=NOW - timedelta(minutes=3), pairs_scanned=[], configuration_hash="a" * 64,
+        data_coverage_hash="b" * 64,
+    )
+    db.add(interrupted)
+    db.commit()
+    recovered = core.run_cycle(db, inputs=[], strategies={}, now=NOW, cycle_key="interrupted")
+    assert recovered["status"] == "DEGRADED"
+    assert "RECOVERED_INTERRUPTED_CYCLE" in recovered["blockers"]
+
+
+@pytest.mark.parametrize("direction", ["LONG", "SHORT"])
+def test_complete_trade_lifecycle_persists_net_outcome(direction, db):
+    core = BlumForexTraderCore()
+    opened = core.run_cycle(db, inputs=[market_input(direction=direction)], strategies={"EURUSD=X": strategy()}, now=NOW, cycle_key=f"life-{direction}")
+    assert opened["trades_opened"] == 1
+    position = db.scalar(select(ForexPosition))
+    spread = 0.00008
+    if direction == "LONG":
+        quote = ForexQuote(bid=position.target_price + 0.0001, ask=position.target_price + 0.0001 + spread, timestamp=NOW + timedelta(minutes=1), source="test")
+    else:
+        quote = ForexQuote(bid=position.target_price - 0.0001 - spread, ask=position.target_price - 0.0001, timestamp=NOW + timedelta(minutes=1), source="test")
+    managed = core.manager.manage(db, {"EURUSD=X": quote}, now=NOW + timedelta(minutes=1))
+    db.commit()
+    assert managed["trades_closed"] == 1
+    assert position.status == "CLOSED"
+    assert position.net_pnl < position.gross_pnl
+    assert position.contract_json["valuation"]["unrealized_net_pnl"] is not None
+    assert position.contract_json["valuation"]["current_r"] is not None
+    assert db.scalar(select(ForexLearningEvidence).where(ForexLearningEvidence.position_id == position.id)).outcome == "WIN"
+
+
+def test_api_contract_and_scheduler_controls_are_persistent(db):
+    routes = {(route.path, method) for route in app.routes for method in getattr(route, "methods", set())}
+    assert ("/api/forex-trader/snapshot", "GET") in routes
+    for path in ("run-cycle", "start", "pause", "resume", "emergency-stop"):
+        assert (f"/api/forex-trader/{path}", "POST") in routes
+    scheduler = BlumForexTradingScheduler()
+    assert scheduler.pause(db)["desired_state"] == "PAUSED"
+    assert scheduler.resume(db)["desired_state"] == "RUNNING"
+    first = scheduler.run_once(db, now=NOW, inputs=[market_input()], strategies={"EURUSD=X": strategy()}, cycle_key="scheduler-fixed")
+    second = scheduler.run_once(db, now=NOW, inputs=[market_input()], strategies={"EURUSD=X": strategy()}, cycle_key="scheduler-fixed")
+    assert first["cycle_id"] == second["cycle_id"]
+    assert second["idempotent"] is True

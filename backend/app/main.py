@@ -18,6 +18,7 @@ from app.api.routers import (
     paper_trading_router,
     runtime_router,
     training_router,
+    forex_trader_router,
 )
 from app.core.config import get_settings
 from app.core.database import SessionLocal
@@ -55,6 +56,7 @@ app.include_router(alpha_router)
 app.include_router(runtime_router)
 app.include_router(analyst_router)
 app.include_router(legacy_router)
+app.include_router(forex_trader_router)
 
 
 @app.middleware("http")

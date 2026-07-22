@@ -70,6 +70,17 @@ class StaticPromotionFrontier:
     def snapshot(self, db, limit=20):
         return {"status": "READY", "candidates": []}
 
+    def priority_specs(self, db, *, market_filter, limit):
+        spec = canonical_strategy_spec("intraday_breakout")
+        return (
+            {
+                **spec.to_payload(),
+                "market_filter": market_filter,
+                "minimum_relative_volume": 0.0,
+                "minimum_stop_percent": 0.0005,
+            },
+        )
+
 
 def config() -> ReplayTrainingConfig:
     return ReplayTrainingConfig(
@@ -137,9 +148,33 @@ def test_controller_resumes_from_persisted_cursor_and_checkpoints_next_slice():
         ).one()
 
     assert engine.calls[0].after_asset_id == 42
+    assert engine.calls[0].priority_markets == ("FOREX",)
     assert state.cursor_json["asset_id"] == 99
     assert state.cursor_json["research_selection_history"] == {}
     assert state.status == "completed"
+
+
+def test_controller_restores_independent_priority_market_cursors():
+    engine = RecordingEngine()
+    controller = BlumAdaptiveTrainingController(
+        engine=engine,
+        resource_monitor=StaticResourceMonitor(cpu=20, memory=30, api_p95_ms=120),
+        config=config(),
+    )
+    with setup_db() as db:
+        db.add(
+            BackgroundJobState(
+                job_name="hyperbolic_replay_training",
+                stage_name="replay_slice",
+                status="completed",
+                cursor_json={"asset_id": 42, "market_cursors": {"FOREX": 84}},
+                enabled=True,
+            )
+        )
+        db.commit()
+        controller.run_once(db, trigger="test")
+
+    assert engine.calls[0].market_cursors == {"FOREX": 84}
 
 
 def test_controller_passes_promotion_frontier_specs_to_bounded_replay():
@@ -155,6 +190,7 @@ def test_controller_passes_promotion_frontier_specs_to_bounded_replay():
 
     assert engine.calls[0].strategy_specs
     assert engine.calls[0].strategy_specs[0]["strategy_fingerprint"]
+    assert any(spec["market_filter"] == "forex_only" for spec in engine.calls[0].strategy_specs)
 
 
 def test_controller_checkpoints_research_progress_history_with_asset_cursor():
@@ -173,8 +209,9 @@ def test_controller_checkpoints_research_progress_history_with_asset_cursor():
 
     assert state.cursor_json["asset_id"] == 99
     history = state.cursor_json["research_selection_history"]
-    assert len(history) == 1
-    assert next(iter(history.values())) == {"last_sample_size": 12, "consecutive_no_progress": 0}
+    assert len(history) == 2
+    assert {row["last_sample_size"] for row in history.values()} == {0, 12}
+    assert all(row["consecutive_no_progress"] == 0 for row in history.values())
 
 
 def test_runtime_pause_preserves_existing_replay_cursor():

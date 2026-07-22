@@ -15,9 +15,22 @@ def setup_db() -> Session:
     return Session(engine)
 
 
-def add_candidate(db: Session, *, target_r: float, sample_size: int, expectancy: float) -> ExecutableStrategySpec:
+def add_candidate(
+    db: Session,
+    *,
+    target_r: float,
+    sample_size: int,
+    expectancy: float,
+    market_filter: str = "all",
+) -> ExecutableStrategySpec:
     spec = ExecutableStrategySpec.from_payload(
-        {**canonical_strategy_spec("intraday_breakout").to_payload(), "target_r_multiple": target_r}
+        {
+            **canonical_strategy_spec("intraday_breakout").to_payload(),
+            "target_r_multiple": target_r,
+            "market_filter": market_filter,
+            "minimum_relative_volume": 0.0 if market_filter == "forex_only" else 1.2,
+            "minimum_stop_percent": 0.0005 if market_filter == "forex_only" else 0.01,
+        }
     )
     run = StrategyFactoryRun(
         run_uid=f"frontier-{target_r}",
@@ -57,6 +70,7 @@ def add_candidate(db: Session, *, target_r: float, sample_size: int, expectancy:
             specification_json={
                 "evidence_binding": "hyperbolic_replay_v1",
                 "strategy_fingerprint": spec.fingerprint,
+                "market_filter": market_filter,
                 "executable_strategy": spec.to_payload(),
             },
             lifecycle_state="AWAITING_EVIDENCE",
@@ -65,6 +79,28 @@ def add_candidate(db: Session, *, target_r: float, sample_size: int, expectancy:
     )
     db.commit()
     return spec
+
+
+def test_priority_specs_select_forex_contract_without_weakening_validation() -> None:
+    with setup_db() as db:
+        add_candidate(db, target_r=2.0, sample_size=280, expectancy=0.18)
+        forex = add_candidate(
+            db,
+            target_r=1.5,
+            sample_size=0,
+            expectancy=0.0,
+            market_filter="forex_only",
+        )
+
+        specs = StrategyPromotionFrontierService(minimum_samples=300).priority_specs(
+            db,
+            market_filter="forex_only",
+            limit=1,
+        )
+
+    assert len(specs) == 1
+    assert specs[0]["strategy_fingerprint"] == forex.fingerprint
+    assert specs[0]["market_filter"] == "forex_only"
 
 
 def test_frontier_prioritizes_positive_candidate_closest_to_promotion() -> None:

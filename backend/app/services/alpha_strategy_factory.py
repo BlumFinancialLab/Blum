@@ -168,6 +168,7 @@ class StrategyFamilyRegistry:
             spec = ExecutableStrategySpec.from_payload(
                 {
                     **canonical.to_payload(),
+                    "required_timeframes": ["1h", "15m", "5m", "1m"] if is_forex else list(canonical.required_timeframes),
                     "lookback": (5, 10, 20)[(regime_index + market_index) % 3],
                     "minimum_relative_volume": 0.0 if is_forex else (0.0, 1.2)[(setup_index + regime_index) % 2],
                     "stop_atr_multiple": (1.0, 1.5)[(regime_index + market_index) % 2],

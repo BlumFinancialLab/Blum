@@ -30,6 +30,7 @@ from app.services.research_planner import AutonomousResearchPlanner
 from app.services.trading_game import TradingGameSimulator
 from app.services.live_forward_paper_trading import LiveForwardPaperTradingService
 from app.services.intraday_paper_engine import BlumIntradayPaperEngine
+from app.services.forex_trader import BlumForexTradingScheduler
 from app.services.alpha_strategy_factory import AlphaStrategyFactory
 from app.services.worker_runtime import runtime_worker_coordinator
 from app.services.adaptive_replay_training import BlumAdaptiveTrainingController, refresh_strategy_factory_state
@@ -86,6 +87,14 @@ def start_realtime_services() -> None:
             job_id="paper_execution_lifecycle",
             delay_seconds=435,
             jitter_seconds=10,
+        )
+    if settings.forex_trader_enabled:
+        _add_interval_job(
+            run_forex_trader_job,
+            minutes=settings.forex_trader_minutes,
+            job_id="autonomous_forex_trader",
+            delay_seconds=75,
+            jitter_seconds=5,
         )
     _add_interval_job(run_data_gap_repair, minutes=settings.data_gap_repair_minutes, job_id="data_gap_repair", delay_seconds=480, jitter_seconds=45)
     _add_interval_job(run_accuracy_audit_job, minutes=settings.accuracy_audit_minutes, job_id="accuracy_audit", delay_seconds=600, jitter_seconds=45)
@@ -450,6 +459,10 @@ def run_brain_evidence_projection_job() -> None:
 
 def run_intraday_paper_trading_job() -> None:
     _run_job("intraday_paper_trading", lambda db: BlumIntradayPaperEngine().run_once(db, trigger="scheduled"))
+
+
+def run_forex_trader_job() -> None:
+    _run_job("autonomous_forex_trader", lambda db: BlumForexTradingScheduler().run_once(db))
 
 
 def run_paper_execution_lifecycle_job() -> None:

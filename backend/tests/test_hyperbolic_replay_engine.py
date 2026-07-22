@@ -155,6 +155,50 @@ def test_replaying_same_asset_window_does_not_duplicate_learning_evidence():
     assert any(blocker["code"] == "NO_NEW_REPLAY_EVIDENCE" for blocker in second["blockers"])
 
 
+def test_priority_market_keeps_forex_in_each_bounded_replay_slice():
+    with setup_db() as db:
+        us_assets = [seed_asset(db, ticker=f"US{index}", market="USA") for index in range(5)]
+        fx_assets = [seed_asset(db, ticker=ticker, market="FOREX") for ticker in ("EURUSD=X", "GBPUSD=X")]
+        db.commit()
+        us_identity = [(asset.id, asset.ticker) for asset in us_assets]
+        fx_identity = [(asset.id, asset.ticker) for asset in fx_assets]
+        engine = BlumHyperbolicReplayEngine()
+
+        first = engine.run_cycle(
+            db,
+            ReplayRunRequest(
+                markets=["USA", "FOREX"],
+                priority_markets=("FOREX",),
+                max_assets=3,
+                max_trades=1,
+                fetch_missing=False,
+            ),
+        )
+        second = engine.run_cycle(
+            db,
+            ReplayRunRequest(
+                markets=["USA", "FOREX"],
+                priority_markets=("FOREX",),
+                after_asset_id=first["next_cursor"]["asset_id"],
+                market_cursors=first["next_cursor"]["market_cursors"],
+                max_assets=3,
+                max_trades=1,
+                fetch_missing=False,
+            ),
+        )
+
+    assert first["assets_selected"] == [us_identity[0][1], us_identity[1][1], fx_identity[0][1]]
+    assert first["next_cursor"] == {
+        "asset_id": us_identity[1][0],
+        "market_cursors": {"FOREX": fx_identity[0][0]},
+    }
+    assert second["assets_selected"] == [us_identity[2][1], us_identity[3][1], fx_identity[1][1]]
+    assert second["next_cursor"] == {
+        "asset_id": us_identity[3][0],
+        "market_cursors": {"FOREX": fx_identity[1][0]},
+    }
+
+
 def test_full_multi_timeframe_replay_uses_daily_context_and_one_minute_execution():
     with setup_db() as db:
         asset = seed_asset(db)

@@ -6,6 +6,7 @@ from app.api.routers.legacy import router as legacy_router
 from app.api.routers.paper_trading import router as paper_trading_router
 from app.api.routers.runtime import router as runtime_router
 from app.api.routers.training import router as training_router
+from app.api.routers.forex_trader import router as forex_trader_router
 
 __all__ = [
     "alpha_router",
@@ -16,4 +17,5 @@ __all__ = [
     "paper_trading_router",
     "runtime_router",
     "training_router",
+    "forex_trader_router",
 ]

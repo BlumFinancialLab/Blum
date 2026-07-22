@@ -14,6 +14,7 @@ from app.core.config import get_settings
 from app.models import BackgroundJobState, BlumLearningExperiment, HyperbolicReplayRun, HyperbolicReplayTrade, ReplayMarketBar, ReplayStrategyValidation
 from app.services.central_brain_runtime import BackgroundJobStateService
 from app.services.dashboard_snapshots import DashboardSnapshotService
+from app.services.executable_strategy import ExecutableStrategySpec
 from app.services.hyperbolic_replay import BlumHyperbolicReplayEngine, ReplayRunRequest
 from app.services.performance import performance_recorder
 from app.services.replay_validation import ReplayExperimentService, ReplayLearningFeedbackService, ReplayWalkForwardValidator
@@ -43,8 +44,8 @@ class ReplayTrainingConfig:
     max_trades_per_cycle: int
     max_experiments_per_cycle: int
     min_promotion_samples: int
-    markets: tuple[str, ...] = ("UNITED STATES", "USA", "ITALY", "GERMANY", "FRANCE", "EUROPE")
-    timeframes: tuple[str, ...] = ("1d", "15m", "5m", "1m")
+    markets: tuple[str, ...] = ("UNITED STATES", "USA", "ITALY", "GERMANY", "FRANCE", "EUROPE", "FOREX")
+    timeframes: tuple[str, ...] = ("1d", "1h", "15m", "5m", "1m")
     min_data_quality: float = 35.0
     cpu_throttle_percent: float = 80.0
     cpu_pause_percent: float = 95.0
@@ -223,6 +224,31 @@ class BlumAdaptiveTrainingController:
                 seed=int(datetime.utcnow().timestamp() // 900),
                 selection_history=dict(cursor.get("research_selection_history") or {}),
             )
+            strategy_specs = list(research_plan["specs"])
+            priority_specs = (
+                self.promotion_frontier.priority_specs(db, market_filter="forex_only", limit=1)
+                if "FOREX" in self.config.markets and hasattr(self.promotion_frontier, "priority_specs")
+                else ()
+            )
+            known_fingerprints = {
+                ExecutableStrategySpec.from_payload(specification).fingerprint
+                for specification in strategy_specs
+            }
+            for specification in priority_specs:
+                normalized = ExecutableStrategySpec.from_payload(specification).to_payload()
+                if normalized["strategy_fingerprint"] in known_fingerprints:
+                    continue
+                strategy_specs.append(normalized)
+                known_fingerprints.add(normalized["strategy_fingerprint"])
+                research_plan["reasons"].append(
+                    {
+                        "strategy_fingerprint": normalized["strategy_fingerprint"],
+                        "reason": "priority_market_coverage",
+                        "sample_size": 0,
+                    }
+                )
+            research_plan["specs"] = strategy_specs
+            research_plan.setdefault("selection_mix", {})["priority_market_coverage"] = len(priority_specs)
             run_summary = self.engine.run_cycle(
                 db,
                 ReplayRunRequest(
@@ -232,9 +258,11 @@ class BlumAdaptiveTrainingController:
                     trigger=trigger,
                     fetch_missing=True,
                     after_asset_id=cursor.get("asset_id"),
+                    priority_markets=("FOREX",) if "FOREX" in self.config.markets else (),
+                    market_cursors=dict(cursor.get("market_cursors") or {}),
                     markets=list(self.config.markets),
                     timeframes=self.config.timeframes,
-                    strategy_specs=tuple(research_plan["specs"]) or None,
+                    strategy_specs=tuple(strategy_specs) or None,
                 ),
             )
             run_summary["research_strategy_fingerprints"] = [

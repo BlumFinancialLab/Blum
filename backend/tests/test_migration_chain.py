@@ -41,11 +41,17 @@ def test_full_migration_chain_reaches_head_on_sqlite(tmp_path):
         "dashboard_snapshots",
         "brain_runtime_events",
         "background_job_state",
+        "forex_trader_cycles",
+        "forex_decisions",
+        "forex_positions",
+        "forex_learning_evidence",
+        "forex_strategy_readiness",
+        "forex_trader_runtime_state",
     }
 
     assert required_tables.issubset(tables)
     with engine.connect() as connection:
-        assert connection.execute(text("select version_num from alembic_version")).scalar_one() == "0035_decision_execution_parity"
+        assert connection.execute(text("select version_num from alembic_version")).scalar_one() == "0036_autonomous_forex_alpha_trader"
 
     downgrade = subprocess.run(
         [sys.executable, "-m", "alembic", "downgrade", "base"],
