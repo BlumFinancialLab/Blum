@@ -78,6 +78,8 @@ class PaperOrderLifecycleService:
                 "latency_bars": request.latency_bars,
                 "fx_spread_bps": request.fx_spread_bps,
                 "liquidity_score": request.liquidity_score,
+                "liquidity_basis": request.liquidity_basis,
+                "quote_capacity_units": request.quote_capacity_units,
                 "allowed_sessions": list(request.allowed_sessions),
                 "borrow_rate_bps": request.borrow_rate_bps,
                 "expected_holding_days": request.expected_holding_days,
@@ -126,6 +128,12 @@ class PaperOrderLifecycleService:
             fx_rate=order.fx_rate,
             fx_spread_bps=float(payload.get("fx_spread_bps") or 0.0),
             liquidity_score=float(payload.get("liquidity_score") if payload.get("liquidity_score") is not None else 100.0),
+            liquidity_basis=str(payload.get("liquidity_basis") or "reported_volume"),
+            quote_capacity_units=(
+                float(payload["quote_capacity_units"])
+                if payload.get("quote_capacity_units") is not None
+                else None
+            ),
             allowed_sessions=tuple(payload.get("allowed_sessions") or ["regular"]),
             borrow_rate_bps=float(payload["borrow_rate_bps"]) if payload.get("borrow_rate_bps") is not None else None,
             expected_holding_days=float(payload.get("expected_holding_days") or 0.0),
@@ -167,6 +175,8 @@ class PaperOrderLifecycleService:
                         "account_currency": order.account_currency,
                         "fx_rate": order.fx_rate,
                         "liquidity_score": request.liquidity_score,
+                        "liquidity_basis": request.liquidity_basis,
+                        "quote_capacity_units": request.quote_capacity_units,
                         "session": next((bar.session for bar in bars if bar.timestamp == fill.timestamp), None),
                     },
                 )

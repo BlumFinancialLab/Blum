@@ -153,7 +153,8 @@ def test_scheduled_paper_forward_cycle_scans_before_lifecycle(monkeypatch):
     assert result["lifecycle"]["opened_trades"] == 1
 
 
-def test_opened_paper_forward_trade_gets_default_time_stop():
+def test_opened_paper_forward_trade_gets_default_time_stop(monkeypatch):
+    monkeypatch.setattr("app.services.live_forward_paper_trading.settings.paper_execution_account_currency", "USD")
     with setup_db() as db:
         asset = seed_asset(db)
         service = LiveForwardPaperTradingService()
@@ -169,7 +170,8 @@ def test_opened_paper_forward_trade_gets_default_time_stop():
         assert opened.expires_at == opened.opened_at + timedelta(days=10)
 
 
-def test_legacy_open_trade_without_expiry_is_backfilled_and_time_exited():
+def test_legacy_open_trade_without_expiry_is_backfilled_and_time_exited(monkeypatch):
+    monkeypatch.setattr("app.services.live_forward_paper_trading.settings.paper_execution_account_currency", "USD")
     with setup_db() as db:
         asset = seed_asset(db)
         service = LiveForwardPaperTradingService()

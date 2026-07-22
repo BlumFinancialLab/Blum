@@ -19,6 +19,7 @@ from app.models import (
     LiveForwardPaperTradeEvent,
     PaperExecutionOrder,
     PriceHistory,
+    ReplayMarketBar,
     SniperScore,
     TradeLearningEvidence,
     TradePlan,
@@ -874,6 +875,18 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
             rate = safe_float(row.close if row else None)
             if rate > 0:
                 return round(1.0 / rate if invert else rate, 8)
+            replay_row = db.scalar(
+                select(ReplayMarketBar)
+                .where(
+                    ReplayMarketBar.asset_id == fx_asset.id,
+                    ReplayMarketBar.bar_timestamp <= at,
+                )
+                .order_by(desc(ReplayMarketBar.bar_timestamp))
+                .limit(1)
+            )
+            replay_rate = safe_float(replay_row.close if replay_row else None)
+            if replay_rate > 0:
+                return round(1.0 / replay_rate if invert else replay_rate, 8)
         return None
 
     def daily_execution_bars(self, db: Session, ticker: str, after: datetime) -> list[ExecutionMarketBar]:

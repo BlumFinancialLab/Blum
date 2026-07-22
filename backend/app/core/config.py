@@ -364,7 +364,7 @@ class Settings(BaseSettings):
     replay_memory_pause_percent: float = Field(default=92.0, alias="BLUM_REPLAY_MEMORY_PAUSE_PERCENT")
     replay_api_throttle_p95_ms: float = Field(default=2000.0, alias="BLUM_REPLAY_API_THROTTLE_P95_MS")
     replay_api_pause_p95_ms: float = Field(default=5000.0, alias="BLUM_REPLAY_API_PAUSE_P95_MS")
-    replay_markets: str = Field(default="UNITED STATES,USA,ITALY,GERMANY,FRANCE,EUROPE", alias="BLUM_REPLAY_MARKETS")
+    replay_markets: str = Field(default="UNITED STATES,USA,ITALY,GERMANY,FRANCE,EUROPE,FOREX", alias="BLUM_REPLAY_MARKETS")
     replay_timeframes: str = Field(default="1d,15m,5m,1m", alias="BLUM_REPLAY_TIMEFRAMES")
     replay_provider_priority: str = Field(default="yahoo_chart,yfinance,stooq,nasdaq", alias="BLUM_REPLAY_PROVIDER_PRIORITY")
     replay_min_data_quality: float = Field(default=35.0, alias="BLUM_REPLAY_MIN_DATA_QUALITY")

@@ -243,6 +243,23 @@ class BlumIntradayPaperEngine:
                 self._desk_context[asset.id] = (agent.agent_name, agent.benchmark)
                 ranked.append(asset)
 
+        # Daily providers do not consistently expose FX symbols. Let the strict
+        # intraday gateway hydrate configured pairs directly; it still blocks
+        # candidates unless all four point-in-time timeframes are available.
+        if any(agent.agent_name == "ForexDeskAgent" for agent in agent_types):
+            forex_assets = db.scalars(
+                select(Asset).where(
+                    Asset.is_active.is_(True),
+                    func.lower(Asset.asset_type).in_(["forex", "fx", "currency"]),
+                )
+            ).all()
+            for asset in forex_assets:
+                if asset.id in seen:
+                    continue
+                seen.add(asset.id)
+                self._desk_context[asset.id] = ("ForexDeskAgent", "UUP")
+                ranked.append(asset)
+
         ranked.sort(key=lambda row: (row.ticker.upper(), row.id))
         previous = db.scalar(
             select(IntradayPaperRun)
@@ -316,6 +333,9 @@ class BlumIntradayPaperEngine:
         costs = decision.costs or {}
         observed_entry = float(decision.entry_price or 0.0)
         quantity = float(decision.sizing.quantity if decision.sizing else 0.0)
+        is_forex = str(asset.asset_type or "").strip().lower() in {"forex", "fx", "currency"}
+        liquidity_basis = "otc_quote_capacity" if is_forex else "reported_volume"
+        quote_capacity_units = max(quantity * 20.0, quantity) if is_forex else None
         risk_per_share = max(0.0001, observed_entry - float(decision.stop_price or observed_entry))
         frozen = {
             "evidence_type": trade_evidence_type,
@@ -333,6 +353,11 @@ class BlumIntradayPaperEngine:
             "stop_price": decision.stop_price,
             "target_price": decision.target_price,
             "costs": costs,
+            "execution_liquidity": {
+                "basis": liquidity_basis,
+                "quote_capacity_units": quote_capacity_units,
+                "reported_volume_required": not is_forex,
+            },
             "evidence": decision.evidence,
             "regime": decision.regime,
             "session": decision.session,
@@ -405,6 +430,8 @@ class BlumIntradayPaperEngine:
                 "certified_for_copy_readiness": evidence_lane == "certified_paper",
                 "strategy_fingerprint": strategy_fingerprint,
                 "maximum_holding_minutes": int(decision.evidence.get("maximum_holding_minutes") or self.max_holding_minutes),
+                "liquidity_basis": liquidity_basis,
+                "quote_capacity_units": quote_capacity_units,
             },
         )
         db.add(trade)
@@ -445,6 +472,8 @@ class BlumIntradayPaperEngine:
             ),
             fx_spread_bps=settings.paper_execution_fx_spread_bps,
             liquidity_score=decision.liquidity_score,
+            liquidity_basis=liquidity_basis,
+            quote_capacity_units=quote_capacity_units,
             allowed_sessions=(decision.session,),
         )
         self.execution.submit(

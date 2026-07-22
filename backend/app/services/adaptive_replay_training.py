@@ -56,6 +56,9 @@ class ReplayTrainingConfig:
     @classmethod
     def from_settings(cls) -> "ReplayTrainingConfig":
         settings = get_settings()
+        markets = [value.strip().upper() for value in settings.replay_markets.split(",") if value.strip()]
+        if "FOREX" not in markets:
+            markets.append("FOREX")
         return cls(
             target_trades_per_day=max(1, settings.replay_target_validated_trades_per_day),
             max_seconds_per_cycle=max(1, min(120, settings.replay_max_seconds_per_cycle)),
@@ -63,7 +66,7 @@ class ReplayTrainingConfig:
             max_trades_per_cycle=max(1, settings.replay_max_trades_per_cycle),
             max_experiments_per_cycle=max(1, min(8, settings.replay_max_experiments_per_cycle)),
             min_promotion_samples=max(300, settings.replay_min_promotion_samples),
-            markets=tuple(value.strip().upper() for value in settings.replay_markets.split(",") if value.strip()),
+            markets=tuple(markets),
             timeframes=tuple(value.strip() for value in settings.replay_timeframes.split(",") if value.strip()),
             min_data_quality=max(0.0, min(100.0, settings.replay_min_data_quality)),
             cpu_throttle_percent=settings.replay_cpu_throttle_percent,

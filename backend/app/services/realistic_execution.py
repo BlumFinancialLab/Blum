@@ -26,6 +26,8 @@ class ExecutionOrderRequest:
     fx_rate: float | None = 1.0
     fx_spread_bps: float = 0.0
     liquidity_score: float = 100.0
+    liquidity_basis: str = "reported_volume"
+    quote_capacity_units: float | None = None
     allowed_sessions: tuple[str, ...] = ("regular",)
     borrow_rate_bps: float | None = None
     expected_holding_days: float = 0.0
@@ -112,11 +114,19 @@ class RealisticExecutionEngine:
             if not self._is_triggered(request, market_bar):
                 continue
             liquidity_capacity = max(0.05, min(1.0, float(request.liquidity_score) / 100.0))
-            capacity = max(0.0, float(market_bar.volume)) * max(0.0, min(0.25, float(request.max_participation_rate))) * liquidity_capacity
+            reported_volume = max(0.0, float(market_bar.volume))
+            capacity_base = reported_volume
+            if (
+                request.liquidity_basis == "otc_quote_capacity"
+                and reported_volume <= 0
+                and float(request.quote_capacity_units or 0.0) > 0
+            ):
+                capacity_base = float(request.quote_capacity_units or 0.0)
+            capacity = capacity_base * max(0.0, min(0.25, float(request.max_participation_rate))) * liquidity_capacity
             quantity = min(remaining, capacity)
             if quantity <= 0:
                 continue
-            participation = quantity / max(1.0, float(market_bar.volume))
+            participation = quantity / max(1.0, capacity_base)
             slippage_bps = self.dynamic_slippage_bps(market_bar.volatility_bps, participation, request.liquidity_score)
             reference = self._reference_price(request, market_bar)
             adverse_bps = max(0.0, float(market_bar.spread_bps)) / 2.0 + slippage_bps

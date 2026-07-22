@@ -42,6 +42,7 @@ from app.services.intraday_paper_engine import (
 from app.services.live_forward_paper_trading import LiveForwardPaperTradingService
 from app.services.promoted_strategy_registry import BlumPromotedStrategyRegistry
 from app.services.replay_execution import ReplayExecutionModel
+from app.services.adaptive_replay_training import ReplayTrainingConfig
 from app.services import realtime
 from app.services import intraday_paper_engine as intraday_module
 from app.engine.brain.trader_brain import TraderBrainService
@@ -421,7 +422,7 @@ def test_paper_opportunity_executes_the_frozen_replay_strategy_contract():
 
     risk_distance = float(decision.entry_price or 0.0) - float(decision.stop_price or 0.0)
     reward_distance = float(decision.target_price or 0.0) - float(decision.entry_price or 0.0)
-    assert decision.status == "INTRADAY_TRADE_CANDIDATE"
+    assert decision.status == "INTRADAY_TRADE_CANDIDATE", decision.to_dict()
     assert strategy.executable_strategy["strategy_fingerprint"] == executable.fingerprint
     assert decision.evidence["strategy_fingerprint"] == executable.fingerprint
     assert round(reward_distance / risk_distance, 6) == 2.5
@@ -865,6 +866,25 @@ def test_intraday_discovery_includes_stored_forex_assets(monkeypatch):
     assert discovered == [asset]
 
 
+def test_intraday_discovery_hydrates_forex_without_daily_price_history():
+    with setup_db() as db:
+        asset = seed_asset(db, ticker="EURUSD=X", market="Forex")
+        asset.asset_type = "Forex"
+        asset.category = "Currency"
+        db.commit()
+
+        discovered = BlumIntradayPaperEngine(
+            now_provider=lambda: NOW,
+            refresh_missing=True,
+        )._discover_assets(db)
+
+    assert asset in discovered
+
+
+def test_replay_training_includes_forex_market_by_default():
+    assert "FOREX" in ReplayTrainingConfig.from_settings().markets
+
+
 def test_forex_intraday_session_and_execution_costs_are_supported():
     profile = ReplayExecutionModel().profile(
         market="FOREX",
@@ -877,6 +897,41 @@ def test_forex_intraday_session_and_execution_costs_are_supported():
     assert session_name("FOREX", 23) == "regular"
     assert profile.profile_name == "forex_major_liquid"
     assert 0 < profile.total_round_trip_bps < 10
+
+
+def test_forex_opportunity_does_not_treat_unreported_volume_as_illiquidity():
+    with setup_db() as db:
+        asset = seed_asset(db, ticker="EURUSD=X", market="Forex")
+        asset.asset_type = "Forex"
+        asset.category = "Currency"
+        seed_validation(
+            db,
+            markets=["FOREX"],
+            metrics={"supported_asset_classes": ["Forex"]},
+        )
+        seed_bars(db, asset, "1d", count=80, step=timedelta(days=1), volume=0)
+        seed_bars(db, asset, "15m", count=80, step=timedelta(minutes=15), volume=0)
+        seed_bars(db, asset, "5m", count=80, step=timedelta(minutes=5), volume=0)
+        seed_bars(db, asset, "1m", count=80, step=timedelta(minutes=1), volume=0)
+        strategy = BlumPromotedStrategyRegistry().list_eligible(
+            db,
+            market="FOREX",
+            asset_class="Forex",
+        )[0]
+        bundle = StrictIntradayDataGateway(refresh_missing=False).load(db, asset=asset, now=NOW)
+
+        decision = BlumIntradayOpportunityEngine().evaluate(
+            strategy=strategy,
+            data=bundle,
+            portfolio=IntradayPortfolioState(capital=10_000.0),
+            desk="ForexDeskAgent",
+            benchmark_ticker="UUP",
+            asset_type="Forex",
+        )
+
+    assert decision.status == "INTRADAY_TRADE_CANDIDATE"
+    assert decision.liquidity_score >= 35.0
+    assert decision.evidence["liquidity_method"] == "major_fx_quote_continuity_proxy"
 
 
 def test_intraday_command_is_post_only_and_settings_are_bounded():

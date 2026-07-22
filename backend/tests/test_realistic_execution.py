@@ -85,6 +85,30 @@ def test_partial_fill_respects_volume_participation() -> None:
     assert result.costs.total_cost > 0
 
 
+def test_otc_quote_capacity_can_fill_zero_reported_volume_without_affecting_exchange_orders() -> None:
+    engine = RealisticExecutionEngine()
+    forex = engine.evaluate(
+        order(
+            order_key="forex-order",
+            ticker="EURUSD=X",
+            quantity=10,
+            liquidity_basis="otc_quote_capacity",
+            quote_capacity_units=1_000,
+        ),
+        [bar(1, volume=0, low=99.5)],
+    )
+    exchange = engine.evaluate(
+        order(order_key="exchange-order", quantity=10),
+        [bar(1, volume=0, low=99.5)],
+    )
+
+    assert forex.status == "FILLED"
+    assert forex.filled_quantity == 10
+    assert forex.fills[0].participation_rate == 0.01
+    assert exchange.status == "SUBMITTED"
+    assert exchange.reason == "ORDER_NOT_FILLED"
+
+
 def test_multiple_later_bars_can_complete_partial_order() -> None:
     result = RealisticExecutionEngine().evaluate(
         order(quantity=100),
@@ -311,15 +335,20 @@ def test_paper_lifecycle_persists_execution_assumptions_and_costs() -> None:
                 fx_rate=1.08,
                 fx_spread_bps=5.0,
                 liquidity_score=40.0,
+                liquidity_basis="otc_quote_capacity",
+                quote_capacity_units=1_000.0,
                 allowed_sessions=("regular", "closing_auction"),
             ),
         )
-        result = service.process_order(db, created, [bar(1, low=99.5, volume=10_000)])
+        result = service.process_order(db, created, [bar(1, low=99.5, volume=0)])
         fill = db.scalar(select(PaperExecutionFill).where(PaperExecutionFill.order_id == created.id))
 
     assert result["status"] == "FILLED"
     assert created.order_payload["fx_spread_bps"] == 5.0
     assert created.order_payload["liquidity_score"] == 40.0
+    assert created.order_payload["liquidity_basis"] == "otc_quote_capacity"
+    assert created.order_payload["quote_capacity_units"] == 1_000.0
     assert created.order_payload["allowed_sessions"] == ["regular", "closing_auction"]
     assert fill.fx_cost > 0
     assert fill.fill_payload["account_currency"] == "EUR"
+    assert fill.fill_payload["liquidity_basis"] == "otc_quote_capacity"

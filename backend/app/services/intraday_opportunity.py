@@ -128,9 +128,16 @@ class BlumIntradayOpportunityEngine:
             return IntradayDecision(INTRADAY_BLOCKED, "VOLATILITY_TOO_LOW", "Observed one-minute volatility is too low for costs and execution risk.", volatility_bps=volatility_bps, regime=regime, **base)
         trigger = data.bars["1m"]
         volumes = [float(row.volume or 0.0) for row in trigger[-20:]]
-        latest_volume = volumes[-1]
-        average_volume = max(1.0, mean(volumes))
-        liquidity_score = max(0.0, min(100.0, 55.0 + (latest_volume / average_volume - 1.0) * 30.0))
+        asset_type_key = str(asset_type or "").lower()
+        is_forex = asset_type_key in {"forex", "fx", "currency"} or str(data.market or "").upper() in {"FOREX", "FX"}
+        if is_forex and not any(volume > 0 for volume in volumes):
+            liquidity_score = max(35.0, min(85.0, min(data.quality_scores.values())))
+            liquidity_method = "major_fx_quote_continuity_proxy"
+        else:
+            latest_volume = volumes[-1]
+            average_volume = max(1.0, mean(volumes))
+            liquidity_score = max(0.0, min(100.0, 55.0 + (latest_volume / average_volume - 1.0) * 30.0))
+            liquidity_method = "reported_relative_volume"
         if liquidity_score < self.min_liquidity_score:
             return IntradayDecision(INTRADAY_BLOCKED, "LIQUIDITY_TOO_LOW", "Observed one-minute liquidity is below the configured threshold.", liquidity_score=liquidity_score, volatility_bps=volatility_bps, regime=regime, **base)
 
@@ -208,6 +215,7 @@ class BlumIntradayOpportunityEngine:
                 "evidence_lane": evidence_lane,
                 "paper_risk_multiplier": risk_multiplier,
                 "certified_for_copy_readiness": bool(strategy.metrics.get("certified_for_copy_readiness", evidence_lane == "certified_paper")),
+                "liquidity_method": liquidity_method,
             },
             **base,
         )

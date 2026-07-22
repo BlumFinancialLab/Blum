@@ -52,6 +52,17 @@ def test_purged_walk_forward_excludes_overlap_and_embargo() -> None:
         assert set(fold.train_indices).isdisjoint(fold.validation_indices)
 
 
+def test_intraday_strategy_factory_generates_forex_specific_hypotheses() -> None:
+    rows = StrategyFamilyRegistry().variants("intraday_scalping", max_variants=64, seed=7)
+    forex_rows = [row for row in rows if row["market_filter"] == "forex_only"]
+
+    assert forex_rows
+    assert all(row["executable_strategy"]["market_filter"] == "forex_only" for row in forex_rows)
+    assert all(row["executable_strategy"]["minimum_relative_volume"] == 0.0 for row in forex_rows)
+    assert all(row["executable_strategy"]["minimum_stop_percent"] == 0.0005 for row in forex_rows)
+    assert all(row["benchmark_ticker"] == "UUP" for row in forex_rows)
+
+
 def test_block_bootstrap_interval_is_seeded_and_conservative() -> None:
     values = [0.15, 0.25, 0.1, 0.35, -0.05, 0.3] * 60
 
@@ -243,6 +254,7 @@ def test_initial_strategy_family_registry_is_complete_and_bounded() -> None:
         "all",
         "usa_only",
         "europe_only",
+        "forex_only",
     }
     assert all(row["evidence_binding"] == "hyperbolic_replay_v1" for row in first)
 

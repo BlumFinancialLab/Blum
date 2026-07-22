@@ -16,6 +16,7 @@ from app.models import (
     PaperExecutionFill,
     PaperExecutionOrder,
     PriceHistory,
+    ReplayMarketBar,
     TradeLearningEvidence,
     LearningEvent,
 )
@@ -932,6 +933,49 @@ def test_daily_paper_execution_blocks_missing_point_in_time_fx(monkeypatch):
     assert stored.status == "SKIPPED"
     assert stored.outcome_label == "DATA_BLOCKED"
     assert any(row["reason"] == "fx_rate_unavailable" for row in report["phases"]["open_eligible_trades"]["skipped"])
+
+
+def test_daily_point_in_time_fx_rate_reuses_stored_intraday_fx_evidence(monkeypatch):
+    monkeypatch.setattr("app.services.live_forward_paper_trading.settings.paper_execution_account_currency", "EUR")
+    with setup_db() as db:
+        fx_asset = Asset(
+            ticker="EURUSD=X",
+            name="EUR/USD",
+            category="Currency",
+            sector="Foreign Exchange",
+            industry="Major FX Pair",
+            country="Forex",
+            asset_type="Forex",
+            currency="USD",
+            exchange="FX",
+            is_active=True,
+        )
+        db.add(fx_asset)
+        db.flush()
+        at = datetime.utcnow()
+        db.add(
+            ReplayMarketBar(
+                asset_id=fx_asset.id,
+                source_symbol=fx_asset.ticker,
+                normalized_symbol=fx_asset.ticker,
+                market="FOREX",
+                timeframe="1m",
+                bar_timestamp=at - timedelta(minutes=1),
+                open=1.0899,
+                high=1.0902,
+                low=1.0897,
+                close=1.09,
+                volume=0,
+                provider="fixture",
+                acquired_at=at,
+                data_quality_score=90.0,
+            )
+        )
+        db.commit()
+
+        rate = LiveForwardPaperTradingService().daily_point_in_time_fx_rate(db, "USD", "EUR", at)
+
+    assert rate == 1.09
 
 
 def test_cost_adjusted_edge_gate_rejects_zero_expectancy_setup():

@@ -60,7 +60,7 @@ REPLAY_IMPLEMENTATIONS: dict[str, dict] = {
 }
 
 REPLAY_REGIME_FILTERS = ("all", "trend_up_only", "range_bound_only", "trend_down_only")
-REPLAY_MARKET_FILTERS = ("all", "usa_only", "europe_only")
+REPLAY_MARKET_FILTERS = ("all", "usa_only", "europe_only", "forex_only")
 
 
 class StrategyFamilyRegistry:
@@ -163,13 +163,15 @@ class StrategyFamilyRegistry:
             setup_index = ("intraday_breakout", "intraday_trend").index(setup_type)
             regime_index = REPLAY_REGIME_FILTERS.index(regime_filter)
             market_index = REPLAY_MARKET_FILTERS.index(market_filter)
+            is_forex = market_filter == "forex_only"
             canonical = canonical_strategy_spec(setup_type)
             spec = ExecutableStrategySpec.from_payload(
                 {
                     **canonical.to_payload(),
                     "lookback": (5, 10, 20)[(regime_index + market_index) % 3],
-                    "minimum_relative_volume": (0.0, 1.2)[(setup_index + regime_index) % 2],
+                    "minimum_relative_volume": 0.0 if is_forex else (0.0, 1.2)[(setup_index + regime_index) % 2],
                     "stop_atr_multiple": (1.0, 1.5)[(regime_index + market_index) % 2],
+                    "minimum_stop_percent": 0.0005 if is_forex else canonical.minimum_stop_percent,
                     "target_r_multiple": (1.5, 2.0, 2.5)[(setup_index + regime_index + market_index) % 3],
                     "maximum_holding_bars": (15, 30)[(setup_index + market_index) % 2],
                     "higher_timeframe_min_trend": -1.0 if regime_filter == "trend_down_only" else 0.0,
@@ -182,8 +184,8 @@ class StrategyFamilyRegistry:
                     "family": "intraday_scalping",
                     "setup_type": setup_type,
                     "market": "global",
-                    "asset_class": "stocks,etfs",
-                    "benchmark_ticker": "SPY",
+                    "asset_class": "stocks,etfs,forex",
+                    "benchmark_ticker": "UUP" if is_forex else "SPY",
                     "timeframe_stack": list(spec.required_timeframes),
                     "entry_rule": spec.entry_rule,
                     "stop_rule": f"atr_{spec.stop_atr_multiple:g}",
