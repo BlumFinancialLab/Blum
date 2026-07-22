@@ -73,7 +73,14 @@ def frames(*, direction: str = "LONG", stale_1m: bool = False) -> dict[str, Mark
     return output
 
 
-def market_input(*, direction: str = "LONG", spread_pips: float = 0.8, stale_1m: bool = False, news: str = "LOW_IMPACT") -> AgentMarketInput:
+def market_input(
+    *,
+    direction: str = "LONG",
+    spread_pips: float = 0.8,
+    stale_1m: bool = False,
+    news: str = "LOW_IMPACT",
+    event_at: datetime | None = None,
+) -> AgentMarketInput:
     last = frames(direction=direction, stale_1m=stale_1m)
     mid = last["1m"].closes[-1]
     pip = pair_config("EURUSD=X").pip_size
@@ -84,6 +91,7 @@ def market_input(*, direction: str = "LONG", spread_pips: float = 0.8, stale_1m:
         quote=ForexQuote(bid=mid - spread_pips * pip / 2, ask=mid + spread_pips * pip / 2, timestamp=NOW, source="test"),
         session="LONDON",
         macro_event_impact=news,
+        macro_event_timestamp=event_at,
         liquidity_score=0.9,
         volatility_score=0.7,
     )
@@ -151,6 +159,11 @@ def test_spread_news_and_stale_data_block_trades():
         market_input(news="HIGH_IMPACT"), strategy=strategy(news_strategy=True)
     )
     assert "NEWS_WINDOW_BLOCKED" not in promoted_news.blockers
+    outside_window = BlumForexTraderCore().evaluate_input(
+        market_input(news="HIGH_IMPACT", event_at=NOW - timedelta(hours=2)),
+        strategy=strategy(),
+    )
+    assert "NEWS_WINDOW_BLOCKED" not in outside_window.blockers
 
 
 def test_risk_netting_daily_loss_and_max_positions():

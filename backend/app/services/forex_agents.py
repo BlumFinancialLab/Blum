@@ -14,6 +14,7 @@ from app.services.forex_contracts import (
     pair_config,
 )
 from app.services.forex_broker import BlumForexBrokerProfileService
+from app.core.config import get_settings
 
 
 def _trend(values: tuple[float, ...], lookback: int = 10) -> ForexDirection:
@@ -75,7 +76,17 @@ class BlumForexPriceActionAgent:
 
 class BlumForexMacroAgent:
     def analyze(self, market: AgentMarketInput) -> MacroOutput:
-        blocked = market.macro_event_impact == "HIGH_IMPACT"
+        blocked = False
+        if market.macro_event_impact == "HIGH_IMPACT":
+            settings = get_settings()
+            if market.macro_event_timestamp is None:
+                blocked = True
+            else:
+                minutes_to_event = (market.macro_event_timestamp - market.as_of).total_seconds() / 60.0
+                blocked = -max(0, settings.forex_news_block_after_minutes) <= minutes_to_event <= max(
+                    0,
+                    settings.forex_news_block_before_minutes,
+                )
         observed = {
             key: float(value)
             for key in ("rate_differential_change", "inflation_surprise", "employment_surprise", "dxy_change", "yield_differential_change", "risk_appetite_change")

@@ -145,6 +145,8 @@ class Settings(BaseSettings):
     forex_alpha_max_replay_forward_decay: float = Field(default=0.5, alias="BLUM_FOREX_ALPHA_MAX_REPLAY_FORWARD_DECAY")
     forex_alpha_max_currency_concentration: float = Field(default=0.7, alias="BLUM_FOREX_ALPHA_MAX_CURRENCY_CONCENTRATION")
     forex_alpha_threshold_version: str = Field(default="forex-alpha-readiness-v1", alias="BLUM_FOREX_ALPHA_THRESHOLD_VERSION")
+    forex_news_block_before_minutes: int = Field(default=30, alias="BLUM_FOREX_NEWS_BLOCK_BEFORE_MINUTES")
+    forex_news_block_after_minutes: int = Field(default=30, alias="BLUM_FOREX_NEWS_BLOCK_AFTER_MINUTES")
     paper_forward_lifecycle_enabled: bool = Field(default=False, alias="PAPER_FORWARD_LIFECYCLE_ENABLED")
     paper_forward_max_holding_days: int = Field(default=10, alias="PAPER_FORWARD_MAX_HOLDING_DAYS")
     paper_forward_min_confidence: float = Field(default=50.0, alias="PAPER_FORWARD_MIN_CONFIDENCE")

@@ -429,6 +429,11 @@ class BlumForexTraderCore:
     def _input_snapshot(market: AgentMarketInput) -> dict:
         return {
             "pair": market.pair, "as_of": market.as_of.isoformat(), "session": market.session,
+            "macro_event_impact": market.macro_event_impact,
+            "macro_event_timestamp": market.macro_event_timestamp.isoformat() if market.macro_event_timestamp else None,
+            "liquidity_score": market.liquidity_score,
+            "volatility_score": market.volatility_score,
+            "macro_payload": _jsonable(market.macro_payload),
             "quote": _jsonable(asdict(market.quote)), "data_hash": market.data_hash(),
             "timeframes": {key: {"market_timestamp": value.market_timestamp.isoformat(), "acquired_at": value.acquired_at.isoformat(), "provider": value.provider, "quality_score": value.quality_score, "missing_intervals": list(value.missing_intervals), "adjustment_status": value.adjustment_status, "opens": list(value.opens), "highs": list(value.highs), "lows": list(value.lows), "closes": list(value.closes)} for key, value in market.frames.items()},
         }
@@ -642,6 +647,7 @@ class ForexMarketInputRepository:
                 pair=asset.ticker, as_of=now, frames=frames,
                 quote=ForexQuote(bid=bid, ask=ask, timestamp=frames["1m"].market_timestamp, source=source),
                 session=session, macro_event_impact=str(metadata.get("macro_event_impact") or "UNKNOWN"),
+                macro_event_timestamp=_datetime_value(metadata.get("macro_event_timestamp")),
                 liquidity_score=float(metadata.get("liquidity_score") or 0.75),
                 volatility_score=float(metadata.get("volatility_score") or 0.5),
                 macro_payload={
@@ -897,6 +903,17 @@ def _number(value):
         return float(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def _datetime_value(value) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
+        except ValueError:
+            return None
+    return None
 
 
 def _commit() -> str | None:

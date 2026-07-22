@@ -126,6 +126,7 @@ class AgentMarketInput:
     quote: ForexQuote
     session: str
     macro_event_impact: str = "LOW_IMPACT"
+    macro_event_timestamp: datetime | None = None
     liquidity_score: float = 0.0
     volatility_score: float = 0.0
     macro_payload: dict = field(default_factory=dict)
@@ -159,6 +160,12 @@ class AgentMarketInput:
             "pair": self.pair,
             "as_of": self.as_of.isoformat(),
             "quote": asdict(self.quote),
+            "session": self.session,
+            "macro_event_impact": self.macro_event_impact,
+            "macro_event_timestamp": self.macro_event_timestamp.isoformat() if self.macro_event_timestamp else None,
+            "liquidity_score": self.liquidity_score,
+            "volatility_score": self.volatility_score,
+            "macro_payload": self.macro_payload,
             "frames": {key: {"timestamp": value.market_timestamp.isoformat(), "closes": value.closes} for key, value in self.frames.items()},
         }
         return sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
