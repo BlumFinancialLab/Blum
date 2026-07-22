@@ -33,6 +33,7 @@ from app.services.forex_trader import (
     BlumForexTraderCore,
     BlumForexTradingScheduler,
     ForexMarketDataRefreshService,
+    ForexStrategyRepository,
     ForexTraderSnapshotService,
 )
 from app.main import app
@@ -107,6 +108,34 @@ def strategy(*, news_strategy: bool = False) -> ForexStrategyEvidence:
         currency_concentration=0.45,
         is_news_strategy=news_strategy,
     )
+
+
+def test_empty_registry_bootstraps_non_certified_paper_exploration(db):
+    strategies = ForexStrategyRepository().load(db, ["EURUSD=X"])
+
+    exploratory = strategies["EURUSD=X"]
+    assert exploratory.readiness == ForexReadiness.PAPER_TRADE_ELIGIBLE
+    assert exploratory.sample_size == 0
+    assert exploratory.evidence_lane == "exploration_paper"
+    assert exploratory.certified_for_copy_readiness is False
+
+    outcome = BlumForexTraderCore().evaluate_input(market_input(), strategy=exploratory)
+    assert outcome.approved is True
+    assert outcome.proposal.direction == ForexDirection.LONG
+    assert outcome.proposal.evidence_lane == "exploration_paper"
+
+    result = BlumForexTraderCore().run_cycle(
+        db,
+        inputs=[market_input()],
+        strategies=strategies,
+        now=NOW,
+        cycle_key="exploration-bootstrap",
+    )
+    position = db.scalar(select(ForexPosition))
+    assert result["trades_opened"] == 1
+    assert position is not None
+    assert position.contract_json["evidence_lane"] == "exploration_paper"
+    assert position.contract_json["certified_for_copy_readiness"] is False
 
 
 def strategy_with_memory(*, grade: str, adjustment: float) -> ForexStrategyEvidence:
@@ -454,6 +483,25 @@ def test_readiness_promotion_degradation_and_terminal_only_learning(db):
     degraded = learner.assess_readiness(strategy(), [{**row, "net_r": -1.0, "outcome": "LOSS"} for row in evidence])
     assert degraded.level in {ForexReadiness.DEGRADED, ForexReadiness.SUSPENDED}
     assert learner.record_outcome(db, decision_id=None, outcome="OPEN", payload={}) is None
+
+
+def test_closed_forex_trade_persists_bounded_reinforcement_reward(db):
+    row = BlumForexLearningEngine().record_outcome(
+        db,
+        decision_id=None,
+        outcome="WIN",
+        payload={
+            "strategy_id": "forex-exploration-bootstrap-v1",
+            "pair": "EURUSD=X",
+            "realized_result": 0.8,
+            "benchmark_excess": 0.01,
+            "evidence_strength": 0.8,
+        },
+    )
+
+    assert row is not None
+    assert row.payload_json["reinforcement_reward_r"] == pytest.approx(0.9)
+    assert row.payload_json["policy_update_eligible"] is True
 
 
 def test_alpha_readiness_rejects_replay_decay_concentration_and_active_blockers():

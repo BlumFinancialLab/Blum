@@ -256,6 +256,7 @@ class ForexMemoryCompiler:
                 "setup_family": row.setup_family or "UNKNOWN",
                 "outcome": row.outcome,
                 "realized_r": row.realized_result,
+                "reinforcement_reward_r": (row.payload_json or {}).get("reinforcement_reward_r"),
                 "benchmark_excess": (row.payload_json or {}).get("benchmark_excess"),
             }
             for row in forex_rows
@@ -269,6 +270,7 @@ class ForexMemoryCompiler:
                 "setup_family": row.setup_type or "UNKNOWN",
                 "outcome": "WIN" if float(row.r_multiple or 0.0) > 0 else "LOSS" if float(row.r_multiple or 0.0) < 0 else "BREAKEVEN",
                 "realized_r": row.r_multiple,
+                "reinforcement_reward_r": row.r_multiple,
                 "benchmark_excess": row.benchmark_excess,
             }
             for row in replay_rows
@@ -279,7 +281,10 @@ class ForexMemoryCompiler:
         compiled = 0
         for context, evidence in groups.items():
             closed = [row for row in evidence if row["outcome"] in {"WIN", "LOSS", "BREAKEVEN"} and row["realized_r"] is not None]
-            values = [float(row["realized_r"]) for row in closed]
+            values = [
+                float(row["reinforcement_reward_r"] if row.get("reinforcement_reward_r") is not None else row["realized_r"])
+                for row in closed
+            ]
             benchmark = [float(row["benchmark_excess"] or 0.0) for row in closed]
             expectancy = mean(values) if values else None
             benchmark_excess = mean(benchmark) if benchmark else None

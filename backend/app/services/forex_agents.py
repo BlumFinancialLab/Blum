@@ -199,6 +199,8 @@ class BlumForexScalpingExpertAgent:
             confidence_components=confidence_components,
             actionability_status="PROPOSED" if direction != ForexDirection.ABSTAIN else "TRAINING_ONLY",
             knowledge_context=knowledge_context,
+            evidence_lane=strategy.evidence_lane,
+            certified_for_copy_readiness=strategy.certified_for_copy_readiness,
         )
 
 

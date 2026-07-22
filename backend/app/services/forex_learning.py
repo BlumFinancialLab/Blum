@@ -51,8 +51,17 @@ class BlumForexLearningEngine:
     def record_outcome(self, db: Session, *, decision_id: int | None, outcome: str, payload: dict) -> ForexLearningEvidence | None:
         if outcome not in TERMINAL_OUTCOMES:
             return None
+        payload = dict(payload)
         expected = _number(payload.get("expected_result"))
         realized = _number(payload.get("realized_result"))
+        reward = self._reinforcement_reward(outcome, realized, _number(payload.get("benchmark_excess")))
+        payload["reinforcement_reward_r"] = reward
+        payload["policy_update_eligible"] = bool(
+            reward is not None
+            and outcome in {"WIN", "LOSS", "BREAKEVEN"}
+            and float(payload.get("evidence_strength") or 0.0) >= 0.5
+        )
+        payload["reward_policy"] = "net_r_plus_bounded_benchmark_excess_v1"
         row = ForexLearningEvidence(
             decision_id=decision_id,
             position_id=payload.get("position_id"),
@@ -76,6 +85,13 @@ class BlumForexLearningEngine:
         db.add(row)
         db.flush()
         return row
+
+    @staticmethod
+    def _reinforcement_reward(outcome: str, realized_r: float | None, benchmark_excess: float | None) -> float | None:
+        if outcome not in {"WIN", "LOSS", "BREAKEVEN"} or realized_r is None:
+            return None
+        benchmark_component = max(-0.25, min(0.25, float(benchmark_excess or 0.0) * 10.0))
+        return max(-2.0, min(3.0, realized_r + benchmark_component))
 
     def assess_readiness(self, strategy: ForexStrategyEvidence, evidence: list[dict]) -> ForexReadinessAssessment:
         terminal = [row for row in evidence if row.get("outcome") in TERMINAL_OUTCOMES]

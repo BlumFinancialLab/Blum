@@ -183,6 +183,8 @@ class ForexStrategyEvidence:
     is_news_strategy: bool = False
     strategy_version: str = "1"
     contextual_memory: dict = field(default_factory=dict)
+    evidence_lane: str = "certified_paper"
+    certified_for_copy_readiness: bool = True
 
 
 @dataclass(frozen=True)
@@ -249,6 +251,8 @@ class ForexTradeProposal:
     confidence_components: dict[str, float] = field(default_factory=dict)
     actionability_status: str = "UNASSESSED"
     knowledge_context: dict = field(default_factory=dict)
+    evidence_lane: str = "certified_paper"
+    certified_for_copy_readiness: bool = True
 
 
 @dataclass(frozen=True)

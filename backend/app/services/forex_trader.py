@@ -168,6 +168,8 @@ class BlumForexPositionManagerAgent:
                     "slippage_model": "broker_base_x_liquidity_x_volatility_x_event_v1",
                     "holding_model": "strategy_contract_time_stop_v1",
                     "risk_gate_accuracy": "TO_BE_EVALUATED",
+                    "evidence_lane": contract.get("evidence_lane"),
+                    "certified_for_copy_readiness": bool(contract.get("certified_for_copy_readiness", False)),
                 })
                 game = db.scalar(select(LiveForwardPaperGame).where(LiveForwardPaperGame.status == "active").order_by(desc(LiveForwardPaperGame.started_at)).limit(1))
                 if game:
@@ -351,6 +353,8 @@ class BlumForexTraderCore:
                     "event_impact": market.macro_event_impact,
                     "strategy_readiness": strategy.readiness.value,
                     "strategy_sample_size": strategy.sample_size,
+                    "evidence_lane": strategy.evidence_lane,
+                    "certified_for_copy_readiness": strategy.certified_for_copy_readiness,
                     "replay_forward_decay": strategy.replay_forward_decay,
                     "currency_concentration": strategy.currency_concentration,
                 },
@@ -771,7 +775,18 @@ class ForexStrategyRepository:
         experimental = [row for row in registry.list_experimental(db, market="FOREX", asset_class="Forex") if tuple(row.timeframe_stack) == required_stack]
         selected = promoted[0] if promoted else experimental[0] if experimental else None
         if selected is None:
-            return {}
+            from app.services.forex_contracts import ForexReadiness
+
+            exploratory = ForexStrategyEvidence(
+                strategy_id="forex-exploration-bootstrap-v1",
+                readiness=ForexReadiness.PAPER_TRADE_ELIGIBLE,
+                sample_size=0,
+                net_expectancy_r=0.0,
+                strategy_version="exploration-v1",
+                evidence_lane="exploration_paper",
+                certified_for_copy_readiness=False,
+            )
+            return {pair: exploratory for pair in pairs}
         current = db.scalar(select(ForexStrategyReadiness).where(ForexStrategyReadiness.strategy_id == selected.strategy_id))
         if current and current.readiness_level in {"DEGRADED", "SUSPENDED"}:
             return {}
@@ -814,6 +829,8 @@ class ForexStrategyRepository:
             active_blockers=tuple(selected.metrics.get("active_blockers") or ()),
             is_news_strategy=bool(selected.metrics.get("is_news_strategy")), strategy_version=selected.model_version,
             contextual_memory=contextual_memory,
+            evidence_lane=str(selected.metrics.get("evidence_lane") or "certified_paper"),
+            certified_for_copy_readiness=bool(selected.metrics.get("certified_for_copy_readiness", bool(promoted))),
         )
         return {pair: contract for pair in pairs}
 
