@@ -4,6 +4,7 @@ from dataclasses import asdict
 from datetime import datetime, timedelta
 from hashlib import sha256
 import json
+import logging
 import os
 import subprocess
 import time
@@ -48,6 +49,9 @@ from app.services.promoted_strategy_registry import BlumPromotedStrategyRegistry
 from app.services.replay_data import MultiProviderReplayDataService
 from app.services.dashboard_snapshots import DashboardSnapshotService
 from app.core.config import get_settings
+
+
+logger = logging.getLogger(__name__)
 
 
 class BlumForexPositionManagerAgent:
@@ -561,11 +565,20 @@ class ForexTraderSnapshotService:
 
     def publish(self, db: Session, *, now: datetime | None = None) -> dict:
         payload = self.read(db, now=now)
-        return DashboardSnapshotService().write(
+        snapshot = DashboardSnapshotService().write(
             db, "forex_trader_summary", payload,
             source_modules={"producer": "BlumForexTradingScheduler", "policy": "stored_projection_only"},
             ttl_seconds=180,
         )
+        # Keep the product journal current after the authoritative Forex worker.
+        from app.services.unified_paper_trading import UnifiedPaperTradingProjectionService
+
+        try:
+            UnifiedPaperTradingProjectionService().publish(db)
+        except Exception:
+            db.rollback()
+            logger.exception("unified_paper_trading_snapshot_failed source=forex_trader")
+        return snapshot
 
     def latest(self, db: Session) -> dict:
         snapshot = DashboardSnapshotService().latest(db, "forex_trader_summary")

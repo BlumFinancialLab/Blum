@@ -207,6 +207,8 @@ export const api = {
   traderBrain: () => getJson<any>("/api/brain/snapshot"),
   traderTrainingGround: () => getJson<any>("/api/training/snapshot"),
   traderPaperTrading: (limit = 20) => getJson<any>(`/api/paper-trading/snapshot?limit=${limit}`),
+  unifiedPaperTradingDetail: (sourceEngine: string, sourceTradeId: number) =>
+    getJson<any>(`/api/paper-trading/trades/${encodeURIComponent(sourceEngine)}/${sourceTradeId}`),
   paperForwardStatus: () => getJson<any>("/api/paper-forward/status"),
   paperForwardSnapshot: () => getJson<any>("/api/paper-forward/snapshot"),
   paperForwardTrades: (limit = 50, status?: string) =>

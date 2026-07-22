@@ -90,6 +90,7 @@ CRITICAL_SNAPSHOT_TYPES = [
     "paper_copy_summary",
     "paper_forward_snapshot",
     "forex_trader_summary",
+    "unified_paper_trading_summary",
     "copy_readiness_summary",
     "trader_brain_summary",
     "trader_training_ground_summary",
@@ -351,6 +352,10 @@ class SnapshotProducerService:
         if snapshot_type == "forex_trader_summary":
             from app.services.forex_trader import ForexTraderSnapshotService
             return ForexTraderSnapshotService().read(db)
+        if snapshot_type == "unified_paper_trading_summary":
+            from app.services.unified_paper_trading import UnifiedPaperTradingProjectionService
+
+            return UnifiedPaperTradingProjectionService().build(db)
         if snapshot_type == "copy_readiness_summary":
             from app.services.copy_readiness_evidence import CopyReadinessSummaryService
 

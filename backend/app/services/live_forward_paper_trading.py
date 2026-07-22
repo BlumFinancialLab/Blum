@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
+import logging
 import math
 import re
 from typing import Any
@@ -60,6 +61,7 @@ from app.services.realistic_execution import ExecutionMarketBar, ExecutionOrderR
 
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 PAPER_FORWARD_INVALID_ENTRY_GEOMETRY = "PAPER_FORWARD_INVALID_ENTRY_GEOMETRY"
 
 
@@ -71,6 +73,17 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
     by /api/paper-forward: create immutable decision candidates, append events,
     and run one non-closing candidate scan.
     """
+
+    def publish_snapshot(self, db: Session) -> dict:
+        snapshot = super().publish_snapshot(db)
+        from app.services.unified_paper_trading import UnifiedPaperTradingProjectionService
+
+        try:
+            UnifiedPaperTradingProjectionService().publish(db)
+        except Exception:
+            db.rollback()
+            logger.exception("unified_paper_trading_snapshot_failed source=paper_forward")
+        return snapshot
 
     def create_candidate(self, db: Session, decision_payload: dict[str, Any]) -> LiveForwardPaperTrade:
         """Persist one idempotent frozen paper-forward candidate.

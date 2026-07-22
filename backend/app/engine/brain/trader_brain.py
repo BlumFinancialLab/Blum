@@ -48,6 +48,7 @@ from app.services.copy_readiness_evidence import CopyReadinessSummaryService
 from app.services.brain_learning_proof import BrainLearningProofService
 from app.services.research_planner import AutonomousResearchPlanner
 from app.services.trading_intelligence_lab import paper_forward_actionability_summary
+from app.services.dashboard_snapshots import DashboardSnapshotService
 
 
 TRADER_BRAIN_VERSION = ENGINE_VERSION
@@ -103,6 +104,8 @@ class TraderBrainService:
         explainability = explainability_score(db)
         market_coverage = market_coverage_score(db)
         portfolio_intelligence = safe_float(getattr(latest_power, "regime_robustness_score", None), None)
+        unified_paper = DashboardSnapshotService().latest(db, "unified_paper_trading_summary")
+        unified_payload = unified_paper.get("payload") or {}
         components = {
             "decision_quality": decision_quality,
             "evidence_quality": evidence_quality,
@@ -157,6 +160,13 @@ class TraderBrainService:
                 "evidence_grade": alpha.get("evidence_grade") or readiness.get("evidence_grade"),
             },
             "latest_lesson": lesson_payload(latest_lesson),
+            "paper_trading_performance": {
+                "snapshot_status": unified_paper.get("status"),
+                "snapshot_created_at": unified_paper.get("created_at"),
+                "counts": (unified_payload.get("counts") or {}).get("aggregate") or {},
+                "metrics": (unified_payload.get("metrics") or {}).get("aggregate") or {},
+                "by_market": (unified_payload.get("metrics") or {}).get("by_market") or {},
+            },
             "policy": "Trader Brain is read-only. It observes stored evidence and never triggers training, trading or recalculation during page render.",
         }
 
@@ -279,11 +289,14 @@ class TraderBrainService:
         paper_split = paper_forward_evidence_split(standard_paper_rows, live_game, label="Paper-Forward Evidence", actionability_summary=standard_actionability, lifecycle_mode=lifecycle_mode)
         live_split = live_forward_evidence_split(standard_paper_rows, live_game, actionability_summary=standard_actionability, lifecycle_mode=lifecycle_mode)
         intraday_split = intraday_paper_evidence_split(intraday_rows, live_game)
+        unified_paper = DashboardSnapshotService().latest(db, "unified_paper_trading_summary")
+        forex_split = forex_paper_evidence_split(unified_paper)
         evidence_split = {
             "historical_replay": historical_split,
             "walk_forward_validation": walk_forward_split,
             "paper_forward": paper_split,
             "intraday_paper_forward": intraday_split,
+            "forex_paper_forward": forex_split,
             "live_forward": live_split,
         }
         evidence_grade, evidence_reason = alpha_grade_from_splits(evidence_split)
@@ -291,6 +304,9 @@ class TraderBrainService:
         latest_update = latest_alpha_update_from_splits(evidence_split) or latest_paper_forward_update(eligible_paper_rows, benchmarks)
         primary_evidence = primary_alpha_evidence(evidence_split)
         total_evidence_sample = sum(int(split.get("sample_size") or 0) for split in evidence_split.values() if isinstance(split, dict))
+        unified_payload = unified_paper.get("payload") or {}
+        unified_counts = (unified_payload.get("counts") or {}).get("aggregate") or {}
+        unified_metrics = (unified_payload.get("metrics") or {}).get("aggregate") or {}
         return {
             "status": evidence_grade,
             "version": TRADER_BRAIN_VERSION,
@@ -306,6 +322,7 @@ class TraderBrainService:
             "total_evidence_sample_size": total_evidence_sample,
             "primary_evidence": primary_evidence,
             "closed_trade_count": len(closed_rows),
+            "combined_closed_trade_count": int(unified_counts.get("closed") or len(closed_rows)),
             "open_trade_count": len(open_rows),
             "paper_forward_lifecycle_mode": lifecycle_mode,
             "paper_forward_actionability_summary": actionability_summary,
@@ -327,6 +344,13 @@ class TraderBrainService:
             "benchmark_excess": paper_summary["benchmark_excess"],
             "realized_pnl": paper_summary["realized_pnl"],
             "unrealized_pnl": paper_summary["unrealized_pnl"],
+            "combined_paper_forward_performance": {
+                "snapshot_status": unified_paper.get("status"),
+                "snapshot_created_at": unified_paper.get("created_at"),
+                "counts": unified_counts,
+                "metrics": unified_metrics,
+                "by_market": (unified_payload.get("metrics") or {}).get("by_market") or {},
+            },
             "paper_forward_alpha": paper_summary["alpha"],
             "historical_alpha": historical_split.get("benchmark_excess"),
             "walk_forward_alpha": walk_forward_split.get("benchmark_excess"),
@@ -349,6 +373,7 @@ class TraderBrainService:
             "walk_forward": walk_forward_split,
             "paper_forward": paper_split,
             "intraday_paper_forward": intraday_split,
+            "forex_paper_forward": forex_split,
             "live_forward": live_split,
             "current_alpha_readiness": alpha_readiness,
             "copy_readiness": copy_readiness,
@@ -1939,6 +1964,7 @@ def alpha_verdict(grade: str, summary: dict, blockers: list[dict]) -> str:
 def alpha_grade_from_splits(evidence_split: dict) -> tuple[str, str]:
     paper = evidence_split.get("paper_forward") or {}
     intraday = evidence_split.get("intraday_paper_forward") or {}
+    forex = evidence_split.get("forex_paper_forward") or {}
     live = evidence_split.get("live_forward") or {}
     walk = evidence_split.get("walk_forward_validation") or {}
     historical = evidence_split.get("historical_replay") or {}
@@ -1947,6 +1973,8 @@ def alpha_grade_from_splits(evidence_split: dict) -> tuple[str, str]:
         return paper_grade, str(paper.get("evidence_reason") or "Paper-forward evidence is available.")
     if split_has_data(intraday):
         return str(intraday.get("evidence_grade") or "INSUFFICIENT_EVIDENCE"), str(intraday.get("evidence_reason") or "Intraday paper-forward evidence is available separately.")
+    if split_has_data(forex):
+        return str(forex.get("evidence_grade") or "INSUFFICIENT_EVIDENCE"), str(forex.get("evidence_reason") or "Forex paper-forward evidence is available separately.")
     if split_has_data(live):
         live_grade = cap_non_forward_grade(str(live.get("evidence_grade") or "INSUFFICIENT_EVIDENCE"))
         return live_grade, str(live.get("evidence_reason") or "Live-forward evidence exists, but paper-forward evidence remains limited.")
@@ -1960,11 +1988,14 @@ def alpha_grade_from_splits(evidence_split: dict) -> tuple[str, str]:
 def alpha_verdict_from_splits(evidence_split: dict, grade: str) -> str:
     paper = evidence_split.get("paper_forward") or {}
     intraday = evidence_split.get("intraday_paper_forward") or {}
+    forex = evidence_split.get("forex_paper_forward") or {}
     walk = evidence_split.get("walk_forward_validation") or {}
     historical = evidence_split.get("historical_replay") or {}
     if not split_has_data(paper):
         if split_has_data(intraday):
             return "Intraday paper-forward evidence exists; sample strength is reported separately."
+        if split_has_data(forex):
+            return "Forex paper-forward evidence exists; sample strength is reported separately."
         if split_has_data(walk):
             return "Walk-forward evidence exists, paper-forward still insufficient."
         if split_has_data(historical):
@@ -1982,7 +2013,7 @@ def alpha_verdict_from_splits(evidence_split: dict, grade: str) -> str:
 
 
 def primary_alpha_evidence(evidence_split: dict) -> dict:
-    for key in ("paper_forward", "intraday_paper_forward", "live_forward", "walk_forward_validation", "historical_replay"):
+    for key in ("paper_forward", "intraday_paper_forward", "forex_paper_forward", "live_forward", "walk_forward_validation", "historical_replay"):
         split = evidence_split.get(key) or {}
         if split_has_data(split):
             return {
@@ -2238,6 +2269,71 @@ def intraday_paper_evidence_split(rows: list[LiveForwardPaperTrade], game: LiveF
         }
     )
     return split
+
+
+def forex_paper_evidence_split(snapshot: dict) -> dict:
+    payload = snapshot.get("payload") or {}
+    counts = ((payload.get("counts") or {}).get("by_market") or {}).get("forex") or {}
+    metrics = ((payload.get("metrics") or {}).get("by_market") or {}).get("forex") or {}
+    closed = int(counts.get("closed") or 0)
+    if snapshot.get("status") == "missing" or closed <= 0:
+        reason = (
+            "No unified paper-trading snapshot exists yet."
+            if snapshot.get("status") == "missing"
+            else "No closed Forex paper-forward trades exist yet."
+        )
+        return empty_alpha_evidence_split(
+            "Forex Paper-Forward Evidence",
+            "dashboard_snapshots:unified_paper_trading_summary:forex",
+            reason,
+        )
+    benchmark_excess_raw = safe_float(metrics.get("benchmark_excess"), None)
+    benchmark_excess = benchmark_excess_raw * 100.0 if benchmark_excess_raw is not None else None
+    expectancy = safe_float(metrics.get("expectancy_r"), None)
+    grade, reason = split_evidence_grade(
+        label="Forex Paper-Forward Evidence",
+        sample_size=closed,
+        has_benchmark=benchmark_excess is not None,
+        alpha=benchmark_excess,
+        expectancy=expectancy,
+        max_drawdown=safe_float(metrics.get("max_drawdown"), None),
+        profit_factor=safe_float(metrics.get("profit_factor"), None),
+    )
+    game = payload.get("game") or {}
+    starting_capital = safe_float(game.get("starting_capital"), None)
+    realized_pnl = safe_float(metrics.get("realized_pnl"), None)
+    blum_return = (
+        round((realized_pnl / starting_capital) * 100.0, 4)
+        if realized_pnl is not None and starting_capital
+        else None
+    )
+    benchmark_return = (
+        round(blum_return - benchmark_excess, 4)
+        if blum_return is not None and benchmark_excess is not None
+        else None
+    )
+    return {
+        "label": "Forex Paper-Forward Evidence",
+        "status": "ready",
+        "sample_size": closed,
+        "closed_trade_count": closed,
+        "blum_return": blum_return,
+        "return": blum_return,
+        "benchmark_return": benchmark_return,
+        "alpha": benchmark_excess,
+        "benchmark_excess": benchmark_excess,
+        "average_excess_return": benchmark_excess,
+        "expectancy": expectancy,
+        "average_r": safe_float(metrics.get("average_r"), None),
+        "win_rate": safe_float(metrics.get("win_rate"), None),
+        "profit_factor": safe_float(metrics.get("profit_factor"), None),
+        "max_drawdown": safe_float(metrics.get("max_drawdown"), None),
+        "realized_pnl": realized_pnl,
+        "evidence_grade": grade,
+        "evidence_reason": reason,
+        "data_source": "dashboard_snapshots:unified_paper_trading_summary:forex",
+        "last_updated_at": snapshot.get("created_at"),
+    }
 
 
 def alpha_edge_map(rows: list[LiveForwardPaperTrade]) -> dict:

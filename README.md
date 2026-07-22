@@ -2021,3 +2021,25 @@ Forex positions. Alpha eligibility requires at least 100 closed forward Forex
 trades plus positive net expectancy, positive benchmark-relative evidence,
 coverage, replay-forward decay, currency concentration and confidence gates.
 Eligibility is evidence maturity, not a profit guarantee.
+
+### Unified paper-trading evidence
+
+The Paper Trading product surface reads one background-produced
+`unified_paper_trading_summary` snapshot. It combines standard, intraday and
+Forex paper records into one journal while retaining `source_engine`,
+`market_group` and the native source identifier for every row. Source tables
+remain authoritative: Forex records are not copied into generic paper tables.
+
+Aggregate P/L, win rate, expectancy R, drawdown and benchmark excess include
+eligible closed evidence from every paper engine exactly once. Open positions
+contribute only observed unrealized P/L; rejected and no-trade decisions never
+contribute profit. The snapshot also exposes separate per-market metrics so a
+strong or weak Forex result cannot be hidden inside an aggregate.
+
+`GET /api/paper-trading/snapshot` is snapshot-only. Trade replay is lazy and
+source-aware through
+`GET /api/paper-trading/trades/{source_engine}/{source_trade_id}`. The generic
+paper worker and Forex worker refresh the projection after their own background
+updates. Brain exposes the same aggregate evidence, while Alpha keeps Forex in
+its own `forex_paper_forward` evidence split. None of these GET paths starts a
+scan, lifecycle transition, learning cycle or recalculation.

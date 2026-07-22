@@ -48,13 +48,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     const onPaperTrading = pathname === "/paper-trading" || pathname === "/copy-trading" || pathname.startsWith("/paper-trading/") || pathname.startsWith("/copy-trading/");
     const onAlpha = pathname === "/alpha" || pathname.startsWith("/alpha/");
     if (onPaperTrading) {
-      api.paperForwardSnapshot().then((paper) => {
+      api.traderPaperTrading(50).then((paper) => {
         if (!mounted) return;
         setSidebarStatus({
           workerStatus: "snapshot",
           modelStatus: "paper forward",
           lastLearningCycle: "not queried",
-          paperForwardStatus: compactStatus(paper?.payload?.readiness ?? paper?.payload?.status ?? paper?.status),
+          paperForwardStatus: compactStatus(paper?.snapshot_status ?? paper?.status),
           alphaEvidenceGrade: "not queried",
         });
       }).catch(() => {

@@ -679,10 +679,10 @@ def test_paper_trading_page_uses_single_snapshot_and_readiness_states():
     page = Path(__file__).resolve().parents[2] / "frontend" / "app" / "paper-trading" / "page.tsx"
     text = page.read_text()
 
-    assert "api.paperForwardSnapshot()" in text
-    assert "api.paperForwardTrades(50)" in text
-    assert "api.paperForwardTradeDetail(tradeId)" in text
-    assert "api.paperForwardEvents(tradeId)" in text
+    assert "api.traderPaperTrading(50)" in text
+    assert "api.paperForwardSnapshot()" not in text
+    assert "api.paperForwardTrades(50)" not in text
+    assert "api.unifiedPaperTradingDetail(sourceEngine, tradeId)" in text
     assert "Live-Forward Paper Trading" in text
     assert "NO_DECISIONS" in text
     assert "NO_ELIGIBLE_SETUPS" in text
@@ -700,6 +700,6 @@ def test_paper_trading_summary_does_not_prefer_narrow_zero_counts_over_terminal_
     text = page.read_text()
 
     assert "maxAvailableCount(counts.candidates, candidates.length, snapshot.candidate_count)" in text
-    assert "maxAvailableCount(counts.closed_total, closedTrades.length, snapshot.closed_count)" in text
+    assert "maxAvailableCount(counts.closed, closedTrades.length, snapshot.closed_count)" in text
     assert "snapshot.candidate_count ?? counts.candidates" not in text
-    assert "snapshot.closed_count ?? counts.closed_total" not in text
+    assert "snapshot.closed_count ?? counts.closed" not in text

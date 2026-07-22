@@ -30,7 +30,10 @@ type ReadinessState =
   | "ERROR";
 
 type PaperForwardTrade = Record<string, any> & {
-  trade_id?: number;
+  trade_id?: string;
+  source_trade_id?: number;
+  source_engine?: string;
+  market_group?: string;
   ticker?: string;
   status?: string;
 };
@@ -91,7 +94,6 @@ const EMPTY_STATES: Record<ReadinessState, { title: string; body: string; next: 
 
 export default function PaperTradingPage() {
   const [snapshotEnvelope, setSnapshotEnvelope] = useState<any | null>(null);
-  const [tradesPayload, setTradesPayload] = useState<any | null>(null);
   const [error, setError] = useState("");
   const [slowLoad, setSlowLoad] = useState(false);
   const [selectedTrade, setSelectedTrade] = useState<PaperForwardTrade | null>(null);
@@ -101,18 +103,11 @@ export default function PaperTradingPage() {
     let mounted = true;
     const slowTimer = window.setTimeout(() => mounted && setSlowLoad(true), 9000);
 
-    Promise.allSettled([
-      withTimeout(api.paperForwardSnapshot(), 12000, "paper-forward snapshot timeout"),
-      withTimeout(api.paperForwardTrades(50), 12000, "paper-forward trades timeout"),
-    ])
-      .then(([snapshotResult, tradesResult]) => {
+    withTimeout(api.traderPaperTrading(50), 12000, "unified paper-trading snapshot timeout")
+      .then((payload) => {
         if (!mounted) return;
         window.clearTimeout(slowTimer);
-        if (snapshotResult.status === "fulfilled") setSnapshotEnvelope(snapshotResult.value);
-        if (tradesResult.status === "fulfilled") setTradesPayload(tradesResult.value);
-        if (snapshotResult.status === "rejected" && tradesResult.status === "rejected") {
-          setError(`${errorMessage(snapshotResult.reason)} | ${errorMessage(tradesResult.reason)}`);
-        }
+        setSnapshotEnvelope(payload);
       })
       .catch((err) => mounted && setError(errorMessage(err)));
 
@@ -123,7 +118,7 @@ export default function PaperTradingPage() {
   }, []);
 
   const snapshot = useMemo(() => normalizeSnapshot(snapshotEnvelope), [snapshotEnvelope]);
-  const trades = useMemo(() => mergeTrades(snapshot, tradesPayload), [snapshot, tradesPayload]);
+  const trades = useMemo(() => mergeTrades(snapshot), [snapshot]);
   const candidates = useMemo(() => filterTrades(trades, CANDIDATE_STATUSES), [trades]);
   const openPositions = useMemo(() => filterTrades(trades, OPEN_STATUSES), [trades]);
   const closedTrades = useMemo(() => filterTrades(trades, CLOSED_STATUSES), [trades]);
@@ -132,23 +127,23 @@ export default function PaperTradingPage() {
   const latestLessons = useMemo(() => deriveLessons(snapshot, closedTrades), [snapshot, closedTrades]);
 
   const openReplay = (trade: PaperForwardTrade) => {
-    const tradeId = trade.trade_id;
+    const tradeId = trade.source_trade_id;
+    const sourceEngine = trade.source_engine;
     setSelectedTrade(trade);
-    if (!tradeId) {
+    if (!tradeId || !sourceEngine) {
       setDetailState({ trade, events: [], loading: false, error: "Missing paper-forward trade id." });
       return;
     }
     setDetailState({ trade, events: [], loading: true, error: "" });
-    Promise.allSettled([api.paperForwardTradeDetail(tradeId), api.paperForwardEvents(tradeId)])
-      .then(([detailResult, eventsResult]) => {
-        const detail = detailResult.status === "fulfilled" ? detailResult.value : null;
-        const events = eventsResult.status === "fulfilled" ? eventsResult.value?.events ?? [] : detail?.events ?? [];
+    api.unifiedPaperTradingDetail(sourceEngine, tradeId)
+      .then((detail) => {
+        const events = detail?.events ?? [];
         const detailTrade = detail?.trade ?? trade;
         setDetailState({
           trade: detailTrade,
           events,
           loading: false,
-          error: detailResult.status === "rejected" ? errorMessage(detailResult.reason) : "",
+          error: detail?.status === "NOT_FOUND" ? "Trade detail not found." : "",
         });
       })
       .catch((err) => setDetailState({ trade, events: [], loading: false, error: errorMessage(err) }));
@@ -158,7 +153,7 @@ export default function PaperTradingPage() {
     return <ReadinessStateCard state="ERROR" explanation={`Paper-forward load failed: ${error}`} />;
   }
 
-  if (!snapshotEnvelope && !tradesPayload) {
+  if (!snapshotEnvelope) {
     return (
       <>
         <TerminalHeader
@@ -167,7 +162,7 @@ export default function PaperTradingPage() {
           subtitle="Loading the read-only paper-forward journal. No lifecycle or learning job is triggered from this page."
           statusItems={[
             { label: "Mode", value: "paper only", tone: "info" },
-            { label: "Requests", value: "snapshot + trades", tone: "info" },
+            { label: "Requests", value: "1 snapshot", tone: "info" },
           ]}
         />
         <LoadingState label={slowLoad ? "Still waiting for paper-forward snapshot" : "Loading paper-forward snapshot"} />
@@ -175,8 +170,9 @@ export default function PaperTradingPage() {
     );
   }
 
-  const metrics = snapshot.metrics ?? {};
-  const counts = snapshot.counts ?? {};
+  const metrics = snapshot.metrics?.aggregate ?? snapshot.metrics ?? {};
+  const counts = snapshot.counts?.aggregate ?? snapshot.counts ?? {};
+  const marketMetrics = snapshot.metrics?.by_market ?? {};
   const game = snapshot.game ?? {};
   const statusLabel = snapshot.readiness_status ?? snapshot.readiness ?? readiness;
   const actionability = snapshot.actionability_summary ?? {};
@@ -187,11 +183,11 @@ export default function PaperTradingPage() {
       <TerminalHeader
         eyebrow="BLUM Paper Trading"
         title="Live-Forward Paper Trading"
-        subtitle="Official forward paper journal. Read-only UI: no broker execution, no lifecycle run, no learning job from page load."
+        subtitle="Unified forward paper journal for equities, intraday and Forex. Read-only UI: no broker execution or worker run from page load."
         statusItems={[
           { label: "Readiness", value: String(statusLabel), tone: readinessTone(readiness) },
           { label: "Lifecycle", value: lifecycleLabel(readiness, snapshot), tone: readiness === "WORKER_DISABLED" ? "attention" : "info" },
-          { label: "Last run", value: formatDateTime(snapshot.last_run_at ?? snapshot.last_worker_run ?? game.updated_at), tone: "info" },
+          { label: "Snapshot", value: formatDateTime(snapshot.snapshot_created_at ?? snapshot.generated_at), tone: snapshot.is_stale ? "attention" : "info" },
           { label: "Broker", value: "disabled", tone: "positive" },
         ]}
       />
@@ -199,10 +195,16 @@ export default function PaperTradingPage() {
       <section className="terminal-command-grid">
         <MetricCard label="Candidates" value={numberLike(maxAvailableCount(counts.candidates, candidates.length, snapshot.candidate_count))} subvalue="Frozen or skipped decisions" icon={<Target size={15} />} tone={candidates.length ? "attention" : "neutral"} />
         <MetricCard label="Open" value={numberLike(snapshot.open_count ?? counts.open ?? openPositions.length)} subvalue="Forward paper positions" icon={<Clock size={15} />} tone={openPositions.length ? "positive" : "neutral"} />
-        <MetricCard label="Closed" value={numberLike(maxAvailableCount(counts.closed_total, closedTrades.length, snapshot.closed_count))} subvalue="Evaluated outcomes" icon={<BookOpen size={15} />} tone={closedTrades.length ? "positive" : "neutral"} />
-        <MetricCard label="Blocked / Errors" value={`${numberLike(snapshot.data_blocked_count ?? counts.data_blocked)} / ${numberLike(snapshot.error_count)}`} subvalue="Data blocked / skipped-error" icon={<ShieldAlert size={15} />} tone={(Number(snapshot.error_count) || Number(snapshot.data_blocked_count)) ? "negative" : "info"} />
+        <MetricCard label="Closed" value={numberLike(maxAvailableCount(counts.closed, closedTrades.length, snapshot.closed_count))} subvalue="Evaluated outcomes" icon={<BookOpen size={15} />} tone={closedTrades.length ? "positive" : "neutral"} />
+        <MetricCard label="No trade" value={numberLike(counts.decisions_rejected)} subvalue="Rejected without P/L" icon={<ShieldAlert size={15} />} tone={Number(counts.decisions_rejected) ? "attention" : "info"} />
         <MetricCard label="Realized P/L" value={formatCurrency(snapshot.realized_pnl ?? metrics.realized_pnl)} subvalue={`Unrealized ${formatCurrency(snapshot.unrealized_pnl ?? metrics.unrealized_pnl)}`} icon={<TrendingUp size={15} />} tone={moneyTone(snapshot.realized_pnl ?? metrics.realized_pnl)} />
-        <MetricCard label="Win / Avg R" value={`${formatPercent01(snapshot.win_rate ?? metrics.win_rate)} / ${formatR(snapshot.average_r ?? metrics.avg_r)}`} subvalue={`Benchmark excess ${formatPercent(snapshot.benchmark_excess ?? metrics.benchmark_excess)}`} icon={<TrendingDown size={15} />} tone={moneyTone(snapshot.benchmark_excess ?? metrics.benchmark_excess)} />
+        <MetricCard label="Win / Avg R" value={`${formatPercent01(snapshot.win_rate ?? metrics.win_rate)} / ${formatR(snapshot.average_r ?? metrics.average_r)}`} subvalue={`Benchmark excess ${formatPercent01(snapshot.benchmark_excess ?? metrics.benchmark_excess)}`} icon={<TrendingDown size={15} />} tone={moneyTone(snapshot.benchmark_excess ?? metrics.benchmark_excess)} />
+      </section>
+
+      <section className="terminal-command-grid" style={{ marginTop: 12 }}>
+        <MarketEvidenceCard label="Standard" metrics={marketMetrics.standard} counts={snapshot.counts?.by_market?.standard} />
+        <MarketEvidenceCard label="Intraday" metrics={marketMetrics.intraday} counts={snapshot.counts?.by_market?.intraday} />
+        <MarketEvidenceCard label="Forex" metrics={marketMetrics.forex} counts={snapshot.counts?.by_market?.forex} />
       </section>
 
       <section className="paper-forward-grid">
@@ -284,7 +286,7 @@ export default function PaperTradingPage() {
               <span>paper-only guardrail</span>
               <strong>No real-money execution, no broker integration</strong>
               <p>{snapshot.policy ?? "Frontend visualization reads snapshots and trades only. Lifecycle is a backend/manual concern."}</p>
-              <em>Initial page load calls only `/api/paper-forward/snapshot` and `/api/paper-forward/trades`.</em>
+              <em>Initial page load calls only `/api/paper-trading/snapshot`; detail is lazy and source-aware.</em>
             </div>
           </div>
         </BloombergPanel>
@@ -335,6 +337,7 @@ function DecisionCard({ row, variant, onReplay }: { row: PaperForwardTrade; vari
       <div className="paper-forward-card-head">
         <div>
           <StatusBadge label={status.replaceAll("_", " ")} />
+          <StatusBadge label={String(row.market_group ?? "paper").replaceAll("_", " ")} />
           <h3>{row.ticker ?? "UNKNOWN"}</h3>
           <p>{row.setup_type ?? "setup pending"}</p>
         </div>
@@ -386,7 +389,7 @@ function DecisionCard({ row, variant, onReplay }: { row: PaperForwardTrade; vari
   );
 }
 
-function TradeJournal({ rows, onReplay, selectedId }: { rows: PaperForwardTrade[]; onReplay: (row: PaperForwardTrade) => void; selectedId?: number }) {
+function TradeJournal({ rows, onReplay, selectedId }: { rows: PaperForwardTrade[]; onReplay: (row: PaperForwardTrade) => void; selectedId?: string }) {
   return (
     <div className="paper-journal-table" role="table" aria-label="Trade Journal">
       <div className="paper-journal-row head" role="row">
@@ -403,7 +406,7 @@ function TradeJournal({ rows, onReplay, selectedId }: { rows: PaperForwardTrade[
         <button className={`paper-journal-row ${selectedId === row.trade_id ? "active" : ""}`} key={tradeKey(row)} onClick={() => onReplay(row)} role="row">
           <span>
             <strong>{row.ticker ?? "n/a"}</strong>
-            <em>{row.setup_type ?? "setup n/a"}</em>
+            <em>{row.market_group ?? "paper"} | {row.setup_type ?? "setup n/a"}</em>
           </span>
           <span>
             <b>{normalizeStatus(row.status).replaceAll("_", " ")}</b>
@@ -601,12 +604,12 @@ function normalizeSnapshot(envelope: any): any {
   return envelope.payload ?? envelope;
 }
 
-function mergeTrades(snapshot: any, tradesPayload: any): PaperForwardTrade[] {
+function mergeTrades(snapshot: any): PaperForwardTrade[] {
   const rows = [
+    ...(snapshot?.trades ?? []),
     ...(snapshot?.latest_candidates ?? snapshot?.candidates ?? []),
     ...(snapshot?.open_positions ?? []),
     ...(snapshot?.recently_closed_trades ?? snapshot?.recently_closed ?? []),
-    ...(tradesPayload?.rows ?? []),
   ];
   const seen = new Set<string>();
   return rows.filter((row: PaperForwardTrade) => {
@@ -619,6 +622,18 @@ function mergeTrades(snapshot: any, tradesPayload: any): PaperForwardTrade[] {
 
 function filterTrades(rows: PaperForwardTrade[], statuses: Set<string>) {
   return rows.filter((row) => statuses.has(normalizeStatus(row.status)));
+}
+
+function MarketEvidenceCard({ label, metrics, counts }: { label: string; metrics?: any; counts?: any }) {
+  return (
+    <MetricCard
+      label={`${label} evidence`}
+      value={`${numberLike(counts?.open)} open / ${numberLike(counts?.closed)} closed`}
+      subvalue={`P/L ${formatCurrency(metrics?.realized_pnl)} | Avg R ${formatR(metrics?.average_r)}`}
+      icon={<BookOpen size={15} />}
+      tone={moneyTone(metrics?.realized_pnl)}
+    />
+  );
 }
 
 function deriveReadiness(envelope: any, snapshot: any, rows: PaperForwardTrade[], candidates: PaperForwardTrade[], openRows: PaperForwardTrade[]): ReadinessState {
@@ -696,7 +711,7 @@ function reasonAgainstTrade(row: PaperForwardTrade) {
   const status = normalizeStatus(row.status);
   const frozen = row.frozen_decision_payload ?? {};
   const plan = frozen.trade_plan ?? {};
-  if (status === "SKIPPED") return "Candidate failed BLUM actionability or risk filters.";
+  if (status === "SKIPPED") return row.blockers?.length ? row.blockers : "Candidate failed BLUM actionability or risk filters.";
   if (status === "DATA_BLOCKED") return "Market data required for the paper-forward decision is missing.";
   if (status === "ERROR") return "Worker stored an error state for this candidate.";
   return plan.no_trade_conditions ?? plan.risk_notes ?? "No explicit contradiction stored in compact row; open replay for full frozen context.";
@@ -767,7 +782,8 @@ function formatNumber(value: any, digits = 2) {
 
 function formatPrice(value: any) {
   const number = Number(value);
-  return Number.isFinite(number) ? number.toFixed(2) : "n/a";
+  if (!Number.isFinite(number)) return "n/a";
+  return number > 0 && Math.abs(number) < 10 ? number.toFixed(5) : number.toFixed(2);
 }
 
 function formatCurrency(value: any) {

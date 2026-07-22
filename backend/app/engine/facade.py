@@ -13,6 +13,7 @@ from app.engine.agents.registry import agent_boundaries, collect_agent_evidence
 from app.engine.brain.trader_brain import TraderBrainService
 from app.services.paper_forward_opportunity_scanner import PaperForwardOpportunityScanner
 from app.services.adaptive_replay_training import BlumAdaptiveTrainingController
+from app.services.unified_paper_trading import UnifiedPaperTradingProjectionService
 
 
 class BlumEngineFacade:
@@ -118,6 +119,12 @@ class BlumEngineFacade:
 
     def paper_trading_snapshot(self, db: Session, *, limit: int = 20) -> dict:
         return TraderBrainService().paper_trading(db, limit=limit)
+
+    def unified_paper_trading_snapshot(self, db: Session) -> dict:
+        return UnifiedPaperTradingProjectionService().latest(db)
+
+    def unified_paper_trading_detail(self, db: Session, source_engine: str, source_trade_id: int) -> dict:
+        return UnifiedPaperTradingProjectionService().detail(db, source_engine, source_trade_id)
 
     def alpha_snapshot(self, db: Session) -> dict:
         return TraderBrainService().alpha(db)

@@ -151,6 +151,8 @@ export default function AlphaPage() {
           <EvidenceSplit title="Historical Replay" payload={data.evidence_split?.historical_replay ?? data.historical} />
           <EvidenceSplit title="Walk-Forward Validation" payload={data.evidence_split?.walk_forward_validation ?? data.walk_forward} />
           <EvidenceSplit title="Paper-Forward Evidence" payload={data.evidence_split?.paper_forward ?? data.paper_forward} />
+          <EvidenceSplit title="Intraday Paper-Forward" payload={data.evidence_split?.intraday_paper_forward ?? data.intraday_paper_forward} />
+          <EvidenceSplit title="Forex Paper-Forward" payload={data.evidence_split?.forex_paper_forward ?? data.forex_paper_forward} />
           <EvidenceSplit title="Live-Forward Evidence" payload={data.evidence_split?.live_forward ?? data.live_forward} />
         </div>
       </BloombergPanel>
