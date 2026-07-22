@@ -4292,3 +4292,100 @@ class ForexTraderRuntimeState(Base):
     last_error: Mapped[str | None] = mapped_column(Text)
     next_run_after: Mapped[datetime | None] = mapped_column(DateTime, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
+class ForexKnowledgeSource(Base):
+    __tablename__ = "forex_knowledge_sources"
+    __table_args__ = (
+        UniqueConstraint("source_key", name="uq_forex_knowledge_sources_key"),
+        Index("ix_forex_knowledge_source_status", "validation_status", "updated_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_key: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    title: Mapped[str] = mapped_column(String(240))
+    provider: Mapped[str] = mapped_column(String(80), index=True)
+    source_type: Mapped[str] = mapped_column(String(80), index=True)
+    source_url: Mapped[str] = mapped_column(Text)
+    license: Mapped[str] = mapped_column(String(120))
+    usage_policy: Mapped[dict] = mapped_column(JsonType, default=dict)
+    schema_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    validation_status: Mapped[str] = mapped_column(String(40), default="CATALOGED", index=True)
+    validation_notes: Mapped[list] = mapped_column(JsonType, default=list)
+    last_validated_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
+class ForexCurriculumAssignment(Base):
+    __tablename__ = "forex_curriculum_assignments"
+    __table_args__ = (
+        UniqueConstraint("assignment_key", name="uq_forex_curriculum_assignment_key"),
+        Index("ix_forex_curriculum_status_priority", "status", "priority_score"),
+        Index("ix_forex_curriculum_context", "pair", "session", "regime", "setup_family"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    assignment_key: Mapped[str] = mapped_column(String(180), unique=True, index=True)
+    priority_type: Mapped[str] = mapped_column(String(60), index=True)
+    pair: Mapped[str] = mapped_column(String(32), index=True)
+    session: Mapped[str] = mapped_column(String(60), index=True)
+    regime: Mapped[str] = mapped_column(String(60), index=True)
+    setup_family: Mapped[str] = mapped_column(String(80), index=True)
+    hypothesis: Mapped[str] = mapped_column(Text)
+    reason: Mapped[str] = mapped_column(Text)
+    expected_information_gain: Mapped[float] = mapped_column(Float)
+    priority_score: Mapped[float] = mapped_column(Float, index=True)
+    sample_gap: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(40), default="ACTIVE", index=True)
+    replay_spec_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    samples_generated: Mapped[int] = mapped_column(Integer, default=0)
+    last_sampled_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
+class ForexContextualMemory(Base):
+    __tablename__ = "forex_contextual_memory"
+    __table_args__ = (
+        UniqueConstraint("memory_key", name="uq_forex_contextual_memory_key"),
+        Index("ix_forex_memory_context", "strategy_id", "session", "regime", "setup_family"),
+        Index("ix_forex_memory_grade_updated", "evidence_grade", "updated_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    memory_key: Mapped[str] = mapped_column(String(240), unique=True, index=True)
+    strategy_id: Mapped[str] = mapped_column(String(120), index=True)
+    pair_family: Mapped[str] = mapped_column(String(40), index=True)
+    session: Mapped[str] = mapped_column(String(60), index=True)
+    regime: Mapped[str] = mapped_column(String(60), index=True)
+    setup_family: Mapped[str] = mapped_column(String(80), index=True)
+    sample_size: Mapped[int] = mapped_column(Integer, default=0)
+    win_rate: Mapped[float | None] = mapped_column(Float)
+    net_expectancy_r: Mapped[float | None] = mapped_column(Float)
+    benchmark_excess: Mapped[float | None] = mapped_column(Float)
+    cost_failure_rate: Mapped[float | None] = mapped_column(Float)
+    confidence_interval_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    evidence_grade: Mapped[str] = mapped_column(String(40), default="LEARNING_ONLY", index=True)
+    confidence_adjustment: Mapped[float] = mapped_column(Float, default=0.0)
+    source_evidence_ids: Mapped[list] = mapped_column(JsonType, default=list)
+    explanation: Mapped[str] = mapped_column(Text)
+    compiled_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
+class ForexKnowledgeIngestionRun(Base):
+    __tablename__ = "forex_knowledge_ingestion_runs"
+    __table_args__ = (Index("ix_forex_ingestion_source_status", "source_key", "status", "started_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_key: Mapped[str] = mapped_column(String(120), index=True)
+    status: Mapped[str] = mapped_column(String(40), index=True)
+    cursor_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    rows_seen: Mapped[int] = mapped_column(Integer, default=0)
+    rows_accepted: Mapped[int] = mapped_column(Integer, default=0)
+    rows_rejected: Mapped[int] = mapped_column(Integer, default=0)
+    validation_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)

@@ -494,9 +494,15 @@ def run_professional_learning_cycle_job() -> None:
 
 def run_hyperbolic_replay_training_job() -> None:
     def work(db):
+        from app.services.forex_evidence_academy import ForexEvidenceAcademyService
+
+        academy = ForexEvidenceAcademyService().run_background_slice(
+            db,
+            max_assignments=max(2, min(12, settings.replay_max_experiments_per_cycle)),
+        )
         training = BlumAdaptiveTrainingController().run_once(db, trigger="scheduled")
         brain_evidence = BlumTradingPowerScoreService().persist_if_evidence_changed(db)
-        return {"training": training, "brain_evidence": brain_evidence}
+        return {"forex_academy": academy, "training": training, "brain_evidence": brain_evidence}
 
     _run_job("hyperbolic_replay_training", work)
 

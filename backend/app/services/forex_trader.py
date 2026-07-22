@@ -18,6 +18,7 @@ from app.models import (
     Asset,
     ForexDecision,
     ForexLearningEvidence,
+    ForexContextualMemory,
     ForexPosition,
     ForexStrategyReadiness,
     ForexTraderCycle,
@@ -777,6 +778,34 @@ class ForexStrategyRepository:
         from app.services.forex_contracts import ForexReadiness
         readiness = ForexReadiness(current.readiness_level) if current and current.readiness_level in {"PAPER_TRADE_ELIGIBLE", "ALPHA_SIGNAL_ELIGIBLE"} else ForexReadiness.PAPER_TRADE_ELIGIBLE
         expectancy = float(selected.metrics.get("net_expectancy_r") or selected.metrics.get("expectancy_r") or 0.0)
+        memory_strategy_ids = {
+            selected.strategy_id,
+            str(selected.metrics.get("strategy_fingerprint") or ""),
+            str(selected.executable_strategy.get("strategy_fingerprint") or ""),
+        } - {""}
+        memory_rows = db.scalars(
+            select(ForexContextualMemory)
+            .where(ForexContextualMemory.strategy_id.in_(memory_strategy_ids))
+            .order_by(desc(ForexContextualMemory.sample_size), desc(ForexContextualMemory.updated_at))
+            .limit(48)
+        ).all()
+        contextual_memory = {
+            "cells": [
+                {
+                    "memory_id": row.id,
+                    "status": row.evidence_grade,
+                    "session": row.session,
+                    "regime": row.regime,
+                    "setup_family": row.setup_family,
+                    "sample_size": row.sample_size,
+                    "net_expectancy_r": row.net_expectancy_r,
+                    "benchmark_excess": row.benchmark_excess,
+                    "confidence_adjustment": row.confidence_adjustment if row.evidence_grade == "CONTEXT_ELIGIBLE" else 0.0,
+                    "explanation": row.explanation,
+                }
+                for row in memory_rows
+            ]
+        }
         contract = ForexStrategyEvidence(
             strategy_id=selected.strategy_id, readiness=readiness,
             sample_size=int(selected.validated_trade_count), net_expectancy_r=expectancy,
@@ -784,6 +813,7 @@ class ForexStrategyRepository:
             currency_concentration=_number(selected.metrics.get("currency_concentration")),
             active_blockers=tuple(selected.metrics.get("active_blockers") or ()),
             is_news_strategy=bool(selected.metrics.get("is_news_strategy")), strategy_version=selected.model_version,
+            contextual_memory=contextual_memory,
         )
         return {pair: contract for pair in pairs}
 

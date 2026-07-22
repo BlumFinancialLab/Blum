@@ -182,6 +182,7 @@ class ForexStrategyEvidence:
     active_blockers: tuple[str, ...] = ()
     is_news_strategy: bool = False
     strategy_version: str = "1"
+    contextual_memory: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -247,6 +248,7 @@ class ForexTradeProposal:
     reason_to_abstain: str | None
     confidence_components: dict[str, float] = field(default_factory=dict)
     actionability_status: str = "UNASSESSED"
+    knowledge_context: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

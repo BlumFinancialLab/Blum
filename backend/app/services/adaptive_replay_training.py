@@ -21,6 +21,7 @@ from app.services.replay_validation import ReplayExperimentService, ReplayLearni
 from app.services.worker_runtime import runtime_worker_coordinator
 from app.services.alpha_strategy_factory import strategy_factory_snapshot
 from app.services.strategy_promotion_frontier import StrategyPromotionFrontierService
+from app.services.forex_evidence_academy import ForexCurriculumPlanner
 
 
 REPLAY_SNAPSHOT_TYPE = "hyperbolic_replay_training_summary"
@@ -230,6 +231,11 @@ class BlumAdaptiveTrainingController:
                 if "FOREX" in self.config.markets and hasattr(self.promotion_frontier, "priority_specs")
                 else ()
             )
+            curriculum_assignments = (
+                ForexCurriculumPlanner.active(db, limit=max(1, limits["max_experiments"] // 2))
+                if "FOREX" in self.config.markets
+                else []
+            )
             known_fingerprints = {
                 ExecutableStrategySpec.from_payload(specification).fingerprint
                 for specification in strategy_specs
@@ -247,8 +253,36 @@ class BlumAdaptiveTrainingController:
                         "sample_size": 0,
                     }
                 )
+            curriculum_added = 0
+            for assignment in curriculum_assignments:
+                normalized = ExecutableStrategySpec.from_payload(assignment.replay_spec_json).to_payload()
+                fingerprint = normalized["strategy_fingerprint"]
+                if fingerprint in known_fingerprints:
+                    continue
+                strategy_specs.append(
+                    {
+                        **normalized,
+                        "market_filter": "forex_only",
+                        "forex_curriculum_assignment_id": assignment.id,
+                        "curriculum_pair": assignment.pair,
+                        "curriculum_session": assignment.session,
+                        "curriculum_regime": assignment.regime,
+                        "curriculum_hypothesis": assignment.hypothesis,
+                    }
+                )
+                known_fingerprints.add(fingerprint)
+                curriculum_added += 1
+                research_plan["reasons"].append(
+                    {
+                        "strategy_fingerprint": fingerprint,
+                        "reason": "forex_curriculum",
+                        "sample_size": assignment.samples_generated,
+                        "forex_curriculum_assignment_id": assignment.id,
+                    }
+                )
             research_plan["specs"] = strategy_specs
             research_plan.setdefault("selection_mix", {})["priority_market_coverage"] = len(priority_specs)
+            research_plan["selection_mix"]["forex_curriculum"] = curriculum_added
             run_summary = self.engine.run_cycle(
                 db,
                 ReplayRunRequest(

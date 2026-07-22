@@ -15,6 +15,7 @@ from app.services.adaptive_replay_training import (
     refresh_strategy_factory_state,
 )
 from app.services.executable_strategy import canonical_strategy_spec
+from app.services.forex_evidence_academy import ForexCurriculumPlanner
 
 
 def setup_db() -> Session:
@@ -191,6 +192,24 @@ def test_controller_passes_promotion_frontier_specs_to_bounded_replay():
     assert engine.calls[0].strategy_specs
     assert engine.calls[0].strategy_specs[0]["strategy_fingerprint"]
     assert any(spec["market_filter"] == "forex_only" for spec in engine.calls[0].strategy_specs)
+
+
+def test_controller_consumes_active_forex_curriculum_without_replacing_broad_research():
+    engine = RecordingEngine()
+    controller = BlumAdaptiveTrainingController(
+        engine=engine,
+        resource_monitor=StaticResourceMonitor(cpu=20, memory=30, api_p95_ms=120),
+        config=config(),
+        promotion_frontier=StaticPromotionFrontier(),
+    )
+    with setup_db() as db:
+        assignments = ForexCurriculumPlanner().generate(db, limit=3)
+        assignment_id = assignments[0].id
+        controller.run_once(db, trigger="test")
+
+    specs = list(engine.calls[0].strategy_specs)
+    assert any(spec.get("forex_curriculum_assignment_id") == assignment_id for spec in specs)
+    assert any(spec.get("market_filter") != "forex_only" for spec in specs)
 
 
 def test_controller_checkpoints_research_progress_history_with_asset_cursor():

@@ -109,6 +109,31 @@ def strategy(*, news_strategy: bool = False) -> ForexStrategyEvidence:
     )
 
 
+def strategy_with_memory(*, grade: str, adjustment: float) -> ForexStrategyEvidence:
+    base = strategy()
+    return ForexStrategyEvidence(
+        strategy_id=base.strategy_id,
+        readiness=base.readiness,
+        sample_size=base.sample_size,
+        net_expectancy_r=base.net_expectancy_r,
+        replay_forward_decay=base.replay_forward_decay,
+        currency_concentration=base.currency_concentration,
+        contextual_memory={
+            "cells": [
+                {
+                    "status": grade,
+                    "session": "LONDON",
+                    "regime": "trend",
+                    "setup_family": "momentum_breakout",
+                    "sample_size": 40,
+                    "confidence_adjustment": adjustment,
+                    "explanation": "Validated replay context",
+                }
+            ]
+        },
+    )
+
+
 def test_required_pair_universe_and_agent_boundaries():
     assert pair_config("EURUSD=X").pip_size == 0.0001
     assert pair_config("EURUSD=X").minimum_lot == 0.01
@@ -170,6 +195,64 @@ def test_stale_veto_preserves_analytical_confidence_components():
     outcome = BlumForexTraderCore().evaluate_input(
         market_input(stale_1m=True),
         strategy=strategy(),
+    )
+
+    assert outcome.approved is False
+    assert "STALE_DATA" in outcome.blockers
+    assert outcome.proposal.actionability_status == "BLOCKED"
+
+
+def test_only_eligible_contextual_memory_changes_confidence() -> None:
+    inputs = market_input()
+    baseline = BlumForexTraderCore().evaluate_input(inputs, strategy=strategy())
+    learning_only = BlumForexTraderCore().evaluate_input(
+        inputs,
+        strategy=strategy_with_memory(grade="LEARNING_ONLY", adjustment=0.08),
+    )
+    eligible = BlumForexTraderCore().evaluate_input(
+        inputs,
+        strategy=strategy_with_memory(grade="CONTEXT_ELIGIBLE", adjustment=0.08),
+    )
+
+    assert learning_only.proposal.confidence == baseline.proposal.confidence
+    assert eligible.proposal.confidence == pytest.approx(baseline.proposal.confidence + 0.08)
+    assert eligible.proposal.confidence_components["contextual_memory_adjustment"] == 8.0
+    assert eligible.proposal.knowledge_context["status"] == "CONTEXT_ELIGIBLE"
+
+
+def test_replay_memory_uses_session_wildcard_and_setup_alias() -> None:
+    base = strategy()
+    learned = ForexStrategyEvidence(
+        strategy_id=base.strategy_id,
+        readiness=base.readiness,
+        sample_size=base.sample_size,
+        net_expectancy_r=base.net_expectancy_r,
+        replay_forward_decay=base.replay_forward_decay,
+        currency_concentration=base.currency_concentration,
+        contextual_memory={
+            "cells": [
+                {
+                    "status": "CONTEXT_ELIGIBLE",
+                    "session": "UNKNOWN",
+                    "regime": "trend",
+                    "setup_family": "intraday_breakout",
+                    "sample_size": 50,
+                    "confidence_adjustment": 0.05,
+                }
+            ]
+        },
+    )
+
+    baseline = BlumForexTraderCore().evaluate_input(market_input(), strategy=base)
+    outcome = BlumForexTraderCore().evaluate_input(market_input(), strategy=learned)
+
+    assert outcome.proposal.confidence == pytest.approx(baseline.proposal.confidence + 0.05)
+
+
+def test_contextual_memory_cannot_bypass_hard_veto() -> None:
+    outcome = BlumForexTraderCore().evaluate_input(
+        market_input(stale_1m=True),
+        strategy=strategy_with_memory(grade="CONTEXT_ELIGIBLE", adjustment=0.08),
     )
 
     assert outcome.approved is False

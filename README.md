@@ -2033,6 +2033,29 @@ analytical components. The Alpha Strategy Factory always reserves bounded
 research capacity for a Forex `1h/15m/5m/1m` hypothesis, but the existing
 50-sample experimental and 300-sample certification gates remain unchanged.
 
+### Forex Evidence Academy
+
+The Forex trader has an evidence-bound research curriculum. A bounded academy
+slice runs with adaptive replay and maintains three separate layers:
+
+- a provenance and usage catalog for ECB/FRED macro data, CFTC positioning,
+  historical one-minute replay candidates and human-annotated Forex sentiment;
+- research assignments across pairs, sessions, regimes and setup families;
+- contextual memory compiled from persisted Forex replay and paper outcomes.
+
+External knowledge does not increase trading confidence by itself. Text and
+macro datasets can improve context, feature extraction and evaluation, while
+only point-in-time outcomes with costs and benchmark comparison can become
+`CONTEXT_ELIGIBLE`. At least 30 consistent outcomes are required for a context
+to influence confidence, and the adjustment is capped at eight percentage
+points. The adjustment cannot bypass stale-data, event-risk, execution-cost,
+portfolio-risk or strategy-readiness vetoes.
+
+The curriculum preserves broad exploration while prioritizing missing Forex
+samples. Replay remains timestamp-bound, and experimental paper strategies
+retain reduced risk. Dataset validation and large backfills are background or
+manual operations; no GET route downloads data or starts training.
+
 ### Unified paper-trading evidence
 
 The Paper Trading product surface reads one background-produced

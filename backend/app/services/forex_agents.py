@@ -146,13 +146,26 @@ class BlumForexScalpingExpertAgent:
             0.0,
             min(1.0, net / max(price_action.expected_gross_pips, 1e-9)),
         )
-        decision_confidence = (
+        knowledge_context = _matching_contextual_memory(
+            strategy.contextual_memory,
+            session=market.session,
+            regime=context.regime,
+            setup_family=price_action.setup_family,
+        )
+        memory_adjustment = (
+            max(-0.08, min(0.08, float(knowledge_context.get("confidence_adjustment") or 0.0)))
+            if knowledge_context.get("status") == "CONTEXT_ELIGIBLE"
+            and int(knowledge_context.get("sample_size") or 0) >= 30
+            else 0.0
+        )
+        decision_confidence = max(0.0, min(1.0, (
             setup_confidence * 0.30
             + timeframe_confidence * 0.20
             + data_confidence * 0.20
             + strategy_confidence * 0.20
             + execution_confidence * 0.10
-        )
+            + memory_adjustment
+        )))
         confidence_components = {
             "setup_confidence": round(setup_confidence * 100.0, 6),
             "timeframe_confidence": round(timeframe_confidence * 100.0, 6),
@@ -161,6 +174,7 @@ class BlumForexScalpingExpertAgent:
             "execution_confidence": round(execution_confidence * 100.0, 6),
             "decision_confidence": round(decision_confidence * 100.0, 6),
             "strategy_sample_size": float(strategy.sample_size),
+            "contextual_memory_adjustment": round(memory_adjustment * 100.0, 6),
         }
         return ForexTradeProposal(
             pair=market.pair,
@@ -184,6 +198,7 @@ class BlumForexScalpingExpertAgent:
             reason_to_abstain=None if direction != ForexDirection.ABSTAIN else "No aligned, eligible positive-net-edge setup",
             confidence_components=confidence_components,
             actionability_status="PROPOSED" if direction != ForexDirection.ABSTAIN else "TRAINING_ONLY",
+            knowledge_context=knowledge_context,
         )
 
 
@@ -227,3 +242,30 @@ class BlumForexContrarianRiskAgent:
 
 def serialize_agent_outputs(**outputs) -> dict:
     return {key: asdict(value) for key, value in outputs.items()}
+
+
+def _matching_contextual_memory(memory: dict, *, session: str, regime: str, setup_family: str) -> dict:
+    cells = memory.get("cells") if isinstance(memory, dict) else None
+    if not isinstance(cells, list):
+        return {"status": "NO_CONTEXT", "confidence_adjustment": 0.0}
+    for cell in cells:
+        if not isinstance(cell, dict):
+            continue
+        stored_session = str(cell.get("session") or "UNKNOWN")
+        stored_setup = _normalized_setup_family(str(cell.get("setup_family") or "UNKNOWN"))
+        if (
+            stored_session in {session, "UNKNOWN"}
+            and str(cell.get("regime")) == regime
+            and stored_setup == _normalized_setup_family(setup_family)
+        ):
+            return dict(cell)
+    return {"status": "NO_MATCHING_CONTEXT", "confidence_adjustment": 0.0}
+
+
+def _normalized_setup_family(value: str) -> str:
+    aliases = {
+        "intraday_breakout": "momentum_breakout",
+        "session_breakout": "momentum_breakout",
+        "pullback": "pullback_to_trend",
+    }
+    return aliases.get(value, value)
