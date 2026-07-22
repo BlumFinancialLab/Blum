@@ -1978,3 +1978,46 @@ Development standards are tracked in [`ENGINEERING_STANDARDS.md`](ENGINEERING_ST
 ## Contributing
 
 Contributions should preserve the project philosophy: transparent evidence, modular models, explainable scoring, no fabricated data and no investment recommendations.
+## Autonomous Forex Alpha Trader
+
+BLUM includes a paper-only Forex decision core for selective scalping and short
+intraday research. `BlumForexTraderCore` is the sole path from a Forex proposal
+to a new paper order. It requires point-in-time `1h/15m/5m/1m` evidence, a
+paper-eligible strategy, positive net edge, an eligible session, a completed
+contrarian review and portfolio-risk approval.
+
+The supported universe is limited to EUR/USD, GBP/USD, USD/JPY, USD/CHF,
+AUD/USD, USD/CAD, NZD/USD, EUR/GBP, EUR/JPY, GBP/JPY, AUD/JPY and EUR/CHF.
+The execution simulator uses directional bid/ask fills, spread, slippage,
+commission, latency, margin, partial fills, gap-through stops and overnight
+swap. It never connects to a broker and never sends real orders.
+
+The isolated scheduler runs one bounded cycle per minute. It rotates one pair
+per cycle and hydrates its complete `1h/15m/5m/1m` stack, while replay workers
+continue deeper research independently. It manages open positions even while
+paused, and persists a heartbeat and idempotent cycle key.
+Historical replay, walk-forward validation and paper-forward Forex evidence are
+kept logically and physically separate.
+
+Read-only status is available at `GET /api/forex-trader/snapshot`. It reads the
+latest persisted `forex_trader_summary` snapshot and never triggers market data,
+learning or execution. Explicit controls are POST-only:
+
+- `POST /api/forex-trader/run-cycle`
+- `POST /api/forex-trader/start`
+- `POST /api/forex-trader/pause`
+- `POST /api/forex-trader/resume`
+- `POST /api/forex-trader/emergency-stop`
+
+Important settings include `BLUM_FOREX_TRADER_ENABLED`,
+`BLUM_FOREX_TRADER_MINUTES`, `BLUM_FOREX_TRADER_MAX_PAIRS_PER_CYCLE`,
+`BLUM_FOREX_TRADER_REFRESH_PAIRS_PER_CYCLE`,
+`BLUM_FOREX_RISK_PER_TRADE_PERCENT`, `BLUM_FOREX_DAILY_LOSS_LIMIT_PERCENT`,
+`BLUM_FOREX_MAX_OPEN_POSITIONS`, `BLUM_FOREX_ALPHA_MIN_FORWARD_TRADES`,
+`BLUM_FOREX_NEWS_BLOCK_BEFORE_MINUTES` and
+`BLUM_FOREX_NEWS_BLOCK_AFTER_MINUTES`.
+Risk is capped at 0.5% per trade, daily paper loss at 2%, and four concurrent
+Forex positions. Alpha eligibility requires at least 100 closed forward Forex
+trades plus positive net expectancy, positive benchmark-relative evidence,
+coverage, replay-forward decay, currency concentration and confidence gates.
+Eligibility is evidence maturity, not a profit guarantee.
