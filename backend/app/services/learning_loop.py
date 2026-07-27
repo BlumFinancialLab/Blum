@@ -37,6 +37,7 @@ from app.models import (
     TradingGameTrade,
 )
 from app.services.technical_analysis_engine import TechnicalAnalysisEngine
+from app.services.replay_execution import ReplayExecutionModel
 
 
 settings = get_settings()
@@ -817,6 +818,7 @@ class OutcomeEvaluator:
         false_positive = bool(bias == "bullish" and outcome_label == "wrong")
         false_negative = bool(bias in {"neutral", "bearish"} and high_return >= 8.0 and not target_hit)
         missed = bool(false_negative or (bias == "neutral" and abs(realized) >= 8.0))
+        execution_cost = equity_execution_cost_metrics(context, prediction, initial_price, realized)
         return {
             "timeframe": timeframe,
             "horizon_days": horizon,
@@ -838,6 +840,7 @@ class OutcomeEvaluator:
             "confidence_calibration_error": round(abs(confidence - realized_binary), 4),
             "risk_reward_realized": realized_risk_reward(realized, low_return),
             "why_right_or_wrong": why_outcome(outcome_label, bias, realized, target_hit, invalidation_hit),
+            **execution_cost,
         }
 
     def inconclusive(self, timeframe: str, horizon: int, reason: str) -> dict:
@@ -860,6 +863,63 @@ class OutcomeEvaluator:
             "confidence_calibration_error": None,
             "why_right_or_wrong": reason,
         }
+
+
+def equity_execution_cost_metrics(context: dict, prediction: dict, initial_price: float, realized_return: float) -> dict:
+    """Derive a reproducible cost model from decision-time context only."""
+    asset = context.get("asset") or {}
+    technical = context.get("technical") or {}
+    volume = technical.get("volume") or {}
+    relative_volume = safe_float(volume.get("relative_volume"))
+    if relative_volume > 0:
+        liquidity_score = round(max(20.0, min(80.0, relative_volume * 50.0)), 2)
+        liquidity_source = "technical.volume.relative_volume"
+    else:
+        liquidity_score = 50.0
+        liquidity_source = "conservative_default_no_point_in_time_volume"
+
+    market = str(asset.get("market") or asset.get("country") or "UNKNOWN")
+    asset_type = str(asset.get("asset_type") or "unknown")
+    profile = ReplayExecutionModel().profile(
+        market=market,
+        asset_type=asset_type,
+        liquidity_score=liquidity_score,
+        session="regular",
+    )
+    execution_cost_profile = {
+        **profile.to_dict(),
+        "market_input": market,
+        "market_input_source": "asset.country",
+        "asset_type_input": asset_type,
+        "liquidity_score": liquidity_score,
+        "liquidity_score_source": liquidity_source,
+        "liquidity_score_policy": "relative_volume_x_50_clamped_20_to_80; default_50_when_unavailable",
+        "session_input": "regular",
+        "point_in_time_policy": "Uses only frozen asset metadata and technical volume observed at decision time.",
+    }
+    invalidation = safe_float(prediction.get("invalidation_level"))
+    risk_return_percent = abs(invalidation - initial_price) / initial_price * 100.0 if initial_price else 0.0
+    direction = str(prediction.get("bias") or "").lower()
+    directional_return = realized_return if direction == "bullish" else -realized_return if direction == "bearish" else None
+    cost_return_percent = profile.total_round_trip_bps / 100.0
+    if risk_return_percent <= 0 or directional_return is None:
+        return {
+            "execution_cost_profile": execution_cost_profile,
+            "modeled_round_trip_cost_bps": round(profile.total_round_trip_bps, 4),
+            "modeled_cost_r": None,
+            "realized_net_r": None,
+            "net_r_policy": "Unavailable without actionable direction and non-zero frozen invalidation risk.",
+        }
+
+    modeled_cost_r = cost_return_percent / risk_return_percent
+    realized_net_r = directional_return / risk_return_percent - modeled_cost_r
+    return {
+        "execution_cost_profile": execution_cost_profile,
+        "modeled_round_trip_cost_bps": round(profile.total_round_trip_bps, 4),
+        "modeled_cost_r": round(modeled_cost_r, 6),
+        "realized_net_r": round(realized_net_r, 6),
+        "net_r_policy": "Direction-adjusted raw return minus modeled round-trip execution cost, normalized by frozen invalidation risk.",
+    }
 
 
 class MistakeAnalyzer:

@@ -1,8 +1,10 @@
 from datetime import datetime, timedelta
 
+import pandas as pd
 import pytest
 
 from app.models import ForexDecision, ForexLearningEvidence, HistoricalPrediction, HyperbolicReplayTrade, PredictionOutcome
+from app.services.learning_loop import OutcomeEvaluator
 from app.services.trading_ml import FeatureSchema, FutureFeatureDataError, TradingMLFeatureBuilder
 
 
@@ -142,6 +144,54 @@ def test_equity_feature_builder_excludes_raw_returns_without_explicit_modeled_co
             equity_prediction(),
             equity_outcome(realized_return=4.0, include_modeled_cost=False),
         )
+
+
+def test_production_outcome_persists_cost_adjusted_net_r_for_equity_features():
+    context = {
+        "asset": {"country": "USA", "asset_type": "Stock"},
+        "analysis_date": "2026-01-02",
+        "initial_price": 100.0,
+        "data_quality_score": 80.0,
+        "technical": {"volume": {"relative_volume": 1.5}},
+        "future_prices": pd.DataFrame(
+            [
+                {"date": "2026-01-03", "close": 99.0, "high": 101.0, "low": 98.0},
+                {"date": "2026-01-04", "close": 98.0, "high": 100.0, "low": 97.0},
+                {"date": "2026-01-05", "close": 97.0, "high": 99.0, "low": 96.0},
+                {"date": "2026-01-06", "close": 96.0, "high": 98.0, "low": 95.0},
+                {"date": "2026-01-07", "close": 96.0, "high": 97.0, "low": 94.0},
+            ]
+        ),
+    }
+    frame_prediction = {
+        "horizon_days": 5,
+        "invalidation_level": 105.0,
+        "bias": "bearish",
+        "target_zone": "not_available",
+        "confidence": 70.0,
+    }
+
+    generated = OutcomeEvaluator().evaluate(context, "short", frame_prediction)
+
+    assert generated["realized_return"] == -4.0
+    assert generated["execution_cost_profile"]["profile_name"] == "us_liquid_large_cap"
+    assert generated["modeled_round_trip_cost_bps"] == 5.3
+    assert generated["modeled_cost_r"] == pytest.approx(0.0106)
+    assert generated["realized_net_r"] == pytest.approx(0.7894)
+
+    prediction = equity_prediction()
+    prediction.expected_direction = "bearish"
+    prediction.prediction_payload["timeframes"]["1d"]["invalidation_level"] = 105.0
+    outcome = equity_outcome(
+        realized_return=generated["realized_return"],
+        metrics_payload=generated,
+        include_modeled_cost=False,
+    )
+
+    example = TradingMLFeatureBuilder().from_equity(prediction, outcome)
+
+    assert example.realized_net_r == pytest.approx(generated["realized_net_r"])
+    assert example.label_positive_r == 1
 
 
 def test_equity_feature_builder_rejects_unlinked_or_predecision_outcomes():
