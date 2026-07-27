@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import fcntl
 import hashlib
 import json
 import os
 from pathlib import Path
+import threading
 from typing import Iterable, Literal, Protocol
+from uuid import uuid4
 
 import polars as pl
 from sqlalchemy.orm import Session
@@ -19,6 +23,9 @@ from .dataset import DatasetSlice, TradingMLDatasetRepository
 
 MarketFamily = Literal["equity", "forex"]
 _MANIFEST_NAME = "manifest.json"
+_MANIFEST_LOCK_NAME = ".manifest.lock"
+_THREAD_LOCKS: dict[str, threading.RLock] = {}
+_THREAD_LOCKS_GUARD = threading.Lock()
 
 
 class DatasetReader(Protocol):
@@ -71,8 +78,8 @@ class TradingMLFeatureStoreProjector:
         """Append one bounded source slice; never rehydrate historical store rows."""
 
         row_limit = min(max(1, limit or self._max_rows_per_projection), self._max_rows_per_projection)
-        manifest = self._load_manifest()
-        cursor = self._cursor_for(manifest, market_family)
+        source_manifest = self._load_manifest()
+        cursor = self._cursor_for(source_manifest, market_family)
         dataset_slice = self._repository.read_slice(
             db,
             market_family=market_family,
@@ -82,17 +89,25 @@ class TradingMLFeatureStoreProjector:
         unique_examples, rejected_duplicates = _deduplicate_examples(dataset_slice.examples)
         partitions = self._write_partitions(unique_examples, market_family)
 
-        if dataset_slice.next_cursor is not None:
-            manifest.setdefault("source_cursors", {})[market_family] = dataset_slice.next_cursor
-        manifest["partitions"].extend(partitions)
-        manifest["evidence_lane_counts"] = self._evidence_lane_counts(manifest["partitions"])
-        manifest["dataset_hash"] = self._dataset_hash(manifest["partitions"])
-        self._write_manifest(manifest)
+        with _manifest_update_lock(self.root):
+            manifest = self._load_manifest()
+            committed_partitions = _merge_partitions(manifest["partitions"], partitions)
+            if dataset_slice.next_cursor is not None:
+                current_cursor = self._cursor_for(manifest, market_family)
+                manifest.setdefault("source_cursors", {})[market_family] = _merge_source_cursors(
+                    current_cursor,
+                    dataset_slice.next_cursor,
+                )
+            manifest["partitions"].extend(committed_partitions)
+            manifest["evidence_lane_counts"] = self._evidence_lane_counts(manifest["partitions"])
+            manifest["dataset_hash"] = self._dataset_hash(manifest["partitions"])
+            self._write_manifest(manifest)
+            committed_cursor = self._cursor_for(manifest, market_family)
         return ProjectionResult(
-            rows_written=sum(partition["rows"] for partition in partitions),
-            partitions_written=len(partitions),
+            rows_written=sum(partition["rows"] for partition in committed_partitions),
+            partitions_written=len(committed_partitions),
             dataset_hash=manifest["dataset_hash"],
-            source_cursor=dataset_slice.next_cursor,
+            source_cursor=committed_cursor,
             rows_considered=dataset_slice.rows_considered,
             rows_rejected=dataset_slice.rows_rejected + rejected_duplicates,
             is_exhausted=dataset_slice.exhausted,
@@ -140,17 +155,19 @@ class TradingMLFeatureStoreProjector:
                 filename = f"part-{content_hash}.parquet"
                 target = directory / filename
                 if not target.exists():
-                    temporary = directory / f".{filename}.tmp"
-                    _frame_from_rows(rows).write_parquet(temporary, compression="zstd")
-                    verified = pl.read_parquet(temporary)
-                    if (
-                        verified.height != len(rows)
-                        or set(verified["source_uid"].to_list()) != {row["source_uid"] for row in rows}
-                        or _content_hash(verified.to_dicts()) != content_hash
-                    ):
+                    temporary = directory / f".{filename}.{uuid4().hex}.tmp"
+                    try:
+                        _frame_from_rows(rows).write_parquet(temporary, compression="zstd")
+                        verified = pl.read_parquet(temporary)
+                        if (
+                            verified.height != len(rows)
+                            or set(verified["source_uid"].to_list()) != {row["source_uid"] for row in rows}
+                            or _content_hash(verified.to_dicts()) != content_hash
+                        ):
+                            raise RuntimeError("Parquet feature partition verification failed")
+                        os.replace(temporary, target)
+                    finally:
                         temporary.unlink(missing_ok=True)
-                        raise RuntimeError("Parquet feature partition verification failed")
-                    os.replace(temporary, target)
                 partitions.append(
                     {
                         "path": str(target.relative_to(self.root)),
@@ -209,6 +226,79 @@ class TradingMLFeatureStoreProjector:
     @staticmethod
     def _dataset_hash(partitions: Iterable[dict]) -> str:
         return _dataset_hash(partitions)
+
+
+@contextmanager
+def _manifest_update_lock(root: Path):
+    root.mkdir(parents=True, exist_ok=True)
+    root_key = str(root.resolve())
+    with _THREAD_LOCKS_GUARD:
+        thread_lock = _THREAD_LOCKS.setdefault(root_key, threading.RLock())
+    with thread_lock:
+        with (root / _MANIFEST_LOCK_NAME).open("a+b") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _merge_partitions(current: list[dict], incoming: list[dict]) -> list[dict]:
+    committed_paths = {str(partition.get("path")) for partition in current}
+    merged: list[dict] = []
+    for partition in incoming:
+        path = str(partition["path"])
+        if path in committed_paths:
+            continue
+        committed_paths.add(path)
+        merged.append(partition)
+    return merged
+
+
+def _merge_source_cursors(current: dict[str, object] | None, incoming: dict[str, object]) -> dict[str, object]:
+    if current is None:
+        return json.loads(json.dumps(incoming))
+    current_offsets = _cursor_offsets(current)
+    incoming_offsets = _cursor_offsets(incoming)
+    incoming_advanced = any(
+        source_id > current_offsets.get(source, 0)
+        for source, source_id in incoming_offsets.items()
+    )
+    merged_offsets = dict(current_offsets)
+    for source, source_id in incoming_offsets.items():
+        merged_offsets[source] = max(merged_offsets.get(source, 0), source_id)
+    active_source = str(incoming.get("source_table")) if incoming_advanced else str(current.get("source_table"))
+    if active_source not in merged_offsets:
+        merged_offsets[active_source] = max(
+            _cursor_last_id(incoming if incoming_advanced else current),
+            merged_offsets.get(active_source, 0),
+        )
+    return {
+        "source_table": active_source,
+        "last_source_id": merged_offsets[active_source],
+        "source_offsets": merged_offsets,
+    }
+
+
+def _cursor_offsets(cursor: dict[str, object]) -> dict[str, int]:
+    offsets: dict[str, int] = {}
+    raw_offsets = cursor.get("source_offsets")
+    if isinstance(raw_offsets, dict):
+        for source, source_id in raw_offsets.items():
+            try:
+                offsets[str(source)] = max(0, int(source_id))
+            except (TypeError, ValueError):
+                continue
+    source_table = str(cursor.get("source_table"))
+    offsets[source_table] = max(offsets.get(source_table, 0), _cursor_last_id(cursor))
+    return offsets
+
+
+def _cursor_last_id(cursor: dict[str, object]) -> int:
+    try:
+        return max(0, int(cursor.get("last_source_id", 0)))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _row_from_example(example: TradingMLExample) -> dict:

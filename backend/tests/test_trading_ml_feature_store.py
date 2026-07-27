@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
+from threading import Barrier
 
 import polars as pl
 import pytest
@@ -221,6 +223,82 @@ class _SyntheticRepository:
             rows_rejected=0,
             exhausted=next_offset >= len(self.examples),
         )
+
+
+class _ConcurrentRepository:
+    def __init__(self, example: TradingMLExample, barrier: Barrier) -> None:
+        self.example = example
+        self.barrier = barrier
+
+    def read_slice(self, _db, *, market_family: str, after_cursor: dict | None, limit: int) -> DatasetSlice:
+        assert market_family == self.example.market_family
+        assert after_cursor is None
+        assert limit > 0
+        self.barrier.wait(timeout=5)
+        return DatasetSlice(
+            examples=(self.example,),
+            next_cursor={"source_table": f"{market_family}_source", "last_source_id": 1},
+            rows_considered=1,
+            rows_rejected=0,
+            exhausted=True,
+        )
+
+
+def _market_example(market_family: str) -> TradingMLExample:
+    asset_key = "EURUSD=X" if market_family == "forex" else "NVDA"
+    return TradingMLExample(
+        source_object_type=f"{market_family}_trade",
+        source_object_id="1",
+        market_family=market_family,
+        evidence_lane="REPLAY_EVIDENCE",
+        decision_timestamp=NOW,
+        outcome_timestamp=NOW + timedelta(minutes=1),
+        asset_key=asset_key,
+        setup_type="momentum_breakout",
+        regime="trend_up",
+        features={
+            "aggregate_score": 70.0,
+            "confidence": 60.0,
+            "market_family": market_family,
+            "setup_type": "momentum_breakout",
+            "regime": "trend_up",
+            "session": "LONDON" if market_family == "forex" else "regular",
+            "direction": "LONG",
+            "timeframe": "1m" if market_family == "forex" else "1d",
+            "sector_or_currency_family": "EURUSD" if market_family == "forex" else "Technology",
+        },
+        realized_net_r=0.8,
+        label_positive_r=1,
+        benchmark_excess=0.1,
+        sample_weight=0.25,
+    )
+
+
+def test_concurrent_market_projections_preserve_both_partitions_and_cursors(tmp_path):
+    barrier = Barrier(2)
+    equity_projector = TradingMLFeatureStoreProjector(
+        root=tmp_path,
+        repository=_ConcurrentRepository(_market_example("equity"), barrier),
+    )
+    forex_projector = TradingMLFeatureStoreProjector(
+        root=tmp_path,
+        repository=_ConcurrentRepository(_market_example("forex"), barrier),
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        equity_future = executor.submit(equity_projector.project, None, market_family="equity", limit=10)
+        forex_future = executor.submit(forex_projector.project, None, market_family="forex", limit=10)
+        equity_future.result(timeout=10)
+        forex_future.result(timeout=10)
+
+    manifest = equity_projector.manifest()
+    equity_rows = equity_projector.scan(market_family="equity", columns=["source_uid"]).collect()
+    forex_rows = equity_projector.scan(market_family="forex", columns=["source_uid"]).collect()
+
+    assert set(manifest["source_cursors"]) == {"equity", "forex"}
+    assert {partition["market_family"] for partition in manifest["partitions"]} == {"equity", "forex"}
+    assert equity_rows["source_uid"].to_list() == ["equity_trade:1"]
+    assert forex_rows["source_uid"].to_list() == ["forex_trade:1"]
 
 
 def _synthetic_example(index: int) -> TradingMLExample:
