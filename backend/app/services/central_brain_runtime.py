@@ -535,42 +535,110 @@ class LearningHealthService:
     def health(self, db: Session, *, snapshot_health: dict | None = None, jobs: list[dict] | None = None) -> dict:
         now = datetime.utcnow()
         latest_learning = db.scalar(select(LearningRun).order_by(desc(LearningRun.started_at)).limit(1))
-        latest_event = db.scalar(select(LearningEvent).order_by(desc(LearningEvent.created_at)).limit(1))
+        latest_successful_learning = db.scalar(
+            select(LearningRun)
+            .where(
+                func.lower(LearningRun.status).in_(
+                    ("ok", "completed", "success", "successful")
+                ),
+                LearningRun.completed_at.is_not(None),
+            )
+            .order_by(desc(LearningRun.completed_at))
+            .limit(1)
+        )
         runtime = runtime_worker_coordinator.snapshot()
         events_24h = int(db.scalar(select(func.count(LearningEvent.id)).where(LearningEvent.created_at >= now - timedelta(hours=24))) or 0)
         missing = (snapshot_health or SnapshotWatchdogService().health(db)).get("missing_snapshots", [])
-        failed_jobs = [job for job in (jobs or BackgroundJobStateService().list(db)) if job.get("status") == "failed"]
-        status = "healthy"
+        resolved_jobs = jobs if jobs is not None else BackgroundJobStateService().list(db)
+        failed_jobs = [job for job in resolved_jobs if job.get("status") == "failed"]
+        worker_alive = bool(runtime.get("started"))
+        stale_modules = stale_modules_from_events(BrainEventBus().latest_by_module(db))
+        latest_status = str(latest_learning.status if latest_learning else "").lower()
+        successful_at = (
+            latest_successful_learning.completed_at
+            if latest_successful_learning
+            else None
+        )
+        successful_age_seconds = (
+            round((now - successful_at).total_seconds(), 3)
+            if successful_at
+            else None
+        )
+        stale_success = (
+            successful_age_seconds is None
+            or successful_age_seconds > module_freshness_seconds("learning_loop")
+        )
+        reasons = []
         if failed_jobs:
+            reasons.append("background_job_failed")
+        if latest_status in {"error", "failed", "failure"}:
+            reasons.append("latest_learning_run_failed")
+        if latest_status == "degraded":
+            reasons.append("latest_learning_run_degraded")
+        if stale_success:
+            reasons.append("successful_learning_cycle_stale_or_missing")
+        if events_24h == 0:
+            reasons.append("no_learning_events_last_24h")
+        if "learning_loop" in stale_modules:
+            reasons.append("learning_loop_module_stale")
+        if not worker_alive:
+            reasons.append("worker_not_alive")
+        if missing:
+            reasons.append("missing_snapshots")
+
+        if failed_jobs or latest_status in {"error", "failed", "failure"}:
             status = "failed"
-        elif missing:
+        elif latest_status == "degraded":
             status = "degraded"
-        elif latest_learning is None and latest_event is None:
+        elif stale_success or events_24h == 0 or "learning_loop" in stale_modules:
             status = "stale"
+        elif not worker_alive or missing:
+            status = "degraded"
+        else:
+            status = "healthy"
         return {
             "status": status,
-            "worker_alive": bool(runtime.get("started")),
+            "worker_alive": worker_alive,
             "current_job": runtime.get("last_job"),
             "current_stage": runtime.get("current_stage"),
-            "last_successful_learning_cycle": latest_learning.completed_at.isoformat() if latest_learning and latest_learning.completed_at else None,
-            "last_successful_trading_game_cycle": latest_job_completion(jobs or [], "blum_trading_game"),
-            "last_successful_alpha_recovery_cycle": latest_job_completion(jobs or [], "alpha_recovery"),
-            "last_successful_meta_cognition_cycle": latest_job_completion(jobs or [], "meta_cognition"),
+            "latest_learning_run_status": latest_learning.status if latest_learning else None,
+            "last_successful_learning_cycle": successful_at.isoformat() if successful_at else None,
+            "last_successful_learning_cycle_age_seconds": successful_age_seconds,
+            "last_successful_trading_game_cycle": latest_job_completion(resolved_jobs, "blum_trading_game"),
+            "last_successful_alpha_recovery_cycle": latest_job_completion(resolved_jobs, "alpha_recovery"),
+            "last_successful_meta_cognition_cycle": latest_job_completion(resolved_jobs, "meta_cognition"),
             "learning_events_last_24h": events_24h,
             "errors_last_24h": len(failed_jobs),
-            "next_scheduled_job": next_job(jobs or []),
+            "next_scheduled_job": next_job(resolved_jobs),
             "missing_snapshots": missing,
-            "stale_modules": stale_modules_from_events(BrainEventBus().latest_by_module(db)),
+            "stale_modules": stale_modules,
+            "health_reasons": reasons,
             "frontend_policy": "read_only_snapshot_observer",
         }
 
 
 def latest_snapshot_map(db: Session) -> dict[str, DashboardSnapshot]:
-    rows = db.scalars(select(DashboardSnapshot).order_by(desc(DashboardSnapshot.created_at)).limit(300)).all()
-    output: dict[str, DashboardSnapshot] = {}
-    for row in rows:
-        output.setdefault(row.snapshot_type, row)
-    return output
+    ranked = (
+        select(
+            DashboardSnapshot.id.label("snapshot_id"),
+            func.row_number()
+            .over(
+                partition_by=DashboardSnapshot.snapshot_type,
+                order_by=(
+                    DashboardSnapshot.created_at.desc(),
+                    DashboardSnapshot.id.desc(),
+                ),
+            )
+            .label("snapshot_rank"),
+        )
+        .subquery()
+    )
+    rows = db.scalars(
+        select(DashboardSnapshot)
+        .join(ranked, DashboardSnapshot.id == ranked.c.snapshot_id)
+        .where(ranked.c.snapshot_rank == 1)
+    ).all()
+    return {row.snapshot_type: row for row in rows}
 
 
 def snapshot_freshness_payload(latest: dict[str, DashboardSnapshot]) -> dict:

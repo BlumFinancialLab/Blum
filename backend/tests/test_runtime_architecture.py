@@ -2,8 +2,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import time
 
+import pytest
 from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.database import Base
 from app.models import BackgroundJobState, BrainRuntimeEvent, DashboardSnapshot, LearningEvent, LearningRun
@@ -15,6 +16,7 @@ from app.services.central_brain_runtime import (
     LearningHealthService,
     SnapshotProducerService,
     SnapshotWatchdogService,
+    latest_snapshot_map,
     stale_modules_from_events,
 )
 from app.services.dashboard_snapshots import DashboardSnapshotService
@@ -58,6 +60,43 @@ def test_latest_runtime_event_keeps_infrequent_modules_visible():
 
         assert latest["fundamentals_refresh"]["status"] == "ok"
         assert latest["snapshot_producer"]["payload"]["index"] == 349
+
+
+@pytest.mark.parametrize("result_status", ["error", "failed", "degraded"])
+def test_run_job_records_returned_failure_status_as_failed(monkeypatch, result_status):
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    test_session = sessionmaker(bind=engine, future=True)
+    coordinator = RuntimeWorkerCoordinator()
+    coordinator.mark_scheduler_started()
+    monkeypatch.setattr(realtime, "SessionLocal", test_session)
+    monkeypatch.setattr(realtime, "runtime_worker_coordinator", coordinator)
+
+    realtime._run_job(
+        "snapshot_producer",
+        lambda db: {"status": result_status, "error": "snapshot generation failed"},
+    )
+
+    with test_session() as db:
+        job = db.scalar(
+            select(BackgroundJobState).where(
+                BackgroundJobState.job_name == "snapshot_producer"
+            )
+        )
+        event = db.scalar(
+            select(BrainRuntimeEvent)
+            .where(BrainRuntimeEvent.source_module == "snapshot_producer")
+            .order_by(BrainRuntimeEvent.id.desc())
+            .limit(1)
+        )
+
+    assert job is not None
+    assert job.status == "failed"
+    assert "snapshot generation failed" in job.error_message
+    assert event is not None
+    assert event.event_type == "module_failed"
+    assert event.status == "error"
+    assert coordinator.snapshot()["last_status"] == "error"
 
 
 def test_background_job_state_records_start_complete_and_budget_stop():
@@ -131,6 +170,29 @@ def test_snapshot_watchdog_ignores_stale_noncritical_diagnostic_snapshots():
         assert "hyperbolic_replay_training_summary" not in health["stale_snapshots"]
 
 
+def test_latest_snapshot_map_keeps_latest_row_for_every_type_beyond_global_limit():
+    with setup_db() as db:
+        for snapshot_type in CRITICAL_SNAPSHOT_TYPES:
+            DashboardSnapshotService().write(
+                db,
+                snapshot_type,
+                {"status": "ready", "revision": 0},
+                ttl_seconds=60,
+            )
+        for revision in range(301):
+            DashboardSnapshotService().write(
+                db,
+                "learning_summary",
+                {"status": "ready", "revision": revision + 1},
+                ttl_seconds=60,
+            )
+
+        latest = latest_snapshot_map(db)
+
+        assert set(CRITICAL_SNAPSHOT_TYPES).issubset(latest)
+        assert latest["learning_summary"].payload_json["revision"] == 301
+
+
 def test_dashboard_snapshot_service_keeps_missing_sections_round_trip():
     with setup_db() as db:
         payload = DashboardSnapshotService().write(
@@ -175,6 +237,39 @@ def test_runtime_state_and_learning_health_work_with_empty_database():
         assert "learning_summary" in state["missing_snapshots"]
         assert health["status"] in {"degraded", "stale"}
         assert health["frontend_policy"] == "read_only_snapshot_observer"
+
+
+def test_learning_health_rejects_old_failed_run_as_successful(monkeypatch):
+    old_time = datetime.utcnow() - timedelta(days=30)
+    with setup_db() as db:
+        db.add(
+            LearningRun(
+                run_id="failed-old-run",
+                trigger="scheduled",
+                status="failed",
+                started_at=old_time,
+                completed_at=old_time + timedelta(minutes=1),
+            )
+        )
+        db.commit()
+        coordinator = RuntimeWorkerCoordinator()
+        monkeypatch.setattr(
+            "app.services.central_brain_runtime.runtime_worker_coordinator",
+            coordinator,
+        )
+
+        health = LearningHealthService().health(
+            db,
+            snapshot_health={"missing_snapshots": []},
+            jobs=[],
+        )
+
+        assert health["status"] in {"failed", "stale"}
+        assert health["worker_alive"] is False
+        assert health["last_successful_learning_cycle"] is None
+        assert health["latest_learning_run_status"] == "failed"
+        assert health["learning_events_last_24h"] == 0
+        assert "learning_loop" in health["stale_modules"]
 
 
 def test_runtime_worker_coordinator_blocks_only_duplicate_worker():

@@ -527,6 +527,22 @@ def _update_stage_progress(progress: dict) -> None:
         _state["stage_results"] = _compact_payload(progress.get("stage_results", {}))
 
 
+def _returned_job_failure(result) -> tuple[str, str] | None:
+    if not isinstance(result, dict):
+        return None
+    status = str(result.get("status") or "").strip().lower()
+    if status not in {"error", "failed", "degraded"}:
+        return None
+    detail = (
+        result.get("error_message")
+        or result.get("error")
+        or result.get("reason")
+        or result.get("explanation")
+        or f"job returned status={status}"
+    )
+    return status, str(detail)
+
+
 def _run_job(job_name: str, work):
     max_items = runtime_worker_coordinator.definition(job_name).max_items
     acquired, worker_state = runtime_worker_coordinator.begin(job_name, max_items=max_items)
@@ -570,17 +586,38 @@ def _run_job(job_name: str, work):
         with SessionLocal() as db:
             result = work(db)
             duration_ms = (time.perf_counter() - perf_started) * 1000
-            BackgroundJobStateService().complete(
-                db,
-                job_name,
-                duration_ms=duration_ms,
-                payload=_compact_payload(result or {}),
-            )
+            returned_failure = _returned_job_failure(result)
+            if returned_failure:
+                returned_status, returned_error = returned_failure
+                perf_status = "error"
+                perf_error = returned_error
+                BackgroundJobStateService().fail(
+                    db,
+                    job_name,
+                    duration_ms=duration_ms,
+                    error_message=returned_error,
+                )
+            else:
+                BackgroundJobStateService().complete(
+                    db,
+                    job_name,
+                    duration_ms=duration_ms,
+                    payload=_compact_payload(result or {}),
+                )
+        compact_result = _compact_payload(result or {})
         with _state_lock:
             _state["last_completed_at"] = datetime.utcnow().isoformat()
-            _state["last_status"] = "ok"
-            _state["last_result"] = _compact_payload(result or {})
-        runtime_worker_coordinator.complete(job_name, result=_compact_payload(result or {}))
+            _state["last_status"] = returned_status if returned_failure else "ok"
+            _state["last_error"] = returned_error if returned_failure else ""
+            _state["last_result"] = compact_result
+        if returned_failure:
+            runtime_worker_coordinator.fail(
+                job_name,
+                error=returned_error,
+                result=compact_result,
+            )
+        else:
+            runtime_worker_coordinator.complete(job_name, result=compact_result)
     except Exception as exc:
         perf_status = "error"
         perf_error = f"{type(exc).__name__}: {str(exc)}"
