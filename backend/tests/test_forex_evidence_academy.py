@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
 from app.core.database import Base
@@ -79,6 +79,17 @@ def test_curriculum_is_bounded_and_preserves_exploration() -> None:
         assert any(row.priority_type == "BROAD_EXPLORATION" for row in assignments)
         assert len({row.pair for row in assignments}) >= 3
         assert all(row.expected_information_gain > 0 for row in assignments)
+
+
+def test_curriculum_generation_is_unique_and_idempotent_at_max_batch_size() -> None:
+    with setup_db() as db:
+        first = ForexCurriculumPlanner().generate(db, limit=48)
+        second = ForexCurriculumPlanner().generate(db, limit=48)
+
+        assert len(first) == 48
+        assert len({row.assignment_key for row in first}) == 48
+        assert {row.assignment_key for row in second} == {row.assignment_key for row in first}
+        assert db.scalar(select(func.count()).select_from(ForexCurriculumAssignment)) == 48
 
 
 def add_evidence(

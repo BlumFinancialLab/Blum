@@ -18,6 +18,16 @@ import { api } from "@/lib/api";
 import { BloombergPanel, MetricCard, ScoreBadge, TerminalHeader } from "@/components/FinancialTerminal";
 import { LoadingState } from "@/components/LoadingState";
 import { StatusBadge } from "@/components/StatusBadge";
+import {
+  CANDIDATE_PAPER_STATUSES,
+  CLOSED_PAPER_STATUSES,
+  filterPaperLifecycle,
+  filterPaperMarket,
+  mergePaperTrades,
+  normalizePaperStatus,
+  OPEN_PAPER_STATUSES,
+  paperTradeKey,
+} from "@/lib/paperTradingView.mjs";
 
 type ReadinessState =
   | "READY"
@@ -39,10 +49,17 @@ type PaperForwardTrade = Record<string, any> & {
 };
 
 type PaperMarketTab = "equities" | "forex";
+type PaperLifecycleTab = "closed" | "open" | "candidates";
 
 const PAPER_MARKET_TABS: Array<{ id: PaperMarketTab; label: string }> = [
   { id: "equities", label: "Azioni / ETF" },
   { id: "forex", label: "Forex" },
+];
+
+const PAPER_LIFECYCLE_TABS: Array<{ id: PaperLifecycleTab; label: string }> = [
+  { id: "closed", label: "Storico chiusi / P&L" },
+  { id: "open", label: "Posizioni aperte" },
+  { id: "candidates", label: "Candidati / skipped" },
 ];
 
 type DetailState = {
@@ -52,9 +69,9 @@ type DetailState = {
   error: string;
 };
 
-const CANDIDATE_STATUSES = new Set(["CANDIDATE", "WAITING_FOR_TRIGGER", "SKIPPED", "DATA_BLOCKED", "ERROR"]);
-const OPEN_STATUSES = new Set(["OPEN"]);
-const CLOSED_STATUSES = new Set(["CLOSED", "EXPIRED", "INVALIDATED"]);
+const CANDIDATE_STATUSES = CANDIDATE_PAPER_STATUSES;
+const OPEN_STATUSES = OPEN_PAPER_STATUSES;
+const CLOSED_STATUSES = CLOSED_PAPER_STATUSES;
 
 const EMPTY_STATES: Record<ReadinessState, { title: string; body: string; next: string }> = {
   READY: {
@@ -104,6 +121,7 @@ export default function PaperTradingPage() {
   const [error, setError] = useState("");
   const [slowLoad, setSlowLoad] = useState(false);
   const [marketTab, setMarketTab] = useState<PaperMarketTab>("equities");
+  const [lifecycleTab, setLifecycleTab] = useState<PaperLifecycleTab>("closed");
   const [selectedTrade, setSelectedTrade] = useState<PaperForwardTrade | null>(null);
   const [detailState, setDetailState] = useState<DetailState>({ trade: null, events: [], loading: false, error: "" });
 
@@ -126,9 +144,9 @@ export default function PaperTradingPage() {
   }, []);
 
   const snapshot = useMemo(() => normalizeSnapshot(snapshotEnvelope), [snapshotEnvelope]);
-  const trades = useMemo(() => mergeTrades(snapshot), [snapshot]);
+  const trades = useMemo(() => mergePaperTrades(snapshot), [snapshot]);
   const visibleTrades = useMemo(
-    () => trades.filter((row) => marketTab === "forex" ? row.market_group === "forex" : row.market_group !== "forex"),
+    () => filterPaperMarket(trades, marketTab),
     [trades, marketTab],
   );
   const candidates = useMemo(() => filterTrades(visibleTrades, CANDIDATE_STATUSES), [visibleTrades]);
@@ -137,6 +155,10 @@ export default function PaperTradingPage() {
   const readiness = useMemo(() => deriveReadiness(snapshotEnvelope, snapshot, visibleTrades, candidates, openPositions), [snapshotEnvelope, snapshot, visibleTrades, candidates, openPositions]);
   const blockers = useMemo(() => deriveBlockers(readiness, snapshot, candidates, openPositions, visibleTrades), [readiness, snapshot, candidates, openPositions, visibleTrades]);
   const latestLessons = useMemo(() => deriveLessons(snapshot, closedTrades), [snapshot, closedTrades]);
+  const lifecycleRows = useMemo(
+    () => filterPaperLifecycle(visibleTrades, lifecycleTab),
+    [visibleTrades, lifecycleTab],
+  );
 
   const openReplay = (trade: PaperForwardTrade) => {
     const tradeId = trade.source_trade_id;
@@ -237,6 +259,24 @@ export default function PaperTradingPage() {
         })}
       </section>
 
+      <section className="radar-tabs" style={{ marginTop: 8 }} role="tablist" aria-label="Paper trading history">
+        {PAPER_LIFECYCLE_TABS.map((tab) => {
+          const count = filterPaperLifecycle(visibleTrades, tab.id).length;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={lifecycleTab === tab.id}
+              className={lifecycleTab === tab.id ? "active" : ""}
+              onClick={() => setLifecycleTab(tab.id)}
+            >
+              {tab.label} <span>{count}</span>
+            </button>
+          );
+        })}
+      </section>
+
       <section className="paper-forward-grid">
         <BloombergPanel title="Paper Forward Status" value={readiness} subtitle="A valid no-trade state is better than fabricated activity.">
           <ReadinessStateCard state={readiness} explanation={snapshot.explanation} compact />
@@ -265,38 +305,26 @@ export default function PaperTradingPage() {
       </section>
 
       <DecisionSection
-        title={`${marketTab === "forex" ? "Forex" : "Azioni / ETF"} Candidates`}
-        value={`${candidates.length} candidates`}
-        subtitle="BLUM has not opened these trades unless the frozen entry condition is met."
-        rows={candidates}
-        emptyState={candidateEmptyState(readiness, trades)}
-        variant="candidate"
-        onReplay={openReplay}
-      />
-
-      <DecisionSection
-        title="Open Positions"
-        value={`${openPositions.length} open`}
-        subtitle="Open forward-paper positions with current P/L, stop, targets and benchmark excess."
-        rows={openPositions}
-        emptyState={openPositions.length ? "READY" : readiness}
-        variant="open"
-        onReplay={openReplay}
-      />
-
-      <DecisionSection
-        title="Recently Closed Trades"
-        value={`${closedTrades.length} closed`}
-        subtitle="Closed outcomes stay honest: win, loss, breakeven, data invalid or inconclusive."
-        rows={closedTrades.slice(0, 12)}
-        emptyState={closedTrades.length ? "READY" : readiness}
-        variant="closed"
+        title={lifecycleTab === "closed"
+          ? `${marketTab === "forex" ? "Forex" : "Azioni / ETF"} - Storico trade chiusi`
+          : lifecycleTab === "open"
+            ? "Posizioni aperte"
+            : `${marketTab === "forex" ? "Forex" : "Azioni / ETF"} - Candidati / skipped`}
+        value={`${lifecycleRows.length} ${lifecycleTab}`}
+        subtitle={lifecycleTab === "closed"
+          ? "Esiti chiusi con prezzi di entrata/uscita, P/L, R e benchmark. Gli skipped non compaiono in questa vista."
+          : lifecycleTab === "open"
+            ? "Posizioni paper-forward aperte con P/L non realizzato, stop e target."
+            : "Decisioni non ancora aperte o scartate dai filtri di actionability."}
+        rows={lifecycleRows.slice(0, 12)}
+        emptyState={lifecycleTab === "candidates" ? candidateEmptyState(readiness, trades) : lifecycleRows.length ? "READY" : readiness}
+        variant={lifecycleTab === "closed" ? "closed" : lifecycleTab === "open" ? "open" : "candidate"}
         onReplay={openReplay}
       />
 
       <section className="grid-2" style={{ marginTop: 12 }}>
-        <BloombergPanel title="Trade Journal" value={`${visibleTrades.length} rows`} subtitle="Compact ledger. Trade replay is loaded only when a row is opened.">
-          {visibleTrades.length ? <TradeJournal rows={visibleTrades.slice(0, 50)} onReplay={openReplay} selectedId={selectedTrade?.trade_id} /> : <ReadinessStateCard state={readiness} compact />}
+        <BloombergPanel title={lifecycleTab === "closed" ? "Storico P/L" : "Trade Journal"} value={`${lifecycleRows.length} rows`} subtitle="Il journal segue il filtro selezionato. Il replay resta lazy e viene caricato solo aprendo una riga.">
+          {lifecycleRows.length ? <TradeJournal rows={lifecycleRows.slice(0, 50)} onReplay={openReplay} selectedId={selectedTrade?.trade_id} /> : <ReadinessStateCard state={readiness} compact />}
         </BloombergPanel>
 
         <BloombergPanel title="Trade Detail" value={selectedTrade?.ticker ?? "lazy"} subtitle="Frozen decision, lifecycle and event log load only after opening a trade.">
@@ -640,24 +668,8 @@ function normalizeSnapshot(envelope: any): any {
   return envelope.payload ?? envelope;
 }
 
-function mergeTrades(snapshot: any): PaperForwardTrade[] {
-  const rows = [
-    ...(snapshot?.trades ?? []),
-    ...(snapshot?.latest_candidates ?? snapshot?.candidates ?? []),
-    ...(snapshot?.open_positions ?? []),
-    ...(snapshot?.recently_closed_trades ?? snapshot?.recently_closed ?? []),
-  ];
-  const seen = new Set<string>();
-  return rows.filter((row: PaperForwardTrade) => {
-    const key = tradeKey(row);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
 function filterTrades(rows: PaperForwardTrade[], statuses: Set<string>) {
-  return rows.filter((row) => statuses.has(normalizeStatus(row.status)));
+  return rows.filter((row) => statuses.has(normalizePaperStatus(row.status)));
 }
 
 function MarketEvidenceCard({ label, metrics, counts }: { label: string; metrics?: any; counts?: any }) {
@@ -765,11 +777,11 @@ function outcomeLabel(row: PaperForwardTrade) {
 }
 
 function normalizeStatus(value: any) {
-  return String(value ?? "UNKNOWN").toUpperCase();
+  return normalizePaperStatus(value);
 }
 
 function tradeKey(row: PaperForwardTrade) {
-  return String(row.trade_id ?? row.trade_uid ?? `${row.ticker}-${row.status}-${row.decision_timestamp ?? row.created_at}`);
+  return paperTradeKey(row);
 }
 
 function readinessTone(value: ReadinessState): "positive" | "attention" | "negative" | "info" {

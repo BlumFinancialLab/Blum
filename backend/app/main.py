@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 import time
 
-from fastapi import FastAPI, Request
+from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -48,6 +48,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+def include_legacy_router_without_duplicate_operations(
+    application: FastAPI,
+    source_router: APIRouter,
+) -> None:
+    """Keep legacy API coverage without shadowing modular route handlers."""
+
+    existing = {
+        (route.path, frozenset(route.methods or set()))
+        for route in application.routes
+        if hasattr(route, "methods")
+    }
+    filtered = APIRouter()
+    for route in source_router.routes:
+        key = (route.path, frozenset(route.methods or set()))
+        if key in existing:
+            continue
+        filtered.routes.append(route)
+        existing.add(key)
+    application.include_router(filtered)
+
+
 app.include_router(brain_router)
 app.include_router(copy_readiness_router)
 app.include_router(training_router)
@@ -55,7 +77,7 @@ app.include_router(paper_trading_router)
 app.include_router(alpha_router)
 app.include_router(runtime_router)
 app.include_router(analyst_router)
-app.include_router(legacy_router)
+include_legacy_router_without_duplicate_operations(app, legacy_router)
 app.include_router(forex_trader_router)
 
 

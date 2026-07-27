@@ -266,6 +266,12 @@ def test_projection_combines_standard_and_forex_without_double_counting():
 
 def test_visible_projection_reserves_capacity_for_each_market_group():
     with setup_db() as db:
+        statements: list[str] = []
+        event.listen(
+            db.get_bind(),
+            "before_cursor_execute",
+            lambda _conn, _cursor, statement, _parameters, _context, _many: statements.append(statement),
+        )
         game = seed_game(db)
         standard = seed_standard_trade(db, game)
         standard.closed_at = NOW - timedelta(days=2)
@@ -290,6 +296,56 @@ def test_visible_projection_reserves_capacity_for_each_market_group():
         assert f"paper:{standard.id}" in {row["trade_id"] for row in payload["trades"]}
         assert any(row["market_group"] == "forex" for row in payload["trades"])
         assert payload["pagination"]["total"] == 61
+        assert payload["counts"]["aggregate"]["decisions_rejected"] == 60
+        unbounded_decision_reads = [
+            statement
+            for statement in statements
+            if "FROM forex_decisions ORDER BY forex_decisions.created_at DESC" in statement
+            and "LIMIT" not in statement.upper()
+        ]
+        assert unbounded_decision_reads == []
+
+
+def test_closed_trade_history_is_not_evicted_by_newer_skipped_candidates():
+    with setup_db() as db:
+        game = seed_game(db)
+        closed = seed_standard_trade(db, game)
+        closed.closed_at = NOW - timedelta(days=3)
+        closed.opened_at = NOW - timedelta(days=3, hours=1)
+        closed.decision_timestamp = NOW - timedelta(days=3, hours=2)
+        for index in range(60):
+            db.add(
+                LiveForwardPaperTrade(
+                    trade_uid=f"paper-skipped-{index}",
+                    duplicate_key=f"paper-skipped-key-{index}",
+                    game_id=game.id,
+                    ticker=f"SKIP{index}",
+                    asset_type="Stock",
+                    setup_type="avoid_no_edge",
+                    market="us_equity",
+                    status="SKIPPED",
+                    decision_timestamp=NOW + timedelta(minutes=index),
+                    entry_price=100.0 + index,
+                    stop_loss=95.0 + index,
+                    target_1=110.0 + index,
+                    evidence_type="PAPER_FORWARD",
+                )
+            )
+        db.commit()
+
+        payload = UnifiedPaperTradingProjectionService().build(db, limit=25)
+
+        assert f"paper:{closed.id}" not in {row["trade_id"] for row in payload["trades"]}
+        assert [row["trade_id"] for row in payload["recently_closed"]] == [f"paper:{closed.id}"]
+        assert payload["recently_closed"][0]["net_pnl_eur"] == 10.0
+        assert payload["counts"]["aggregate"]["total"] == 61
+        assert payload["counts"]["aggregate"]["candidates"] == 60
+        assert payload["candidate_pagination"]["total"] == 60
+        assert payload["recently_closed_pagination"] == {
+            "limit": 25,
+            "returned": 1,
+            "total": 1,
+        }
 
 
 def test_open_forex_position_affects_only_unrealized_metrics():

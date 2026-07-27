@@ -751,6 +751,7 @@ class TradingGameRealityCheckService:
             )
             db.add(row)
             game.reality_check_summary = payload
+            db.commit()
         return payload
 
 

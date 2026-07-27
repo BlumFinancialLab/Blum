@@ -5,7 +5,7 @@ from statistics import median
 from time import perf_counter
 from typing import Any
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -75,11 +75,57 @@ class UnifiedPaperTradingProjectionService:
         forex_positions = list(
             db.scalars(select(ForexPosition).order_by(desc(ForexPosition.created_at))).all()
         )
-        forex_decisions = list(
-            db.scalars(select(ForexDecision).order_by(desc(ForexDecision.created_at))).all()
+        represented_decisions = select(ForexPosition.decision_id)
+        unrepresented_filter = ForexDecision.id.not_in(represented_decisions)
+        forex_decision_total = int(
+            db.scalar(
+                select(func.count(ForexDecision.id)).where(unrepresented_filter)
+            )
+            or 0
         )
-        forex_evidence = list(
-            db.scalars(select(ForexLearningEvidence).order_by(desc(ForexLearningEvidence.created_at))).all()
+        forex_rejected_total = int(
+            db.scalar(
+                select(func.count(ForexDecision.id)).where(
+                    unrepresented_filter,
+                    ForexDecision.status.in_(["REJECTED", "BLOCKED", "NO_TRADE"]),
+                )
+            )
+            or 0
+        )
+        forex_decisions = list(
+            db.scalars(
+                select(ForexDecision)
+                .where(unrepresented_filter)
+                .order_by(desc(ForexDecision.created_at))
+                .limit(limit)
+            ).all()
+        )
+        decision_ids = {
+            *[row.decision_id for row in forex_positions],
+            *[row.id for row in forex_decisions],
+        }
+        decisions_by_id = {
+            row.id: row
+            for row in db.scalars(
+                select(ForexDecision).where(ForexDecision.id.in_(decision_ids))
+            ).all()
+        } if decision_ids else {}
+        evidence_filters = []
+        position_ids = [row.id for row in forex_positions]
+        if position_ids:
+            evidence_filters.append(ForexLearningEvidence.position_id.in_(position_ids))
+        if decision_ids:
+            evidence_filters.append(ForexLearningEvidence.decision_id.in_(decision_ids))
+        forex_evidence = (
+            list(
+                db.scalars(
+                    select(ForexLearningEvidence)
+                    .where(or_(*evidence_filters))
+                    .order_by(desc(ForexLearningEvidence.created_at))
+                ).all()
+            )
+            if evidence_filters
+            else []
         )
 
         evidence_by_position: dict[int, ForexLearningEvidence] = {}
@@ -90,33 +136,53 @@ class UnifiedPaperTradingProjectionService:
             if evidence.decision_id is not None and evidence.decision_id not in evidence_by_decision:
                 evidence_by_decision[evidence.decision_id] = evidence
 
-        decisions_by_id = {row.id: row for row in forex_decisions}
-        represented_decisions = {row.decision_id for row in forex_positions}
-        rows = [self._paper_row(row) for row in paper_rows]
-        rows.extend(
+        paper_projection_rows = [self._paper_row(row) for row in paper_rows]
+        forex_position_rows = [
             self._forex_position_row(
                 row,
                 decisions_by_id.get(row.decision_id),
                 evidence_by_position.get(row.id) or evidence_by_decision.get(row.decision_id),
             )
             for row in forex_positions
-        )
-        rows.extend(
+        ]
+        forex_decision_rows = [
             self._forex_decision_row(row, evidence_by_decision.get(row.id))
             for row in forex_decisions
-            if row.id not in represented_decisions
-        )
+        ]
+        rows = [*paper_projection_rows, *forex_position_rows, *forex_decision_rows]
         rows.sort(key=lambda row: row.get("sort_timestamp") or "", reverse=True)
 
         by_market = {
-            market: self._summarize([row for row in rows if row["market_group"] == market])
-            for market in ("standard", "intraday", "forex")
+            "standard": self._summarize(
+                [row for row in paper_projection_rows if row["market_group"] == "standard"]
+            ),
+            "intraday": self._summarize(
+                [row for row in paper_projection_rows if row["market_group"] == "intraday"]
+            ),
+            "forex": self._with_candidate_counts(
+                self._summarize(forex_position_rows),
+                candidate_count=forex_decision_total,
+                rejected_count=forex_rejected_total,
+            ),
         }
-        aggregate = self._summarize(rows)
+        aggregate = self._with_candidate_counts(
+            self._summarize([*paper_projection_rows, *forex_position_rows]),
+            candidate_count=forex_decision_total,
+            rejected_count=forex_rejected_total,
+        )
         warnings = self._warnings(aggregate, by_market)
         visible = self._balanced_visible_rows(rows, limit)
+        candidate_rows = [
+            row for row in rows
+            if row["status"] not in TERMINAL_STATUSES | OPEN_STATUSES
+        ]
+        open_rows = [row for row in rows if row["status"] in OPEN_STATUSES]
+        closed_rows = [row for row in rows if row["status"] in TERMINAL_STATUSES]
+        visible_candidates = self._balanced_visible_rows(candidate_rows, limit)
+        visible_open = self._balanced_visible_rows(open_rows, limit)
+        visible_closed = self._balanced_visible_rows(closed_rows, limit)
         return {
-            "status": "READY" if rows else "NO_DECISIONS",
+            "status": "READY" if aggregate["counts"]["total"] else "NO_DECISIONS",
             "generated_at": datetime.utcnow().isoformat(),
             "game": {
                 "game_id": game.game_id if game else None,
@@ -135,10 +201,29 @@ class UnifiedPaperTradingProjectionService:
                 "by_market": {key: value["metrics"] for key, value in by_market.items()},
             },
             "trades": visible,
-            "candidates": [row for row in visible if row["status"] not in TERMINAL_STATUSES | OPEN_STATUSES],
-            "open_positions": [row for row in visible if row["status"] in OPEN_STATUSES],
-            "recently_closed": [row for row in visible if row["status"] in TERMINAL_STATUSES],
-            "pagination": {"limit": limit, "returned": len(visible), "total": len(rows)},
+            "candidates": visible_candidates,
+            "open_positions": visible_open,
+            "recently_closed": visible_closed,
+            "pagination": {
+                "limit": limit,
+                "returned": len(visible),
+                "total": aggregate["counts"]["total"],
+            },
+            "candidate_pagination": {
+                "limit": limit,
+                "returned": len(visible_candidates),
+                "total": aggregate["counts"]["candidates"],
+            },
+            "open_position_pagination": {
+                "limit": limit,
+                "returned": len(visible_open),
+                "total": len(open_rows),
+            },
+            "recently_closed_pagination": {
+                "limit": limit,
+                "returned": len(visible_closed),
+                "total": len(closed_rows),
+            },
             "warnings": warnings,
             "evidence_policy": "Observed source records only; open and rejected decisions never contribute realized P/L.",
             "computation_duration_ms": round((perf_counter() - started) * 1000, 3),
@@ -519,6 +604,18 @@ class UnifiedPaperTradingProjectionService:
                 "sample_size": len(closed),
             },
         }
+
+    @staticmethod
+    def _with_candidate_counts(
+        summary: dict,
+        *,
+        candidate_count: int,
+        rejected_count: int,
+    ) -> dict:
+        summary["counts"]["total"] += candidate_count
+        summary["counts"]["candidates"] += candidate_count
+        summary["counts"]["decisions_rejected"] += rejected_count
+        return summary
 
     def _max_drawdown(self, rows: list[dict]) -> float | None:
         if not rows:

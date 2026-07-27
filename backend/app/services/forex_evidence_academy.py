@@ -7,6 +7,7 @@ from math import sqrt
 from statistics import mean
 
 from sqlalchemy import desc, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -134,18 +135,17 @@ class ForexCurriculumPlanner:
         evidence_counts = self._evidence_counts(db)
         candidates = []
         pairs = pair_config.all()
-        for index in range(max(limit * 3, len(pairs))):
-            pair = pairs[index % len(pairs)]
-            setup, regime, hypothesis = SETUP_CURRICULUM[index % len(SETUP_CURRICULUM)]
-            session = SESSIONS[index % len(SESSIONS)]
-            context = (pair.ticker, session, regime, setup)
-            observed = evidence_counts.get(context, 0)
-            sample_gap = max(0, 300 - observed)
-            broad = index % 4 == 0
-            priority_type = "BROAD_EXPLORATION" if broad else "SAMPLE_GAP"
-            information_gain = min(1.0, 0.35 + sample_gap / 500.0 + (0.1 if broad else 0.0))
-            priority = information_gain * 100.0
-            candidates.append((priority, context, priority_type, hypothesis, sample_gap))
+        for pair_index, pair in enumerate(pairs):
+            for setup_index, (setup, regime, hypothesis) in enumerate(SETUP_CURRICULUM):
+                for session_index, session in enumerate(SESSIONS):
+                    context = (pair.ticker, session, regime, setup)
+                    observed = evidence_counts.get(context, 0)
+                    sample_gap = max(0, 300 - observed)
+                    broad = (pair_index + setup_index + session_index) % 4 == 0
+                    priority_type = "BROAD_EXPLORATION" if broad else "SAMPLE_GAP"
+                    information_gain = min(1.0, 0.35 + sample_gap / 500.0 + (0.1 if broad else 0.0))
+                    priority = information_gain * 100.0
+                    candidates.append((priority, context, priority_type, hypothesis, sample_gap))
         candidates.sort(key=lambda item: (-item[0], item[1]))
         output = []
         used_pairs: set[str] = set()
@@ -198,8 +198,18 @@ class ForexCurriculumPlanner:
                 "replay_spec_json": replay_spec,
             }
             if row is None:
-                row = ForexCurriculumAssignment(assignment_key=key, **values)
-                db.add(row)
+                try:
+                    with db.begin_nested():
+                        row = ForexCurriculumAssignment(assignment_key=key, **values)
+                        db.add(row)
+                        db.flush()
+                except IntegrityError:
+                    row = db.scalar(
+                        select(ForexCurriculumAssignment)
+                        .where(ForexCurriculumAssignment.assignment_key == key)
+                    )
+                    if row is None:
+                        raise
             else:
                 for field, value in values.items():
                     setattr(row, field, value)

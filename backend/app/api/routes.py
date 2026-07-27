@@ -158,7 +158,6 @@ from app.services.alpha_operating_system import (
 from app.services.autonomous_engine import AutonomousResearchEngine, latest_autonomous_status
 from app.services.blum_financial_model import (
     build_training_dataset,
-    capture_ai_insight_reasoning,
     capture_latest_asset_reasoning,
     create_training_job_plan,
     evaluate_thesis_outcomes,
@@ -1190,7 +1189,20 @@ def trading_game_learning_evidence(
 
 @router.get("/api/trading-game/reality-check")
 def trading_game_reality_check(game_id: int | None = Query(default=None), persist: bool = Query(default=False), db: Session = Depends(get_db)) -> dict:
-    return TradingGameRealityCheckService().evaluate(db, game_id, persist=persist)
+    payload = TradingGameRealityCheckService().evaluate(db, game_id, persist=False)
+    if persist:
+        payload["warnings"] = list(payload.get("warnings") or []) + [
+            "GET is read-only; use POST /api/trading-game/reality-check to persist a new evaluation."
+        ]
+    return payload
+
+
+@router.post("/api/trading-game/reality-check")
+def persist_trading_game_reality_check(
+    game_id: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> dict:
+    return TradingGameRealityCheckService().evaluate(db, game_id, persist=True)
 
 
 @router.get("/api/trading-game/pnl-breakdown")
@@ -1233,7 +1245,20 @@ def trading_game_intelligence_metrics(
     persist: bool = Query(default=False),
     db: Session = Depends(get_db),
 ) -> dict:
-    return TradingIntelligenceMetricsService().overview(db, game_id=game_id, persist=persist)
+    payload = TradingIntelligenceMetricsService().overview(db, game_id=game_id, persist=False)
+    if persist:
+        payload["warnings"] = list(payload.get("warnings") or []) + [
+            "GET is read-only; use POST /api/trading-game/intelligence-metrics/recalculate to persist metrics."
+        ]
+    return payload
+
+
+@router.post("/api/trading-game/intelligence-metrics/recalculate")
+def persist_trading_game_intelligence_metrics(
+    game_id: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> dict:
+    return TradingIntelligenceMetricsService().overview(db, game_id=game_id, persist=True)
 
 
 @router.get("/api/trading-game/intelligence-metrics/rolling")
@@ -2584,24 +2609,13 @@ def overview(db: Session = Depends(get_db)):
 def ai_explain(ticker: str, db: Session = Depends(get_db)):
     asset = require_asset(db, ticker)
     signal = latest_signal(db, asset.id)
-    hydration = {}
-    if not signal:
-        hydration = hydrate_asset_evidence(db, asset)
-        signal = latest_signal(db, asset.id)
     news = related_news_for_asset(db, asset.id, limit=8)
+    hydration = {
+        "status": "not_triggered",
+        "reason": "GET /ai/explain is read-only; market hydration runs in background jobs.",
+    }
     if not signal:
         insight = insufficient_evidence_insight(db, asset, news, hydration)
-        insight_model = AIInsight(
-            asset_id=asset.id,
-            model_name=insight["models_used"]["reasoning"],
-            insight_type="asset_explanation_incomplete",
-            structured_output=insight,
-            explanation=insight["reason"],
-        )
-        db.add(insight_model)
-        db.flush()
-        capture_ai_insight_reasoning(db, asset, insight_model, signal=None)
-        db.commit()
         return insight
     historical = similar_cases_backtest(db, asset)
     accuracy = asset_accuracy_profile(db, asset, persist=False)
@@ -2627,11 +2641,6 @@ def ai_explain(ticker: str, db: Session = Depends(get_db)):
     )
     insight["evidence_status"] = "ready"
     insight["auto_hydration"] = hydration
-    insight_model = AIInsight(asset_id=asset.id, model_name=insight["models_used"]["reasoning"], structured_output=insight, explanation=insight["reason"])
-    db.add(insight_model)
-    db.flush()
-    capture_ai_insight_reasoning(db, asset, insight_model, signal=signal)
-    db.commit()
     return insight
 
 

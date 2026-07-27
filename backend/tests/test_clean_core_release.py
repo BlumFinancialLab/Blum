@@ -20,6 +20,16 @@ def test_product_routes_are_served_by_bounded_routers_before_legacy_router():
     assert first_endpoint_module("/api/trader-brain/alpha") == "app.api.routers.alpha"
 
 
+def test_no_api_operation_is_registered_twice():
+    operations = [
+        (route.path, method)
+        for route in app.routes
+        for method in (getattr(route, "methods", None) or set())
+    ]
+
+    assert len(operations) == len(set(operations))
+
+
 def test_product_routers_depend_on_engine_facade_not_low_level_services():
     for relative in [
         "api/routers/brain.py",

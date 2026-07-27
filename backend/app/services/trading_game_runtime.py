@@ -167,6 +167,21 @@ class TradingGameRuntimeSnapshotService:
             return None
         payload = dict(row.payload_json or {})
         rows = list(payload.get("rows") or [])
+        total = int(payload.get("total") or row.total_trades or len(rows))
+        if total > len(rows) and offset + limit > len(rows):
+            performance_recorder.record_cache_event(
+                "trading_game.ledger_snapshot",
+                hit=False,
+                metadata={
+                    "game_id": game_id,
+                    "reason": "requested_page_outside_snapshot_window",
+                    "offset": offset,
+                    "limit": limit,
+                    "snapshot_rows": len(rows),
+                    "total": total,
+                },
+            )
+            return None
         with trace.phase("payload_slice"):
             payload["rows"] = rows[offset : offset + limit]
             payload["limit"] = limit

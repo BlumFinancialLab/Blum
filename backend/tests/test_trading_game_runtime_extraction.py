@@ -123,6 +123,41 @@ def test_ledger_reads_snapshot_without_refresh(monkeypatch):
     assert payload["runtime_trace"]["metadata"]["query_count"] == 1
 
 
+def test_ledger_falls_back_to_bounded_db_page_beyond_snapshot_window():
+    with make_session() as db:
+        game = seed_game(db)
+        extra = TradingGameTrade(
+            game_id=game.id,
+            ticker="MSFT",
+            setup_type="trend_continuation",
+            decision_state="active_setup",
+            entry_date=date(2025, 1, 20),
+            exit_date=date(2025, 1, 24),
+            entry_price=100.0,
+            exit_price=104.0,
+            position_size=0.5,
+            realized_r_multiple=1.0,
+            net_pnl_eur=1.0,
+            created_at=datetime(2025, 1, 20, 16, 0),
+        )
+        db.add(extra)
+        db.commit()
+        TradingGameRuntimeSnapshotService().produce_ledger_snapshot(db, game_id=game.id, limit=2)
+
+        payload = TradeLedgerService().ledger(
+            db,
+            game_id=game.id,
+            limit=1,
+            offset=2,
+            refresh=False,
+            use_snapshot=True,
+        )
+
+    assert payload["snapshot_status"] == "miss"
+    assert payload["total"] == 3
+    assert [row["ticker"] for row in payload["rows"]] == ["NVDA"]
+
+
 def test_annotated_equity_reads_snapshot_without_refresh(monkeypatch):
     with make_session() as db:
         game = seed_game(db)

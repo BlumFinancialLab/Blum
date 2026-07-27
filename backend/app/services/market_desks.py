@@ -405,15 +405,15 @@ def prioritize_assets_for_scan(db: Session, assets: list[Asset]) -> list[Asset]:
         "actionable_if_confirmed": 1,
         "wait_for_trigger": 2,
         "watch": 3,
-        "avoid": 4,
+        "avoid": 6,
     }
 
     def priority(asset: Asset) -> tuple:
         score = latest_by_asset.get(asset.id)
         if score is None:
-            return (5, 0.0, 0.0, asset.ticker)
+            return (4, 0.0, 0.0, asset.ticker)
         return (
-            action_rank.get(str(score.actionability or "").lower(), 4),
+            action_rank.get(str(score.actionability or "").lower(), 5),
             -float(score.sniper_score or 0.0),
             -float(score.confidence or 0.0),
             asset.ticker,
