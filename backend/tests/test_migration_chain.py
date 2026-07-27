@@ -71,11 +71,15 @@ def test_full_migration_chain_reaches_head_on_sqlite(tmp_path):
         "forex_curriculum_assignments",
         "forex_contextual_memory",
         "forex_knowledge_ingestion_runs",
+        "forex_policy_states",
+        "forex_policy_updates",
+        "financial_model_advisors",
+        "financial_model_votes",
     }
 
     assert required_tables.issubset(tables)
     with engine.connect() as connection:
-        assert connection.execute(text("select version_num from alembic_version")).scalar_one() == "0037_forex_evidence_academy"
+        assert connection.execute(text("select version_num from alembic_version")).scalar_one() == "0038_forex_rl_model_council"
 
     downgrade = subprocess.run(
         [sys.executable, "-m", "alembic", "downgrade", "base"],

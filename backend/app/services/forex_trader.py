@@ -19,6 +19,7 @@ from app.models import (
     ForexDecision,
     ForexLearningEvidence,
     ForexContextualMemory,
+    ForexPolicyState,
     ForexPosition,
     ForexStrategyReadiness,
     ForexTraderCycle,
@@ -46,6 +47,8 @@ from app.services.forex_contracts import (
 )
 from app.services.forex_execution import BlumForexExecutionSimulator
 from app.services.forex_learning import BlumForexLearningEngine
+from app.services.forex_reinforcement import ForexReinforcementPolicyService
+from app.services.financial_model_council import FinancialModelCouncil
 from app.services.forex_risk import BlumForexPortfolioRiskEngine, ForexPortfolioState
 from app.services.promoted_strategy_registry import BlumPromotedStrategyRegistry
 from app.services.replay_data import MultiProviderReplayDataService
@@ -63,6 +66,8 @@ class BlumForexPositionManagerAgent:
         self.execution = BlumForexExecutionSimulator()
         self.brokers = BlumForexBrokerProfileService()
         self.learning = BlumForexLearningEngine()
+        self.reinforcement = ForexReinforcementPolicyService()
+        self.model_council = FinancialModelCouncil()
 
     def manage(self, db: Session, quotes: dict[str, ForexQuote], *, now: datetime) -> dict:
         updated, closed = 0, []
@@ -155,7 +160,7 @@ class BlumForexPositionManagerAgent:
                 position.realized_r = position.net_pnl / risk if risk else None
                 outcome = "WIN" if position.net_pnl > 0 else "LOSS" if position.net_pnl < 0 else "BREAKEVEN"
                 benchmark_excess = self._benchmark_excess(db, position, now, current)
-                self.learning.record_outcome(db, decision_id=position.decision_id, outcome=outcome, payload={
+                evidence = self.learning.record_outcome(db, decision_id=position.decision_id, outcome=outcome, payload={
                     "position_id": position.id, "strategy_id": position.strategy_id, "pair": position.pair,
                     "direction": position.direction, "expected_result": contract.get("expected_r"),
                     "realized_result": position.realized_r, "benchmark_excess": benchmark_excess,
@@ -171,6 +176,24 @@ class BlumForexPositionManagerAgent:
                     "evidence_lane": contract.get("evidence_lane"),
                     "certified_for_copy_readiness": bool(contract.get("certified_for_copy_readiness", False)),
                 })
+                if evidence is not None:
+                    policy_update = self.reinforcement.observe(db, evidence)
+                    reward = (evidence.payload_json or {}).get("reinforcement_reward_r")
+                    model_evaluation = (
+                        self.model_council.evaluate_outcome(
+                            db,
+                            decision_id=position.decision_id,
+                            reward_r=float(reward),
+                        )
+                        if reward is not None
+                        else {"votes_evaluated": 0}
+                    )
+                    contract["learning_update"] = {
+                        "evidence_id": evidence.id,
+                        "policy": policy_update,
+                        "model_council": model_evaluation,
+                    }
+                    position.contract_json = contract
                 game = db.scalar(select(LiveForwardPaperGame).where(LiveForwardPaperGame.status == "active").order_by(desc(LiveForwardPaperGame.started_at)).limit(1))
                 if game:
                     game.current_capital += position.net_pnl
@@ -211,6 +234,7 @@ class BlumForexTraderCore:
         self.execution = BlumForexExecutionSimulator()
         self.brokers = BlumForexBrokerProfileService()
         self.learning = BlumForexLearningEngine()
+        self.model_council = FinancialModelCouncil()
         self.manager = BlumForexPositionManagerAgent()
 
     def evaluate_input(self, market: AgentMarketInput, *, strategy: ForexStrategyEvidence) -> EvaluationOutcome:
@@ -276,6 +300,28 @@ class BlumForexTraderCore:
             )
             db.add(decision)
             db.flush()
+            context_output = evaluation.agent_outputs.get("context", {})
+            price_output = evaluation.agent_outputs.get("price_action", {})
+            model_review = self.model_council.review_forex_decision(
+                db,
+                decision_id=decision.id,
+                ticker=market.pair,
+                evidence={
+                    "approved": evaluation.approved,
+                    "confidence": evaluation.proposal.confidence,
+                    "blockers": list(evaluation.blockers),
+                    "expected_net_pips": evaluation.proposal.expected_net_pips,
+                    "context_direction": context_output.get("directional_bias"),
+                    "price_direction": price_output.get("direction"),
+                    "session": market.session,
+                    "regime": context_output.get("regime"),
+                    "setup_family": evaluation.proposal.setup_family,
+                },
+            )
+            decision.proposal_json = {
+                **dict(decision.proposal_json or {}),
+                "model_council": model_review,
+            }
             if not evaluation.approved:
                 rejected.append({"pair": market.pair, "blockers": list(evaluation.blockers)})
                 blockers.extend(evaluation.blockers)
@@ -777,12 +823,14 @@ class ForexStrategyRepository:
         if selected is None:
             from app.services.forex_contracts import ForexReadiness
 
+            strategy_id = "forex-exploration-bootstrap-v1"
             exploratory = ForexStrategyEvidence(
-                strategy_id="forex-exploration-bootstrap-v1",
+                strategy_id=strategy_id,
                 readiness=ForexReadiness.PAPER_TRADE_ELIGIBLE,
                 sample_size=0,
                 net_expectancy_r=0.0,
                 strategy_version="exploration-v1",
+                contextual_memory={"cells": self._policy_cells(db, {strategy_id})},
                 evidence_lane="exploration_paper",
                 certified_for_copy_readiness=False,
             )
@@ -805,9 +853,10 @@ class ForexStrategyRepository:
             .limit(48)
         ).all()
         contextual_memory = {
-            "cells": [
+            "cells": self._policy_cells(db, memory_strategy_ids) + [
                 {
                     "memory_id": row.id,
+                    "source": "contextual_memory",
                     "status": row.evidence_grade,
                     "session": row.session,
                     "regime": row.regime,
@@ -834,6 +883,40 @@ class ForexStrategyRepository:
         )
         return {pair: contract for pair in pairs}
 
+    @staticmethod
+    def _policy_cells(db: Session, strategy_ids: set[str]) -> list[dict]:
+        if not strategy_ids:
+            return []
+        rows = db.scalars(
+            select(ForexPolicyState)
+            .where(ForexPolicyState.strategy_id.in_(strategy_ids))
+            .order_by(desc(ForexPolicyState.sample_size), desc(ForexPolicyState.updated_at))
+            .limit(48)
+        ).all()
+        return [
+            {
+                "memory_id": row.id,
+                "source": "reinforcement_policy",
+                "status": row.evidence_grade,
+                "session": row.session,
+                "regime": row.regime,
+                "setup_family": row.setup_family,
+                "direction": row.direction,
+                "sample_size": row.sample_size,
+                "net_expectancy_r": row.q_value,
+                "benchmark_excess": None,
+                "confidence_adjustment": (
+                    row.confidence_adjustment
+                    if row.evidence_grade == "POLICY_ELIGIBLE"
+                    else 0.0
+                ),
+                "explanation": (
+                    "Contextual paper reward policy; applied only after its confidence interval excludes zero."
+                ),
+            }
+            for row in rows
+        ]
+
 
 class BlumForexTradingScheduler:
     """Persistent, non-overlapping command runner for the bounded Forex core."""
@@ -848,6 +931,7 @@ class BlumForexTradingScheduler:
 
     def run_once(self, db: Session, *, now: datetime | None = None, inputs=None, strategies=None, cycle_key: str | None = None) -> dict:
         now = now or datetime.utcnow()
+        FinancialModelCouncil().ensure_registered(db)
         state = self._state(db)
         if state.lock_expires_at and state.lock_expires_at > now and state.current_cycle_key != cycle_key:
             return {"status": "THROTTLED", "blockers": ["CYCLE_ALREADY_RUNNING"], "next_action": "Wait for the bounded cycle lock to expire."}
@@ -869,6 +953,7 @@ class BlumForexTradingScheduler:
         state.scheduler_status = "RUNNING"
         db.commit()
         try:
+            reinforcement_replay = self.core.manager.reinforcement.replay_pending(db, limit=50)
             data_blockers = []
             if inputs is None:
                 refresh_result = self.refresh.refresh(db, now=now)
@@ -921,6 +1006,7 @@ class BlumForexTradingScheduler:
             if now.weekday() >= 5:
                 state.scheduler_status = "MARKET_CLOSED"
             result["market_refresh"] = refresh_result
+            result["reinforcement_replay"] = reinforcement_replay
             db.commit()
             ForexTraderSnapshotService().publish(db, now=now)
             return result

@@ -194,6 +194,7 @@ from app.services.financial_brain_learning import (
 )
 from app.services.financial_chat import asset_context as chat_asset_context
 from app.services.financial_chat import chat_context_overview, chat_history, financial_chat_response
+from app.services.financial_model_council import FinancialModelCouncil
 from app.services.hybrid_chart_intelligence import HybridChartIntelligence
 from app.services.huggingface_datasets import dataset_catalog_status, refresh_huggingface_dataset_catalog
 from app.services.ipo import ipo_radar, sec_company_submissions, update_ipo_radar
@@ -2558,6 +2559,7 @@ def ai_model_status(db: Session = Depends(get_db)):
         },
         "financial_brain": FinancialBrainModel().status(),
         "chart_vision": ChartVisionEngine().status(),
+        "financial_model_council": FinancialModelCouncil().status(db),
         "observed_models": {
             "sentiment": [{"model_name": model, "records": int(count)} for model, count in sentiment_models],
             "embeddings": [{"model_name": model, "records": int(count)} for model, count in embedding_models],

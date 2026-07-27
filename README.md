@@ -2056,6 +2056,42 @@ samples. Replay remains timestamp-bound, and experimental paper strategies
 retain reduced risk. Dataset validation and large backfills are background or
 manual operations; no GET route downloads data or starts training.
 
+### Forex reinforcement policy and financial model council
+
+Completed Forex paper episodes update an auditable contextual-bandit policy
+identified by strategy, session, regime, setup family and direction. Its reward
+uses realized net R after execution costs plus a bounded benchmark-relative
+component. Stored terminal evidence is replayed incrementally in the background,
+so previously persisted outcomes can become operational memory without running
+new simulations during a request.
+
+Every policy update stores the previous value, reward, learning rate, resulting
+value, evidence identifier and policy version. A context needs at least 30
+outcomes and a 95% confidence interval that excludes zero before it may adjust a
+future decision. Adjustments are capped at eight percentage points and cannot
+bypass data, cost, event, risk or readiness vetoes. This is contextual
+reinforcement learning over completed paper episodes, not a claim that a generic
+deep-RL agent has learned a profitable market policy.
+
+The Financial Model Council provides explicit, resource-aware integration
+boundaries:
+
+- **FinBERT** remains the local financial-sentiment classifier, with its labeled
+  VADER fallback when model loading is unavailable.
+- **FinGPT** is registered as an optional financial-language adapter. Its 13B
+  LoRA is not loaded on the CPU request path.
+- **FinRobot** supplies a local structured multi-agent evidence and risk review.
+- **FinLlama** is registered as a GPU/remote-only reasoning advisor because the
+  selected model is 33B.
+- **InvestLM** remains remote-optional and disabled until a reviewed model
+  endpoint and license are configured.
+
+Advisor votes are immutable decision evidence. They have no direct trading
+authority, are evaluated against the later reward and cannot open or close a
+position. `GET /api/ai/models/status` exposes the registered execution mode,
+runtime status, license status, resource profile and vote count without loading
+a model or changing state.
+
 ### Unified paper-trading evidence
 
 The Paper Trading product surface reads one background-produced

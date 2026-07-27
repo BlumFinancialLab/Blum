@@ -151,10 +151,11 @@ class BlumForexScalpingExpertAgent:
             session=market.session,
             regime=context.regime,
             setup_family=price_action.setup_family,
+            direction=price_action.direction.value,
         )
         memory_adjustment = (
             max(-0.08, min(0.08, float(knowledge_context.get("confidence_adjustment") or 0.0)))
-            if knowledge_context.get("status") == "CONTEXT_ELIGIBLE"
+            if knowledge_context.get("status") in {"CONTEXT_ELIGIBLE", "POLICY_ELIGIBLE"}
             and int(knowledge_context.get("sample_size") or 0) >= 30
             else 0.0
         )
@@ -246,7 +247,14 @@ def serialize_agent_outputs(**outputs) -> dict:
     return {key: asdict(value) for key, value in outputs.items()}
 
 
-def _matching_contextual_memory(memory: dict, *, session: str, regime: str, setup_family: str) -> dict:
+def _matching_contextual_memory(
+    memory: dict,
+    *,
+    session: str,
+    regime: str,
+    setup_family: str,
+    direction: str | None = None,
+) -> dict:
     cells = memory.get("cells") if isinstance(memory, dict) else None
     if not isinstance(cells, list):
         return {"status": "NO_CONTEXT", "confidence_adjustment": 0.0}
@@ -259,6 +267,7 @@ def _matching_contextual_memory(memory: dict, *, session: str, regime: str, setu
             stored_session in {session, "UNKNOWN"}
             and str(cell.get("regime")) == regime
             and stored_setup == _normalized_setup_family(setup_family)
+            and (not cell.get("direction") or direction is None or str(cell.get("direction")) == direction)
         ):
             return dict(cell)
     return {"status": "NO_MATCHING_CONTEXT", "confidence_adjustment": 0.0}

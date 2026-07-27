@@ -7,7 +7,17 @@ from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import sessionmaker
 
 from app.core.database import Base
-from app.models import Asset, ForexDecision, ForexLearningEvidence, ForexPosition, ForexTraderCycle, ReplayMarketBar
+from app.models import (
+    Asset,
+    FinancialModelVote,
+    ForexDecision,
+    ForexLearningEvidence,
+    ForexPolicyState,
+    ForexPolicyUpdate,
+    ForexPosition,
+    ForexTraderCycle,
+    ReplayMarketBar,
+)
 from app.services.forex_agents import (
     BlumForexContrarianRiskAgent,
     BlumForexMacroAgent,
@@ -118,7 +128,6 @@ def test_empty_registry_bootstraps_non_certified_paper_exploration(db):
     assert exploratory.sample_size == 0
     assert exploratory.evidence_lane == "exploration_paper"
     assert exploratory.certified_for_copy_readiness is False
-
     outcome = BlumForexTraderCore().evaluate_input(market_input(), strategy=exploratory)
     assert outcome.approved is True
     assert outcome.proposal.direction == ForexDirection.LONG
@@ -136,6 +145,33 @@ def test_empty_registry_bootstraps_non_certified_paper_exploration(db):
     assert position is not None
     assert position.contract_json["evidence_lane"] == "exploration_paper"
     assert position.contract_json["certified_for_copy_readiness"] is False
+
+
+def test_empty_registry_bootstrap_loads_eligible_reinforcement_policy(db):
+    db.add(
+        ForexPolicyState(
+            policy_key="forex-exploration-bootstrap-v1|LONDON|trend_up|momentum_breakout|LONG",
+            strategy_id="forex-exploration-bootstrap-v1",
+            session="LONDON",
+            regime="trend_up",
+            setup_family="momentum_breakout",
+            direction="LONG",
+            sample_size=40,
+            q_value=0.35,
+            reward_sum=14.0,
+            reward_sq_sum=8.0,
+            evidence_grade="POLICY_ELIGIBLE",
+            confidence_adjustment=0.041,
+        )
+    )
+    db.commit()
+
+    strategy_contract = ForexStrategyRepository().load(db, ["EURUSD=X"])["EURUSD=X"]
+
+    policy_cells = strategy_contract.contextual_memory["cells"]
+    assert len(policy_cells) == 1
+    assert policy_cells[0]["source"] == "reinforcement_policy"
+    assert policy_cells[0]["confidence_adjustment"] == pytest.approx(0.041)
 
 
 def strategy_with_memory(*, grade: str, adjustment: float) -> ForexStrategyEvidence:
@@ -562,6 +598,10 @@ def test_complete_trade_lifecycle_persists_net_outcome(direction, db):
     core = BlumForexTraderCore()
     opened = core.run_cycle(db, inputs=[market_input(direction=direction)], strategies={"EURUSD=X": strategy()}, now=NOW, cycle_key=f"life-{direction}")
     assert opened["trades_opened"] == 1
+    vote = db.scalar(select(FinancialModelVote))
+    assert vote is not None
+    assert vote.advisor_key == "finrobot"
+    assert vote.direct_action_allowed is False
     position = db.scalar(select(ForexPosition))
     spread = 0.00008
     if direction == "LONG":
@@ -575,7 +615,15 @@ def test_complete_trade_lifecycle_persists_net_outcome(direction, db):
     assert position.net_pnl < position.gross_pnl
     assert position.contract_json["valuation"]["unrealized_net_pnl"] is not None
     assert position.contract_json["valuation"]["current_r"] is not None
-    assert db.scalar(select(ForexLearningEvidence).where(ForexLearningEvidence.position_id == position.id)).outcome == "WIN"
+    evidence = db.scalar(select(ForexLearningEvidence).where(ForexLearningEvidence.position_id == position.id))
+    assert evidence.outcome == "WIN"
+    policy = db.scalar(select(ForexPolicyState))
+    assert policy is not None
+    assert policy.sample_size == 1
+    assert db.query(ForexPolicyUpdate).count() == 1
+    db.refresh(vote)
+    assert vote.outcome_evaluated is True
+    assert vote.reward_contribution == pytest.approx(evidence.payload_json["reinforcement_reward_r"])
 
 
 def test_api_contract_and_scheduler_controls_are_persistent(db):

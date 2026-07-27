@@ -4278,6 +4278,101 @@ class ForexStrategyReadiness(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
 
 
+class ForexPolicyState(Base):
+    __tablename__ = "forex_policy_states"
+    __table_args__ = (
+        UniqueConstraint("policy_key", name="uq_forex_policy_state_key"),
+        Index("ix_forex_policy_context", "strategy_id", "session", "regime", "setup_family", "direction"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    policy_key: Mapped[str] = mapped_column(String(240), unique=True, index=True)
+    strategy_id: Mapped[str] = mapped_column(String(120), index=True)
+    session: Mapped[str] = mapped_column(String(60), index=True)
+    regime: Mapped[str] = mapped_column(String(60), index=True)
+    setup_family: Mapped[str] = mapped_column(String(80), index=True)
+    direction: Mapped[str] = mapped_column(String(16), index=True)
+    sample_size: Mapped[int] = mapped_column(Integer, default=0)
+    q_value: Mapped[float] = mapped_column(Float, default=0.0)
+    reward_sum: Mapped[float] = mapped_column(Float, default=0.0)
+    reward_sq_sum: Mapped[float] = mapped_column(Float, default=0.0)
+    win_count: Mapped[int] = mapped_column(Integer, default=0)
+    loss_count: Mapped[int] = mapped_column(Integer, default=0)
+    evidence_grade: Mapped[str] = mapped_column(String(40), default="LEARNING_ONLY", index=True)
+    confidence_adjustment: Mapped[float] = mapped_column(Float, default=0.0)
+    last_evidence_id: Mapped[int | None] = mapped_column(ForeignKey("forex_learning_evidence.id", ondelete="SET NULL"), index=True)
+    policy_version: Mapped[str] = mapped_column(String(80), default="forex-contextual-bandit-v1")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
+class ForexPolicyUpdate(Base):
+    __tablename__ = "forex_policy_updates"
+    __table_args__ = (UniqueConstraint("evidence_id", name="uq_forex_policy_update_evidence"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    policy_state_id: Mapped[int] = mapped_column(ForeignKey("forex_policy_states.id", ondelete="CASCADE"), index=True)
+    evidence_id: Mapped[int] = mapped_column(ForeignKey("forex_learning_evidence.id", ondelete="CASCADE"), unique=True, index=True)
+    previous_q: Mapped[float] = mapped_column(Float)
+    reward: Mapped[float] = mapped_column(Float)
+    new_q: Mapped[float] = mapped_column(Float)
+    learning_rate: Mapped[float] = mapped_column(Float)
+    sample_size_after: Mapped[int] = mapped_column(Integer)
+    policy_version: Mapped[str] = mapped_column(String(80), default="forex-contextual-bandit-v1")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class FinancialModelAdvisor(Base):
+    __tablename__ = "financial_model_advisors"
+    __table_args__ = (UniqueConstraint("advisor_key", name="uq_financial_model_advisor_key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    advisor_key: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    display_name: Mapped[str] = mapped_column(String(160))
+    provider_type: Mapped[str] = mapped_column(String(60), index=True)
+    model_id: Mapped[str | None] = mapped_column(String(240))
+    source_url: Mapped[str] = mapped_column(Text)
+    role: Mapped[str] = mapped_column(String(120), index=True)
+    execution_mode: Mapped[str] = mapped_column(String(60), index=True)
+    runtime_status: Mapped[str] = mapped_column(String(60), index=True)
+    license: Mapped[str] = mapped_column(String(80), default="review_required")
+    resource_profile: Mapped[dict] = mapped_column(JsonType, default=dict)
+    capabilities: Mapped[list] = mapped_column(JsonType, default=list)
+    direct_trading_authority: Mapped[bool] = mapped_column(Boolean, default=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    last_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
+class FinancialModelVote(Base):
+    __tablename__ = "financial_model_votes"
+    __table_args__ = (
+        UniqueConstraint("advisor_key", "object_type", "object_id", "task", "evidence_hash", name="uq_financial_model_vote_evidence"),
+        Index("ix_financial_model_vote_object", "object_type", "object_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    advisor_key: Mapped[str] = mapped_column(String(80), index=True)
+    object_type: Mapped[str] = mapped_column(String(80), index=True)
+    object_id: Mapped[str] = mapped_column(String(120), index=True)
+    ticker: Mapped[str | None] = mapped_column(String(32), index=True)
+    task: Mapped[str] = mapped_column(String(80), index=True)
+    vote: Mapped[str] = mapped_column(String(40), index=True)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    evidence_quality: Mapped[float] = mapped_column(Float, default=0.0)
+    evidence_hash: Mapped[str] = mapped_column(String(64), index=True)
+    output_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    latency_ms: Mapped[float] = mapped_column(Float, default=0.0)
+    runtime_status: Mapped[str] = mapped_column(String(60), index=True)
+    direct_action_allowed: Mapped[bool] = mapped_column(Boolean, default=False)
+    outcome_evaluated: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    reward_contribution: Mapped[float | None] = mapped_column(Float)
+    was_helpful: Mapped[bool | None] = mapped_column(Boolean, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    evaluated_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
 class ForexTraderRuntimeState(Base):
     __tablename__ = "forex_trader_runtime_state"
 
