@@ -100,10 +100,10 @@ class TradingMLFeatureBuilder:
             sources=(proposal, risk, snapshot),
             categorical={
                 "market_family": "forex",
-                "setup_type": _string(evidence.setup_family or proposal.get("setup_family"), "unknown"),
-                "regime": _string(evidence.regime or _first((snapshot,), "regime"), "unknown"),
-                "session": _string(evidence.session or snapshot.get("session"), "unknown"),
-                "direction": _string(evidence.direction or decision.direction, "neutral"),
+                "setup_type": _string(_first((proposal, risk, snapshot), "setup_family", "setup_type"), "unknown"),
+                "regime": _string(_first((proposal, risk, snapshot), "regime"), "unknown"),
+                "session": _string(_first((proposal, risk, snapshot), "session"), "unknown"),
+                "direction": _string(decision.direction, "neutral"),
                 "timeframe": _string(_first((proposal, snapshot), "timeframe"), "unknown"),
                 "sector_or_currency_family": _currency_family(decision.pair),
             },
@@ -363,7 +363,9 @@ def _equity_realized_net_r(
     risk_percent = abs((invalidation - initial_price) / initial_price) * 100.0
     if risk_percent == 0:
         raise UnlabeledFeatureDataError("equity outcome has zero frozen entry risk")
-    modeled_cost_r = _number(_first((metrics,), "modeled_cost_r", "cost_r", "total_cost_r")) or 0.0
+    modeled_cost_r = _number(_first((metrics,), "modeled_cost_r", "cost_r", "total_cost_r"))
+    if modeled_cost_r is None:
+        raise UnlabeledFeatureDataError("equity outcome has no explicit modeled cost")
     return directional_return / risk_percent - modeled_cost_r
 
 

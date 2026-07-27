@@ -49,7 +49,11 @@ def equity_outcome(
     prediction_id: int = 101,
     evaluation_date: datetime | None = None,
     metrics_payload: dict | None = None,
+    include_modeled_cost: bool = True,
 ) -> PredictionOutcome:
+    payload = {"benchmark_excess": 0.8, **(metrics_payload or {})}
+    if include_modeled_cost:
+        payload.setdefault("modeled_cost_r", 0.0)
     return PredictionOutcome(
         id=201,
         prediction_id=prediction_id,
@@ -58,7 +62,7 @@ def equity_outcome(
         horizon_days=1,
         evaluation_date=(evaluation_date or (DECISION_AT + timedelta(days=1))).date(),
         realized_return=realized_return,
-        metrics_payload={"benchmark_excess": 0.8, **(metrics_payload or {})},
+        metrics_payload=payload,
     )
 
 
@@ -78,6 +82,7 @@ def forex_decision_with_frame_timestamp(*, market_timestamp: datetime, decision_
             "confidence": 74.0,
         },
         input_snapshot={
+            "session": "LONDON",
             "market": {
                 "timestamp": market_timestamp.isoformat(),
                 "trend_score": 0.4,
@@ -129,6 +134,14 @@ def test_equity_feature_builder_signs_bearish_return_and_subtracts_modeled_cost(
 
     assert example.realized_net_r == 3.75
     assert example.label_positive_r == 1
+
+
+def test_equity_feature_builder_excludes_raw_returns_without_explicit_modeled_cost():
+    with pytest.raises(ValueError):
+        TradingMLFeatureBuilder().from_equity(
+            equity_prediction(),
+            equity_outcome(realized_return=4.0, include_modeled_cost=False),
+        )
 
 
 def test_equity_feature_builder_rejects_unlinked_or_predecision_outcomes():
@@ -204,6 +217,22 @@ def test_forex_feature_builder_sanitizes_post_outcome_evidence_payload():
 
     assert example.features["narrative_score"] is None
     assert example.outcome_timestamp == datetime(2026, 1, 2, 11, 0)
+
+
+def test_forex_feature_builder_ignores_terminal_evidence_categoricals():
+    decision = forex_decision_with_frame_timestamp(market_timestamp=DECISION_AT, decision_timestamp=DECISION_AT)
+    evidence = forex_evidence()
+    evidence.setup_family = "post_outcome_setup"
+    evidence.regime = "post_outcome_regime"
+    evidence.session = "POST_OUTCOME_SESSION"
+    evidence.direction = "SHORT"
+
+    example = TradingMLFeatureBuilder().from_forex(decision, evidence)
+
+    assert example.setup_type == "momentum_breakout"
+    assert example.regime == "unknown"
+    assert example.features["session"] == "LONDON"
+    assert example.features["direction"] == "LONG"
 
 
 def test_forex_feature_builder_normalizes_decision_time_units():
