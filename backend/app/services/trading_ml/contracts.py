@@ -4,7 +4,8 @@ from dataclasses import dataclass
 from datetime import datetime
 import hashlib
 import json
-from typing import Literal
+from types import MappingProxyType
+from typing import Literal, Mapping
 
 
 @dataclass(frozen=True)
@@ -18,11 +19,14 @@ class TradingMLExample:
     asset_key: str
     setup_type: str
     regime: str
-    features: dict[str, float | str | None]
+    features: Mapping[str, float | str | None]
     realized_net_r: float
     label_positive_r: int
     benchmark_excess: float | None
     sample_weight: float
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "features", MappingProxyType(dict(self.features)))
 
 
 @dataclass(frozen=True)

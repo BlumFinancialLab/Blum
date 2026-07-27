@@ -28,20 +28,22 @@ class UnlabeledFeatureDataError(ValueError):
     """Raised when a source does not contain a realized supervised target."""
 
 
+class IneligibleFeatureDataError(ValueError):
+    """Raised when stored source records cannot form a coherent example."""
+
+
 class TradingMLFeatureBuilder:
     """Builds point-in-time labeled examples without reading mutable state."""
 
     def from_equity(self, prediction: HistoricalPrediction, outcome: PredictionOutcome) -> TradingMLExample:
-        realized = _number(_first((outcome.metrics_payload or {},), "realized_net_r"))
-        if realized is None:
-            realized = _number(outcome.realized_return)
-        if realized is None:
-            raise UnlabeledFeatureDataError("equity outcome has no realized return")
-
         context = _without_future_data(_mapping(prediction.point_in_time_context))
         payload = _mapping(prediction.prediction_payload)
         decision_timestamp = _decision_timestamp(prediction.created_at, prediction.analysis_date)
         outcome_timestamp = _outcome_timestamp(outcome.evaluation_date, outcome.created_at)
+        _require_link(prediction.id, outcome.prediction_id, "prediction outcome")
+        _require_match(prediction.ticker, outcome.ticker, "equity ticker")
+        _require_chronology(decision_timestamp, outcome_timestamp)
+        realized = _equity_realized_net_r(prediction, outcome, payload)
         market_context = _mapping(context.get("market_context"))
         features = _features(
             sources=(payload, context, market_context),
@@ -79,20 +81,27 @@ class TradingMLFeatureBuilder:
 
     def from_forex(self, decision: ForexDecision, evidence: ForexLearningEvidence) -> TradingMLExample:
         snapshot = _mapping(decision.input_snapshot)
-        _reject_future_timestamps(snapshot, decision.decision_timestamp)
+        proposal = _mapping(decision.proposal_json)
+        risk = _mapping(decision.risk_json)
+        _reject_future_timestamps(proposal, decision.decision_timestamp, "proposal_json")
+        _reject_future_timestamps(risk, decision.decision_timestamp, "risk_json")
+        _reject_future_timestamps(snapshot, decision.decision_timestamp, "input_snapshot")
         realized = _number(evidence.realized_result)
         if realized is None:
             raise UnlabeledFeatureDataError("Forex evidence has no realized result")
 
-        proposal = _mapping(decision.proposal_json)
-        risk = _mapping(decision.risk_json)
         payload = _mapping(evidence.payload_json)
+        outcome_timestamp = _outcome_timestamp(payload.get("evaluated_at"), evidence.created_at)
+        _require_link(decision.id, evidence.decision_id, "Forex evidence")
+        _require_match(decision.pair, evidence.pair, "Forex pair")
+        _require_match(decision.strategy_id, evidence.strategy_id, "Forex strategy")
+        _require_chronology(decision.decision_timestamp, outcome_timestamp)
         features = _features(
-            sources=(proposal, risk, snapshot, payload),
+            sources=(proposal, risk, snapshot),
             categorical={
                 "market_family": "forex",
                 "setup_type": _string(evidence.setup_family or proposal.get("setup_family"), "unknown"),
-                "regime": _string(evidence.regime or _first((snapshot, payload), "regime"), "unknown"),
+                "regime": _string(evidence.regime or _first((snapshot,), "regime"), "unknown"),
                 "session": _string(evidence.session or snapshot.get("session"), "unknown"),
                 "direction": _string(evidence.direction or decision.direction, "neutral"),
                 "timeframe": _string(_first((proposal, snapshot), "timeframe"), "unknown"),
@@ -100,13 +109,15 @@ class TradingMLFeatureBuilder:
             },
             defaults={"confidence": proposal.get("confidence")},
         )
+        features["expected_gross_r"] = _number(_first((proposal, risk, snapshot), "expected_gross_r"))
+        features["expected_net_r"] = _number(_first((proposal, risk, snapshot), "expected_net_r", "expected_r"))
         return TradingMLExample(
             source_object_type="forex_decision",
             source_object_id=str(decision.id),
             market_family="forex",
             evidence_lane=evidence.evidence_type,
             decision_timestamp=decision.decision_timestamp,
-            outcome_timestamp=_outcome_timestamp(payload.get("evaluated_at"), evidence.created_at),
+            outcome_timestamp=outcome_timestamp,
             asset_key=decision.pair,
             setup_type=str(features["setup_type"]),
             regime=str(features["regime"]),
@@ -121,6 +132,7 @@ class TradingMLFeatureBuilder:
         realized = _number(trade.r_multiple)
         if realized is None or trade.exit_timestamp is None:
             raise UnlabeledFeatureDataError("replay trade has no closed realized R")
+        _require_chronology(trade.decision_timestamp, trade.exit_timestamp)
 
         decision = _mapping(trade.decision_payload)
         execution = _mapping(trade.execution_payload)
@@ -190,7 +202,7 @@ def _features(*, sources: tuple[Mapping[str, Any], ...], categorical: dict[str, 
         value = _first(sources, *keys)
         if value is None:
             value = defaults.get(name)
-        features[name] = _number(value)
+        features[name] = _confidence_percent(value) if name == "confidence" else _number(value)
     features.update({name: categorical.get(name, "unknown") for name in CATEGORICAL_FEATURES})
     return features
 
@@ -220,8 +232,8 @@ def _nested_value(value: Any, key: str) -> Any:
     return None
 
 
-def _reject_future_timestamps(snapshot: Mapping[str, Any], decision_timestamp: datetime) -> None:
-    for path, key, value in _walk(snapshot):
+def _reject_future_timestamps(snapshot: Mapping[str, Any], decision_timestamp: datetime, source_name: str) -> None:
+    for path, key, value in _walk(snapshot, source_name):
         if not _is_market_timestamp_key(key):
             continue
         timestamp = _parse_timestamp(value)
@@ -229,7 +241,7 @@ def _reject_future_timestamps(snapshot: Mapping[str, Any], decision_timestamp: d
             raise FutureFeatureDataError(f"future snapshot data at {path}")
 
 
-def _walk(value: Any, path: str = "input_snapshot"):
+def _walk(value: Any, path: str):
     if isinstance(value, Mapping):
         for key, nested in value.items():
             nested_path = f"{path}.{key}"
@@ -312,6 +324,62 @@ def _number(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _confidence_percent(value: Any) -> float | None:
+    confidence = _number(value)
+    if confidence is None:
+        return None
+    if 0.0 <= confidence <= 1.0:
+        confidence *= 100.0
+    return max(0.0, min(100.0, confidence))
+
+
+def _equity_realized_net_r(
+    prediction: HistoricalPrediction,
+    outcome: PredictionOutcome,
+    payload: Mapping[str, Any],
+) -> float:
+    metrics = _mapping(outcome.metrics_payload)
+    persisted = _number(_first((metrics,), "realized_net_r"))
+    if persisted is not None:
+        return persisted
+
+    realized_return = _number(outcome.realized_return)
+    if realized_return is None:
+        raise UnlabeledFeatureDataError("equity outcome has no realized return")
+    direction = str(prediction.expected_direction or "").lower()
+    if direction in {"bullish", "long", "buy"}:
+        directional_return = realized_return
+    elif direction in {"bearish", "short", "sell"}:
+        directional_return = -realized_return
+    else:
+        raise UnlabeledFeatureDataError("equity prediction has no actionable direction")
+
+    initial_price = _number(prediction.initial_price)
+    invalidation = _number(_first((payload,), "invalidation_level", "stop_price"))
+    if initial_price is None or initial_price <= 0 or invalidation is None:
+        raise UnlabeledFeatureDataError("equity outcome lacks frozen entry risk")
+    risk_percent = abs((invalidation - initial_price) / initial_price) * 100.0
+    if risk_percent == 0:
+        raise UnlabeledFeatureDataError("equity outcome has zero frozen entry risk")
+    modeled_cost_r = _number(_first((metrics,), "modeled_cost_r", "cost_r", "total_cost_r")) or 0.0
+    return directional_return / risk_percent - modeled_cost_r
+
+
+def _require_link(source_id: Any, related_id: Any, relation: str) -> None:
+    if source_id is None or related_id is None or source_id != related_id:
+        raise IneligibleFeatureDataError(f"{relation} linkage does not match")
+
+
+def _require_match(expected: Any, actual: Any, field: str) -> None:
+    if not expected or not actual or str(expected) != str(actual):
+        raise IneligibleFeatureDataError(f"{field} does not match")
+
+
+def _require_chronology(decision_timestamp: datetime, outcome_timestamp: datetime) -> None:
+    if _later_than(decision_timestamp, outcome_timestamp):
+        raise IneligibleFeatureDataError("outcome timestamp precedes decision timestamp")
 
 
 def _string(value: Any, default: str) -> str:

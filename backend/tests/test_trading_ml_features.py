@@ -19,13 +19,19 @@ def equity_prediction() -> HistoricalPrediction:
         market_regime="risk_on",
         volatility_regime="normal",
         analysis_date=DECISION_AT.date(),
-        initial_price=140.0,
+        initial_price=100.0,
         expected_direction="bullish",
         confidence=72.0,
         data_quality_score=91.0,
         prediction_payload={
             "prediction": {"aggregate_score": 0.7, "aggregate_confidence": 72.0},
-            "timeframes": {"1d": {"expected_r": 1.5, "expected_net_r": 1.2}},
+            "timeframes": {
+                "1d": {
+                    "expected_r": 1.5,
+                    "expected_net_r": 1.2,
+                    "invalidation_level": 99.0,
+                }
+            },
         },
         point_in_time_context={
             "market_timestamp": DECISION_AT.isoformat(),
@@ -37,16 +43,22 @@ def equity_prediction() -> HistoricalPrediction:
     )
 
 
-def equity_outcome(*, realized_return: float) -> PredictionOutcome:
+def equity_outcome(
+    *,
+    realized_return: float,
+    prediction_id: int = 101,
+    evaluation_date: datetime | None = None,
+    metrics_payload: dict | None = None,
+) -> PredictionOutcome:
     return PredictionOutcome(
         id=201,
-        prediction_id=101,
+        prediction_id=prediction_id,
         ticker="NVDA",
         timeframe="1d",
         horizon_days=1,
-        evaluation_date=(DECISION_AT + timedelta(days=1)).date(),
+        evaluation_date=(evaluation_date or (DECISION_AT + timedelta(days=1))).date(),
         realized_return=realized_return,
-        metrics_payload={"benchmark_excess": 0.8},
+        metrics_payload={"benchmark_excess": 0.8, **(metrics_payload or {})},
     )
 
 
@@ -108,6 +120,28 @@ def test_equity_feature_builder_uses_only_frozen_prediction_context():
     assert "future_prices" not in example.features
 
 
+def test_equity_feature_builder_signs_bearish_return_and_subtracts_modeled_cost():
+    prediction = equity_prediction()
+    prediction.expected_direction = "bearish"
+    outcome = equity_outcome(realized_return=-4.0, metrics_payload={"modeled_cost_r": 0.25})
+
+    example = TradingMLFeatureBuilder().from_equity(prediction, outcome)
+
+    assert example.realized_net_r == 3.75
+    assert example.label_positive_r == 1
+
+
+def test_equity_feature_builder_rejects_unlinked_or_predecision_outcomes():
+    with pytest.raises(ValueError):
+        TradingMLFeatureBuilder().from_equity(equity_prediction(), equity_outcome(realized_return=1.0, prediction_id=999))
+
+    with pytest.raises(ValueError):
+        TradingMLFeatureBuilder().from_equity(
+            equity_prediction(),
+            equity_outcome(realized_return=1.0, evaluation_date=DECISION_AT - timedelta(days=1)),
+        )
+
+
 def test_equity_feature_builder_does_not_read_nested_future_prices():
     prediction = equity_prediction()
     prediction.point_in_time_context["future_prices"] = [{"trend_score": 99.0}]
@@ -120,7 +154,10 @@ def test_equity_feature_builder_does_not_read_nested_future_prices():
 def test_feature_schema_is_stable_and_normalizes_missing_numeric_values():
     prediction = equity_prediction()
     prediction.prediction_payload = {}
-    example = TradingMLFeatureBuilder().from_equity(prediction, equity_outcome(realized_return=-1.0))
+    example = TradingMLFeatureBuilder().from_equity(
+        prediction,
+        equity_outcome(realized_return=-1.0, metrics_payload={"realized_net_r": -1.0}),
+    )
 
     assert FeatureSchema.current().version == "trading-ml-features-v1"
     assert example.features["trend_score"] is None
@@ -153,6 +190,71 @@ def test_forex_feature_builder_preserves_only_point_in_time_snapshot_data():
     assert example.features["session"] == "LONDON"
 
 
+def test_forex_feature_builder_sanitizes_post_outcome_evidence_payload():
+    decision = forex_decision_with_frame_timestamp(market_timestamp=DECISION_AT, decision_timestamp=DECISION_AT)
+    evidence = forex_evidence()
+    evidence.payload_json = {
+        "benchmark_excess": 0.2,
+        "evaluated_at": "2026-01-02T11:00:00",
+        "narrative_score": 99.0,
+        "market_timestamp": "2026-01-02T12:00:00",
+    }
+
+    example = TradingMLFeatureBuilder().from_forex(decision, evidence)
+
+    assert example.features["narrative_score"] is None
+    assert example.outcome_timestamp == datetime(2026, 1, 2, 11, 0)
+
+
+def test_forex_feature_builder_normalizes_decision_time_units():
+    decision = forex_decision_with_frame_timestamp(market_timestamp=DECISION_AT, decision_timestamp=DECISION_AT)
+    decision.proposal_json["confidence"] = 0.74
+    decision.proposal_json["expected_r"] = 1.4
+
+    example = TradingMLFeatureBuilder().from_forex(decision, forex_evidence())
+
+    assert example.features["confidence"] == 74.0
+    assert example.features["expected_net_r"] == 1.4
+    assert example.features["expected_gross_r"] is None
+
+
+def test_forex_feature_builder_rejects_future_decision_payload_and_unlinked_evidence():
+    decision = forex_decision_with_frame_timestamp(market_timestamp=DECISION_AT, decision_timestamp=DECISION_AT)
+    decision.proposal_json["market_timestamp"] = "2026-01-02T10:01:00"
+    with pytest.raises(FutureFeatureDataError):
+        TradingMLFeatureBuilder().from_forex(decision, forex_evidence())
+
+    decision.proposal_json.pop("market_timestamp")
+    evidence = forex_evidence()
+    evidence.decision_id = 999
+    with pytest.raises(ValueError):
+        TradingMLFeatureBuilder().from_forex(decision, evidence)
+
+
+def test_forex_feature_builder_rejects_mismatched_pair_and_predecision_evidence():
+    decision = forex_decision_with_frame_timestamp(market_timestamp=DECISION_AT, decision_timestamp=DECISION_AT)
+    evidence = forex_evidence()
+    evidence.pair = "GBPUSD=X"
+    with pytest.raises(ValueError):
+        TradingMLFeatureBuilder().from_forex(decision, evidence)
+
+    evidence = forex_evidence()
+    evidence.created_at = DECISION_AT - timedelta(minutes=1)
+    evidence.payload_json = {"benchmark_excess": 0.2}
+    with pytest.raises(ValueError):
+        TradingMLFeatureBuilder().from_forex(decision, evidence)
+
+
+def test_feature_example_prevents_nested_feature_mutation():
+    example = TradingMLFeatureBuilder().from_forex(
+        forex_decision_with_frame_timestamp(market_timestamp=DECISION_AT, decision_timestamp=DECISION_AT),
+        forex_evidence(),
+    )
+
+    with pytest.raises(TypeError):
+        example.features["confidence"] = 0.0
+
+
 def test_replay_feature_builder_uses_evidence_weight_and_closed_outcome():
     trade = HyperbolicReplayTrade(
         id=501,
@@ -178,3 +280,22 @@ def test_replay_feature_builder_uses_evidence_weight_and_closed_outcome():
     assert example.realized_net_r == 1.2
     assert example.sample_weight == 0.25
     assert example.label_positive_r == 1
+
+
+def test_replay_feature_builder_rejects_impossible_outcome_chronology():
+    trade = HyperbolicReplayTrade(
+        id=501,
+        ticker="EURUSD=X",
+        market="FOREX",
+        setup_type="momentum_breakout",
+        strategy_fingerprint="fx-breakout-v1",
+        timeframe="1m",
+        state="REPLAY_EVALUATED",
+        evidence_type="REPLAY_EVIDENCE",
+        decision_timestamp=DECISION_AT,
+        exit_timestamp=DECISION_AT - timedelta(minutes=5),
+        r_multiple=1.2,
+    )
+
+    with pytest.raises(ValueError):
+        TradingMLFeatureBuilder().from_replay(trade)
