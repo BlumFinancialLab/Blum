@@ -4,7 +4,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.core.database import Base
-from app.models import Asset, PriceHistory, RMultipleMetric
+from app.models import Asset, PriceHistory, RMultipleMetric, SniperScore
 from app.services.market_desks import DAXAgent, MarketDeskRegistry, NasdaqAgent
 from app.services.cross_market_orchestrator import BlumCrossMarketOpportunityOrchestrator, OrchestratorLimits
 from app.services.quant_edge import (
@@ -124,6 +124,35 @@ def test_nasdaq_agent_returns_market_specific_auditable_result():
     assert result["opportunities_found"] == 1
     assert result["best_opportunity"]["ticker"] == "NVDA"
     assert result["market_specific_factors"] == ["growth_tech", "momentum", "rate_sensitivity", "drawdown_risk"]
+
+
+def test_market_desk_prioritizes_latest_actionable_sniper_evidence_before_scan_limit():
+    evaluated: list[str] = []
+    with setup_db() as db:
+        assets = [add_asset(db, ticker) for ticker in ("AAPL", "AMD", "AMAT", "AMZN", "ASML", "NVDA")]
+        nvda = next(asset for asset in assets if asset.ticker == "NVDA")
+        db.add(
+            SniperScore(
+                asset_id=nvda.id,
+                ticker="NVDA",
+                setup_type="momentum_breakout",
+                sniper_score=84.0,
+                actionability="active_setup",
+                confidence=78.0,
+                data_quality_score=92.0,
+            )
+        )
+        db.commit()
+
+        def evaluate(_db, asset):
+            evaluated.append(asset.ticker)
+            return candidate(asset.ticker)
+
+        result = NasdaqAgent(candidate_evaluator=evaluate).scan(db, limit=5)
+
+    assert "NVDA" in evaluated
+    assert result["selection_policy"] == "latest_sniper_evidence_then_unscored_coverage"
+    assert result["eligible_universe_size"] == 6
 
 
 def test_unavailable_agent_remains_skipped_when_reused_after_discovery():

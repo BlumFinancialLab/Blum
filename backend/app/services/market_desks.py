@@ -4,10 +4,10 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Callable, Protocol
 
-from sqlalchemy import func, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
-from app.models import Asset, PriceHistory
+from app.models import Asset, PriceHistory, SniperScore
 
 
 CandidateEvaluator = Callable[[Session, Asset], dict]
@@ -109,9 +109,11 @@ class BaseMarketDeskAgent:
         if availability["status"] != "AVAILABLE":
             return self.skipped_result(availability["status"])
 
+        eligible_assets = prioritize_assets_for_scan(db, availability["eligible_assets"])
+        selected_assets = eligible_assets[: max(1, int(limit))]
         opportunities: list[dict] = []
         data_blocked: list[dict] = []
-        for asset in availability["eligible_assets"][: max(1, int(limit))]:
+        for asset in selected_assets:
             try:
                 candidate = normalize_candidate(self.candidate_evaluator(db, asset), asset, self.policy)
                 opportunities.append(candidate)
@@ -135,6 +137,8 @@ class BaseMarketDeskAgent:
             "benchmark": self.benchmark,
             "asset_class": self.policy.asset_class,
             "assets_scanned": len(opportunities) + len(data_blocked),
+            "eligible_universe_size": len(eligible_assets),
+            "selection_policy": "latest_sniper_evidence_then_unscored_coverage",
             "opportunities_found": len(opportunities),
             "trade_candidates": trade_candidates,
             "watchlist_candidates": watchlist_candidates,
@@ -367,6 +371,55 @@ def load_asset_availability(db: Session) -> list[tuple[Asset, date | None]]:
             .order_by(Asset.ticker)
         ).all()
     )
+
+
+def prioritize_assets_for_scan(db: Session, assets: list[Asset]) -> list[Asset]:
+    """Use existing intelligence before applying the bounded desk scan limit.
+
+    The previous alphabetical slice repeatedly starved later tickers. The
+    latest persisted Sniper assessment is only a scouting priority: every
+    selected asset is still recalculated and must pass the normal actionability,
+    Quant Edge and execution gates.
+    """
+
+    asset_ids = [asset.id for asset in assets if asset.id is not None]
+    if not asset_ids:
+        return list(assets)
+    latest_score_ids = (
+        select(func.max(SniperScore.id))
+        .where(SniperScore.asset_id.in_(asset_ids))
+        .group_by(SniperScore.asset_id)
+    )
+    rows = db.scalars(
+        select(SniperScore)
+        .where(SniperScore.id.in_(latest_score_ids))
+        .order_by(desc(SniperScore.id))
+    ).all()
+    latest_by_asset: dict[int, SniperScore] = {}
+    for row in rows:
+        if row.asset_id is not None and row.asset_id not in latest_by_asset:
+            latest_by_asset[row.asset_id] = row
+
+    action_rank = {
+        "active_setup": 0,
+        "actionable_if_confirmed": 1,
+        "wait_for_trigger": 2,
+        "watch": 3,
+        "avoid": 4,
+    }
+
+    def priority(asset: Asset) -> tuple:
+        score = latest_by_asset.get(asset.id)
+        if score is None:
+            return (5, 0.0, 0.0, asset.ticker)
+        return (
+            action_rank.get(str(score.actionability or "").lower(), 4),
+            -float(score.sniper_score or 0.0),
+            -float(score.confidence or 0.0),
+            asset.ticker,
+        )
+
+    return sorted(assets, key=priority)
 
 
 def evaluate_with_market_sniper(db: Session, asset: Asset) -> dict:
