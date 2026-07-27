@@ -28,6 +28,59 @@ The initial model family is:
 - deterministic BLUM rules as the incumbent champion and counterfactual
   baseline.
 
+## Data Plane and Library Decisions
+
+Use Polars lazy frames and partitioned Parquet as the training feature-store
+boundary.
+
+The database remains the source of truth. A bounded background projector reads
+new labeled database rows, produces immutable feature partitions, and stores a
+manifest containing row IDs, timestamps, feature schema hash, evidence lanes,
+and file hashes. Trainers scan only the required columns and date partitions.
+They do not hydrate the full SQLAlchemy object graph or load the full dataset
+into RAM.
+
+Polars is selected because lazy `scan_parquet` supports projection and predicate
+pushdown and can stream batches larger than memory. Parquet is selected over
+HDF5 because the training corpus is append-oriented, partitionable, portable,
+and readable without one shared mutable file.
+
+Dask is not added in this sprint. BLUM currently runs on one CPU node, where a
+second distributed scheduler would add orchestration and memory overhead
+without providing distributed hardware.
+
+TA-Lib is not added in this sprint. BLUM already computes technical evidence
+through tested deterministic services and the existing `ta` dependency. The ML
+feature store reuses persisted point-in-time indicators instead of creating a
+second indicator implementation with native build dependencies.
+
+Add Optuna only for bounded challenger research:
+
+- maximum 12 trials per market family;
+- maximum 90 seconds per study;
+- purged walk-forward score as the objective;
+- pruning of trials that cannot beat the deterministic baseline;
+- fixed seed and persisted study metadata;
+- no optimization during inference or HTTP requests.
+
+PyTorch remains installed but is not placed on the critical path. PyTorch
+Lightning, TensorFlow, Gymnasium, and Stable-Baselines3 are not added to the
+production runtime in this sprint.
+
+A future neural or deep-RL challenger must first pass these entry gates:
+
+- at least 5,000 independent labeled outcomes for the relevant market family;
+- a versioned Gymnasium environment matching BLUM execution costs and
+  lifecycle;
+- deterministic replay and environment checks;
+- separate train, validation, and paper-forward evaluation;
+- superiority over the supervised champion after costs;
+- no direct trading authority before the existing promotion gates pass.
+
+This keeps the architecture open to LSTM, GRU, Transformer, PPO, or recurrent
+policy challengers without pretending that GPU parallelism or a more complex
+algorithm creates evidence.
+
 ## Scope
 
 This sprint covers:
@@ -312,7 +365,10 @@ deserializes user-provided artifacts.
 
 - `TradingMLFeatureBuilder`: pure, point-in-time feature extraction.
 - `TradingMLDatasetRepository`: bounded labeled-row retrieval and cursoring.
+- `TradingMLFeatureStoreProjector`: incremental Polars/Parquet projection and
+  manifest integrity.
 - `SklearnTradingModelTrainer`: preprocessing, fitting, and artifact creation.
+- `BoundedOptunaChallengerSearch`: time- and trial-limited parameter search.
 - `PurgedWalkForwardEvaluator`: leakage-safe baseline comparison.
 - `TradingMLModelRegistry`: version lifecycle and artifact integrity.
 - `TradingMLInferenceService`: read-only bounded inference.
