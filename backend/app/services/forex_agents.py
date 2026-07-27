@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from math import sqrt
 
 from app.services.forex_contracts import (
     AgentMarketInput,
@@ -156,7 +157,6 @@ class BlumForexScalpingExpertAgent:
         memory_adjustment = (
             max(-0.08, min(0.08, float(knowledge_context.get("confidence_adjustment") or 0.0)))
             if knowledge_context.get("status") in {"CONTEXT_ELIGIBLE", "POLICY_ELIGIBLE"}
-            and int(knowledge_context.get("sample_size") or 0) >= 30
             else 0.0
         )
         decision_confidence = max(0.0, min(1.0, (
@@ -233,6 +233,11 @@ class BlumForexContrarianRiskAgent:
             objections.append("NO_NET_EDGE")
         if strategy.readiness not in {strategy.readiness.PAPER_TRADE_ELIGIBLE, strategy.readiness.ALPHA_SIGNAL_ELIGIBLE}:
             objections.append("STRATEGY_NOT_READY")
+        if (
+            proposal.knowledge_context.get("status") == "POLICY_ELIGIBLE"
+            and float(proposal.knowledge_context.get("confidence_adjustment") or 0.0) <= -0.03
+        ):
+            objections.append("POLICY_NEGATIVE_EDGE")
         unique = tuple(dict.fromkeys(objections))
         return RiskObjectionOutput(
             objections=unique,
@@ -258,19 +263,98 @@ def _matching_contextual_memory(
     cells = memory.get("cells") if isinstance(memory, dict) else None
     if not isinstance(cells, list):
         return {"status": "NO_CONTEXT", "confidence_adjustment": 0.0}
+    matching = []
     for cell in cells:
         if not isinstance(cell, dict):
             continue
         stored_session = str(cell.get("session") or "UNKNOWN")
+        stored_regime = str(cell.get("regime") or "UNKNOWN")
         stored_setup = _normalized_setup_family(str(cell.get("setup_family") or "UNKNOWN"))
+        stored_direction = str(cell.get("direction") or "ALL")
         if (
-            stored_session in {session, "UNKNOWN"}
-            and str(cell.get("regime")) == regime
-            and stored_setup == _normalized_setup_family(setup_family)
-            and (not cell.get("direction") or direction is None or str(cell.get("direction")) == direction)
+            stored_session in {session, "UNKNOWN", "ALL"}
+            and stored_regime in {regime, "UNKNOWN", "ALL"}
+            and stored_setup in {
+                _normalized_setup_family(setup_family),
+                "UNKNOWN",
+                "ALL",
+            }
+            and (
+                stored_direction in {"ALL", "UNKNOWN"}
+                or direction is None
+                or stored_direction == direction
+            )
         ):
-            return dict(cell)
-    return {"status": "NO_MATCHING_CONTEXT", "confidence_adjustment": 0.0}
+            adjustment = max(
+                -0.08,
+                min(0.08, float(cell.get("confidence_adjustment") or 0.0)),
+            )
+            sample_size = int(cell.get("sample_size") or 0)
+            status = str(cell.get("status") or "")
+            minimum = 12 if adjustment < 0 and status == "POLICY_ELIGIBLE" else 30
+            if (
+                status not in {"CONTEXT_ELIGIBLE", "POLICY_ELIGIBLE"}
+                or adjustment == 0.0
+                or sample_size < minimum
+            ):
+                continue
+            scope = str(cell.get("policy_scope") or "FULL_CONTEXT")
+            specificity = {
+                "STRATEGY": 1.0,
+                "SETUP": 2.0,
+                "REGIME_SETUP": 3.0,
+                "FULL_CONTEXT": 4.0,
+            }.get(scope, 4.0)
+            matching.append(
+                {
+                    **cell,
+                    "policy_scope": scope,
+                    "confidence_adjustment": adjustment,
+                    "sample_size": sample_size,
+                    "resolution_weight": sqrt(sample_size) * specificity,
+                }
+            )
+    if not matching:
+        return {"status": "NO_MATCHING_CONTEXT", "confidence_adjustment": 0.0}
+
+    total_weight = sum(float(row["resolution_weight"]) for row in matching)
+    adjustment = sum(
+        float(row["confidence_adjustment"]) * float(row["resolution_weight"])
+        for row in matching
+    ) / max(total_weight, 1e-9)
+    adjustment = max(-0.08, min(0.08, adjustment))
+    causes: dict[str, int] = {}
+    for row in matching:
+        for cause, count in (row.get("failure_causes") or {}).items():
+            causes[str(cause)] = causes.get(str(cause), 0) + int(count or 0)
+    dominant_cause = max(causes, key=causes.get) if causes else None
+    policy_trace = [
+        {
+            "memory_id": row.get("memory_id"),
+            "policy_scope": row["policy_scope"],
+            "sample_size": row["sample_size"],
+            "q_value": row.get("q_value", row.get("net_expectancy_r")),
+            "confidence_adjustment": row["confidence_adjustment"],
+            "resolution_weight": round(float(row["resolution_weight"]), 6),
+            "failure_causes": row.get("failure_causes") or {},
+        }
+        for row in matching
+    ]
+    return {
+        "status": (
+            "POLICY_ELIGIBLE"
+            if any(row.get("source") == "reinforcement_policy" for row in matching)
+            else "CONTEXT_ELIGIBLE"
+        ),
+        "sample_size": max(row["sample_size"] for row in matching),
+        "confidence_adjustment": adjustment,
+        "hierarchical_policy_adjustment": adjustment,
+        "policy_trace": policy_trace,
+        "dominant_failure_cause": dominant_cause,
+        "explanation": (
+            "Eligible hierarchical policy memory resolved with specificity-weighted backoff."
+        ),
+    }
 
 
 def _normalized_setup_family(value: str) -> str:

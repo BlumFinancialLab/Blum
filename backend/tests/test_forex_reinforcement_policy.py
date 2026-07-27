@@ -46,11 +46,18 @@ def test_policy_update_is_idempotent_and_auditable():
     first = service.observe(db, row)
     second = service.observe(db, row)
 
-    state = db.scalar(select(ForexPolicyState))
+    states = db.scalars(select(ForexPolicyState)).all()
     assert first["status"] == "UPDATED"
     assert second["status"] == "ALREADY_APPLIED"
-    assert state.sample_size == 1
-    assert db.query(ForexPolicyUpdate).count() == 1
+    assert {row.policy_scope for row in db.scalars(select(ForexPolicyUpdate)).all()} == {
+        "STRATEGY",
+        "SETUP",
+        "REGIME_SETUP",
+        "FULL_CONTEXT",
+    }
+    assert len(states) == 4
+    assert all(state.sample_size == 1 for state in states)
+    assert db.query(ForexPolicyUpdate).count() == 4
 
 
 def test_policy_requires_samples_before_influencing_confidence():
@@ -59,7 +66,13 @@ def test_policy_requires_samples_before_influencing_confidence():
     for _ in range(29):
         service.observe(db, evidence(db, reward=0.8))
 
-    state = db.scalar(select(ForexPolicyState))
+    state = db.scalar(
+        select(ForexPolicyState).where(
+            ForexPolicyState.session == "ALL",
+            ForexPolicyState.regime == "ALL",
+            ForexPolicyState.setup_family == "ALL",
+        )
+    )
     assert state.sample_size == 29
     assert state.evidence_grade == "LEARNING_ONLY"
     assert state.confidence_adjustment == 0.0
@@ -95,5 +108,41 @@ def test_policy_replays_stored_evidence_incrementally_and_idempotently():
     assert first == {"status": "UPDATED", "processed": 2, "remaining_hint": True}
     assert second == {"status": "UPDATED", "processed": 1, "remaining_hint": False}
     assert third == {"status": "IDLE", "processed": 0, "remaining_hint": False}
-    assert db.query(ForexPolicyUpdate).count() == 3
-    assert db.scalar(select(ForexPolicyState)).sample_size == 3
+    assert db.query(ForexPolicyUpdate).count() == 12
+    assert {
+        row.sample_size for row in db.scalars(select(ForexPolicyState)).all()
+    } == {3}
+
+
+def test_negative_policy_can_protect_capital_before_positive_promotion_threshold():
+    db = make_db()
+    service = ForexReinforcementPolicyService()
+
+    for _ in range(12):
+        service.observe(db, evidence(db, reward=-1.0, outcome="LOSS"))
+
+    strategy_state = db.scalar(
+        select(ForexPolicyState).where(
+            ForexPolicyState.session == "ALL",
+            ForexPolicyState.regime == "ALL",
+            ForexPolicyState.setup_family == "ALL",
+        )
+    )
+    assert strategy_state.sample_size == 12
+    assert strategy_state.evidence_grade == "POLICY_ELIGIBLE"
+    assert -0.08 <= strategy_state.confidence_adjustment < 0
+    assert strategy_state.cause_counts_json == {"UNSPECIFIED": 12}
+
+
+def test_positive_policy_does_not_boost_confidence_from_twelve_samples():
+    db = make_db()
+    service = ForexReinforcementPolicyService()
+
+    for _ in range(12):
+        service.observe(db, evidence(db, reward=1.0, outcome="WIN"))
+
+    assert all(
+        state.evidence_grade == "LEARNING_ONLY"
+        and state.confidence_adjustment == 0.0
+        for state in db.scalars(select(ForexPolicyState)).all()
+    )

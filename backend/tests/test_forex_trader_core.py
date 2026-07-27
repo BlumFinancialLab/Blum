@@ -329,6 +329,97 @@ def test_contextual_memory_cannot_bypass_hard_veto() -> None:
     assert outcome.proposal.confidence_components["decision_confidence"] > 0.0
 
 
+def test_hierarchical_policy_backs_off_to_strategy_loss_memory() -> None:
+    base = strategy()
+    learned = ForexStrategyEvidence(
+        strategy_id=base.strategy_id,
+        readiness=base.readiness,
+        sample_size=base.sample_size,
+        net_expectancy_r=base.net_expectancy_r,
+        replay_forward_decay=base.replay_forward_decay,
+        currency_concentration=base.currency_concentration,
+        contextual_memory={
+            "cells": [
+                {
+                    "source": "reinforcement_policy",
+                    "policy_scope": "STRATEGY",
+                    "status": "POLICY_ELIGIBLE",
+                    "session": "ALL",
+                    "regime": "ALL",
+                    "setup_family": "ALL",
+                    "direction": "ALL",
+                    "sample_size": 12,
+                    "q_value": -1.0,
+                    "confidence_adjustment": -0.08,
+                    "failure_causes": {"STOP_HIT": 9, "TIME_STOP": 3},
+                }
+            ]
+        },
+    )
+
+    baseline = BlumForexTraderCore().evaluate_input(market_input(), strategy=base)
+    outcome = BlumForexTraderCore().evaluate_input(market_input(), strategy=learned)
+
+    assert outcome.proposal.confidence == pytest.approx(
+        baseline.proposal.confidence - 0.08
+    )
+    assert outcome.proposal.knowledge_context["policy_trace"][0]["policy_scope"] == "STRATEGY"
+    assert outcome.proposal.knowledge_context["dominant_failure_cause"] == "STOP_HIT"
+    assert "POLICY_NEGATIVE_EDGE" in outcome.blockers
+    assert outcome.approved is False
+
+
+def test_specialized_policy_dominates_broad_parent_only_when_eligible() -> None:
+    base = strategy()
+    learned = ForexStrategyEvidence(
+        strategy_id=base.strategy_id,
+        readiness=base.readiness,
+        sample_size=base.sample_size,
+        net_expectancy_r=base.net_expectancy_r,
+        replay_forward_decay=base.replay_forward_decay,
+        currency_concentration=base.currency_concentration,
+        contextual_memory={
+            "cells": [
+                {
+                    "source": "reinforcement_policy",
+                    "policy_scope": "STRATEGY",
+                    "status": "POLICY_ELIGIBLE",
+                    "session": "ALL",
+                    "regime": "ALL",
+                    "setup_family": "ALL",
+                    "direction": "ALL",
+                    "sample_size": 40,
+                    "q_value": -0.3,
+                    "confidence_adjustment": -0.04,
+                },
+                {
+                    "source": "reinforcement_policy",
+                    "policy_scope": "FULL_CONTEXT",
+                    "status": "POLICY_ELIGIBLE",
+                    "session": "LONDON",
+                    "regime": "trend",
+                    "setup_family": "momentum_breakout",
+                    "direction": "LONG",
+                    "sample_size": 30,
+                    "q_value": 0.5,
+                    "confidence_adjustment": 0.06,
+                },
+            ]
+        },
+    )
+
+    baseline = BlumForexTraderCore().evaluate_input(market_input(), strategy=base)
+    outcome = BlumForexTraderCore().evaluate_input(market_input(), strategy=learned)
+
+    assert outcome.proposal.confidence > baseline.proposal.confidence
+    assert outcome.proposal.knowledge_context["confidence_adjustment"] > 0
+    assert [row["policy_scope"] for row in outcome.proposal.knowledge_context["policy_trace"]] == [
+        "STRATEGY",
+        "FULL_CONTEXT",
+    ]
+    assert "POLICY_NEGATIVE_EDGE" not in outcome.blockers
+
+
 def test_strategy_confidence_is_sample_aware_without_changing_actionability_gate():
     inputs = market_input()
     mature = strategy()
@@ -620,7 +711,13 @@ def test_complete_trade_lifecycle_persists_net_outcome(direction, db):
     policy = db.scalar(select(ForexPolicyState))
     assert policy is not None
     assert policy.sample_size == 1
-    assert db.query(ForexPolicyUpdate).count() == 1
+    updates = db.scalars(select(ForexPolicyUpdate)).all()
+    assert {row.policy_scope for row in updates} == {
+        "STRATEGY",
+        "SETUP",
+        "REGIME_SETUP",
+        "FULL_CONTEXT",
+    }
     db.refresh(vote)
     assert vote.outcome_evaluated is True
     assert vote.reward_contribution == pytest.approx(evidence.payload_json["reinforcement_reward_r"])

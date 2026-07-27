@@ -897,14 +897,26 @@ class ForexStrategyRepository:
             {
                 "memory_id": row.id,
                 "source": "reinforcement_policy",
+                "policy_scope": (
+                    row.policy_key.split("|", 1)[0]
+                    if row.policy_key.split("|", 1)[0] in {
+                        "STRATEGY",
+                        "SETUP",
+                        "REGIME_SETUP",
+                        "FULL_CONTEXT",
+                    }
+                    else "FULL_CONTEXT"
+                ),
                 "status": row.evidence_grade,
                 "session": row.session,
                 "regime": row.regime,
                 "setup_family": row.setup_family,
                 "direction": row.direction,
                 "sample_size": row.sample_size,
+                "q_value": row.q_value,
                 "net_expectancy_r": row.q_value,
                 "benchmark_excess": None,
+                "failure_causes": row.cause_counts_json or {},
                 "confidence_adjustment": (
                     row.confidence_adjustment
                     if row.evidence_grade == "POLICY_ELIGIBLE"

@@ -4298,27 +4298,35 @@ class ForexPolicyState(Base):
     reward_sq_sum: Mapped[float] = mapped_column(Float, default=0.0)
     win_count: Mapped[int] = mapped_column(Integer, default=0)
     loss_count: Mapped[int] = mapped_column(Integer, default=0)
+    cause_counts_json: Mapped[dict] = mapped_column(JsonType, default=dict)
     evidence_grade: Mapped[str] = mapped_column(String(40), default="LEARNING_ONLY", index=True)
     confidence_adjustment: Mapped[float] = mapped_column(Float, default=0.0)
     last_evidence_id: Mapped[int | None] = mapped_column(ForeignKey("forex_learning_evidence.id", ondelete="SET NULL"), index=True)
-    policy_version: Mapped[str] = mapped_column(String(80), default="forex-contextual-bandit-v1")
+    policy_version: Mapped[str] = mapped_column(String(80), default="forex-hierarchical-contextual-bandit-v2")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
 
 
 class ForexPolicyUpdate(Base):
     __tablename__ = "forex_policy_updates"
-    __table_args__ = (UniqueConstraint("evidence_id", name="uq_forex_policy_update_evidence"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "evidence_id",
+            "policy_scope",
+            name="uq_forex_policy_update_evidence_scope",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     policy_state_id: Mapped[int] = mapped_column(ForeignKey("forex_policy_states.id", ondelete="CASCADE"), index=True)
-    evidence_id: Mapped[int] = mapped_column(ForeignKey("forex_learning_evidence.id", ondelete="CASCADE"), unique=True, index=True)
+    evidence_id: Mapped[int] = mapped_column(ForeignKey("forex_learning_evidence.id", ondelete="CASCADE"), index=True)
+    policy_scope: Mapped[str] = mapped_column(String(32), default="FULL_CONTEXT", index=True)
     previous_q: Mapped[float] = mapped_column(Float)
     reward: Mapped[float] = mapped_column(Float)
     new_q: Mapped[float] = mapped_column(Float)
     learning_rate: Mapped[float] = mapped_column(Float)
     sample_size_after: Mapped[int] = mapped_column(Integer)
-    policy_version: Mapped[str] = mapped_column(String(80), default="forex-contextual-bandit-v1")
+    policy_version: Mapped[str] = mapped_column(String(80), default="forex-hierarchical-contextual-bandit-v2")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
 

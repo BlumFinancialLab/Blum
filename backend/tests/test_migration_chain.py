@@ -79,7 +79,7 @@ def test_full_migration_chain_reaches_head_on_sqlite(tmp_path):
 
     assert required_tables.issubset(tables)
     with engine.connect() as connection:
-        assert connection.execute(text("select version_num from alembic_version")).scalar_one() == "0038_forex_rl_model_council"
+        assert connection.execute(text("select version_num from alembic_version")).scalar_one() == "0039_forex_hierarchical_rl"
 
     downgrade = subprocess.run(
         [sys.executable, "-m", "alembic", "downgrade", "base"],
