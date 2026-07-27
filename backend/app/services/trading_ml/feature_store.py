@@ -5,15 +5,16 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
-import fcntl
 import hashlib
 import json
 import os
 from pathlib import Path
 import threading
+import time
 from typing import Iterable, Literal, Protocol
 from uuid import uuid4
 
+from filelock import FileLock, Timeout as FileLockTimeout
 import polars as pl
 from sqlalchemy.orm import Session
 
@@ -24,8 +25,13 @@ from .dataset import DatasetSlice, TradingMLDatasetRepository
 MarketFamily = Literal["equity", "forex"]
 _MANIFEST_NAME = "manifest.json"
 _MANIFEST_LOCK_NAME = ".manifest.lock"
+_DEFAULT_MANIFEST_LOCK_TIMEOUT_SECONDS = 10.0
 _THREAD_LOCKS: dict[str, threading.RLock] = {}
 _THREAD_LOCKS_GUARD = threading.Lock()
+
+
+class FeatureStoreLockTimeout(RuntimeError):
+    """Raised before publication when the manifest commit lock is unavailable."""
 
 
 class DatasetReader(Protocol):
@@ -60,13 +66,17 @@ class TradingMLFeatureStoreProjector:
         repository: DatasetReader | None = None,
         max_rows_per_projection: int = 5_000,
         max_partition_rows: int = 1_000,
+        manifest_lock_timeout_seconds: float = _DEFAULT_MANIFEST_LOCK_TIMEOUT_SECONDS,
     ) -> None:
         if max_rows_per_projection <= 0 or max_partition_rows <= 0:
             raise ValueError("projection and partition limits must be positive")
+        if manifest_lock_timeout_seconds <= 0:
+            raise ValueError("manifest lock timeout must be positive")
         self.root = Path(root)
         self._repository = repository or TradingMLDatasetRepository()
         self._max_rows_per_projection = max_rows_per_projection
         self._max_partition_rows = max_partition_rows
+        self._manifest_lock_timeout_seconds = manifest_lock_timeout_seconds
 
     def project(
         self,
@@ -87,10 +97,13 @@ class TradingMLFeatureStoreProjector:
             limit=row_limit,
         )
         unique_examples, rejected_duplicates = _deduplicate_examples(dataset_slice.examples)
-        partitions = self._write_partitions(unique_examples, market_family)
 
-        with _manifest_update_lock(self.root):
+        with _manifest_update_lock(
+            self.root,
+            timeout_seconds=self._manifest_lock_timeout_seconds,
+        ):
             manifest = self._load_manifest()
+            partitions = self._write_partitions(unique_examples, market_family)
             committed_partitions = _merge_partitions(manifest["partitions"], partitions)
             if dataset_slice.next_cursor is not None:
                 current_cursor = self._cursor_for(manifest, market_family)
@@ -229,18 +242,32 @@ class TradingMLFeatureStoreProjector:
 
 
 @contextmanager
-def _manifest_update_lock(root: Path):
+def _manifest_update_lock(root: Path, *, timeout_seconds: float):
     root.mkdir(parents=True, exist_ok=True)
     root_key = str(root.resolve())
     with _THREAD_LOCKS_GUARD:
         thread_lock = _THREAD_LOCKS.setdefault(root_key, threading.RLock())
-    with thread_lock:
-        with (root / _MANIFEST_LOCK_NAME).open("a+b") as lock_file:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-            try:
+    deadline = time.monotonic() + timeout_seconds
+    if not thread_lock.acquire(timeout=timeout_seconds):
+        raise FeatureStoreLockTimeout(
+            f"Timed out after {timeout_seconds:.3f}s waiting for the feature-store manifest lock"
+        )
+    try:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise FeatureStoreLockTimeout(
+                f"Timed out after {timeout_seconds:.3f}s waiting for the feature-store manifest lock"
+            )
+        process_lock = FileLock(str(root / _MANIFEST_LOCK_NAME))
+        try:
+            with process_lock.acquire(timeout=remaining):
                 yield
-            finally:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        except FileLockTimeout as error:
+            raise FeatureStoreLockTimeout(
+                f"Timed out after {timeout_seconds:.3f}s waiting for the feature-store manifest lock"
+            ) from error
+    finally:
+        thread_lock.release()
 
 
 def _merge_partitions(current: list[dict], incoming: list[dict]) -> list[dict]:

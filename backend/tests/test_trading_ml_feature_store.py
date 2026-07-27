@@ -2,8 +2,13 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
+import multiprocessing
+from pathlib import Path
+from queue import Empty
 from threading import Barrier
+import traceback
 
+from filelock import FileLock
 import polars as pl
 import pytest
 from sqlalchemy import create_engine
@@ -20,6 +25,7 @@ from app.models import (
 from app.services.trading_ml.contracts import TradingMLExample
 from app.services.trading_ml.dataset import DatasetSlice, TradingMLDatasetRepository
 from app.services.trading_ml.feature_store import TradingMLFeatureStoreProjector
+import app.services.trading_ml.feature_store as feature_store_module
 
 
 NOW = datetime(2026, 7, 27, 10, 0)
@@ -226,15 +232,18 @@ class _SyntheticRepository:
 
 
 class _ConcurrentRepository:
-    def __init__(self, example: TradingMLExample, barrier: Barrier) -> None:
+    def __init__(self, example: TradingMLExample, barrier: Barrier, ready_queue=None) -> None:
         self.example = example
         self.barrier = barrier
+        self.ready_queue = ready_queue
 
     def read_slice(self, _db, *, market_family: str, after_cursor: dict | None, limit: int) -> DatasetSlice:
         assert market_family == self.example.market_family
         assert after_cursor is None
         assert limit > 0
         self.barrier.wait(timeout=5)
+        if self.ready_queue is not None:
+            self.ready_queue.put(market_family)
         return DatasetSlice(
             examples=(self.example,),
             next_cursor={"source_table": f"{market_family}_source", "last_source_id": 1},
@@ -242,6 +251,37 @@ class _ConcurrentRepository:
             rows_rejected=0,
             exhausted=True,
         )
+
+
+def _project_in_process(root: str, market_family: str, barrier, ready_queue, result_queue) -> None:
+    try:
+        projector = TradingMLFeatureStoreProjector(
+            root=Path(root),
+            repository=_ConcurrentRepository(_market_example(market_family), barrier, ready_queue),
+        )
+        result = projector.project(None, market_family=market_family, limit=10)
+        result_queue.put({"ok": True, "market_family": market_family, "rows_written": result.rows_written})
+    except BaseException:
+        result_queue.put({"ok": False, "market_family": market_family, "error": traceback.format_exc()})
+
+
+def _hold_manifest_file_lock(root: str, acquired, release) -> None:
+    lock = FileLock(str(Path(root) / ".manifest.lock"), timeout=5)
+    with lock:
+        acquired.set()
+        release.wait(timeout=10)
+
+
+def _join_processes(processes: list[multiprocessing.Process], *, timeout: float) -> None:
+    try:
+        for process in processes:
+            process.join(timeout=timeout)
+        assert all(not process.is_alive() for process in processes), "child projection exceeded its bounded timeout"
+    finally:
+        for process in processes:
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=2)
 
 
 def _market_example(market_family: str) -> TradingMLExample:
@@ -299,6 +339,92 @@ def test_concurrent_market_projections_preserve_both_partitions_and_cursors(tmp_
     assert {partition["market_family"] for partition in manifest["partitions"]} == {"equity", "forex"}
     assert equity_rows["source_uid"].to_list() == ["equity_trade:1"]
     assert forex_rows["source_uid"].to_list() == ["forex_trade:1"]
+
+
+def test_multi_process_market_projections_preserve_both_partitions_cursors_and_scans(tmp_path):
+    context = multiprocessing.get_context("spawn")
+    barrier = context.Barrier(2)
+    ready_queue = context.Queue()
+    result_queue = context.Queue()
+    processes = [
+        context.Process(
+            target=_project_in_process,
+            args=(str(tmp_path), market_family, barrier, ready_queue, result_queue),
+        )
+        for market_family in ("equity", "forex")
+    ]
+
+    parent_lock = FileLock(str(tmp_path / ".manifest.lock"), timeout=1)
+    with parent_lock:
+        for process in processes:
+            process.start()
+        try:
+            ready_markets = {ready_queue.get(timeout=5) for _ in processes}
+        except Empty as error:
+            raise AssertionError("child projections did not reach the manifest commit") from error
+        for process in processes:
+            process.join(timeout=0.25)
+
+        assert ready_markets == {"equity", "forex"}
+        assert all(process.is_alive() for process in processes), "a child bypassed the cross-process lock"
+        assert not (tmp_path / "manifest.json").exists()
+        assert not list(tmp_path.glob("features/**/*.parquet"))
+
+    _join_processes(processes, timeout=15)
+    try:
+        results = [result_queue.get(timeout=5) for _ in processes]
+    except Empty as error:
+        raise AssertionError("child projection did not report a result") from error
+
+    projector = TradingMLFeatureStoreProjector(root=tmp_path)
+    manifest = projector.manifest()
+    equity_rows = projector.scan(market_family="equity", columns=["source_uid"]).collect()
+    forex_rows = projector.scan(market_family="forex", columns=["source_uid"]).collect()
+
+    assert all(result["ok"] for result in results), results
+    assert set(manifest["source_cursors"]) == {"equity", "forex"}
+    assert {partition["market_family"] for partition in manifest["partitions"]} == {"equity", "forex"}
+    assert equity_rows["source_uid"].to_list() == ["equity_trade:1"]
+    assert forex_rows["source_uid"].to_list() == ["forex_trade:1"]
+
+
+def test_projection_times_out_without_writing_when_process_lock_is_held(tmp_path):
+    context = multiprocessing.get_context("spawn")
+    acquired = context.Event()
+    release = context.Event()
+    holder = context.Process(target=_hold_manifest_file_lock, args=(str(tmp_path), acquired, release))
+    holder.start()
+    assert acquired.wait(timeout=5), "lock holder did not acquire the manifest lock"
+
+    try:
+        projector = TradingMLFeatureStoreProjector(
+            root=tmp_path,
+            repository=_SyntheticRepository([_synthetic_example(0)]),
+            manifest_lock_timeout_seconds=0.2,
+        )
+        with pytest.raises(feature_store_module.FeatureStoreLockTimeout):
+            projector.project(None, market_family="forex", limit=1)
+    finally:
+        release.set()
+        _join_processes([holder], timeout=5)
+
+    assert not (tmp_path / "manifest.json").exists()
+    parquet_paths = list((tmp_path / "features").glob("**/*.parquet")) if (tmp_path / "features").exists() else []
+    assert parquet_paths == []
+
+
+def test_projection_recovers_when_lock_file_is_stale_but_unlocked(tmp_path):
+    (tmp_path / ".manifest.lock").write_text("stale-owner", encoding="utf-8")
+    projector = TradingMLFeatureStoreProjector(
+        root=tmp_path,
+        repository=_SyntheticRepository([_synthetic_example(0)]),
+        manifest_lock_timeout_seconds=1,
+    )
+
+    result = projector.project(None, market_family="forex", limit=1)
+
+    assert result.rows_written == 1
+    assert projector.scan(market_family="forex").collect().height == 1
 
 
 def _synthetic_example(index: int) -> TradingMLExample:
