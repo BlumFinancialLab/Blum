@@ -4492,3 +4492,107 @@ class ForexKnowledgeIngestionRun(Base):
     error_message: Mapped[str | None] = mapped_column(Text)
     started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+
+
+class TradingMLModelVersion(Base):
+    __tablename__ = "trading_ml_model_versions"
+    __table_args__ = (
+        UniqueConstraint("model_uid", name="uq_trading_ml_model_uid"),
+        Index("ix_trading_ml_models_market_status", "market_family", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    model_uid: Mapped[str] = mapped_column(String(160))
+    market_family: Mapped[str] = mapped_column(String(32))
+    algorithm: Mapped[str] = mapped_column(String(80))
+    status: Mapped[str] = mapped_column(String(40), default="SHADOW")
+    feature_schema_version: Mapped[str] = mapped_column(String(80))
+    feature_schema_hash: Mapped[str] = mapped_column(String(64))
+    dataset_hash: Mapped[str] = mapped_column(String(64))
+    evidence_lane_counts_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    training_window_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    validation_window_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    sample_count: Mapped[int] = mapped_column(Integer, default=0)
+    asset_count: Mapped[int] = mapped_column(Integer, default=0)
+    regime_count: Mapped[int] = mapped_column(Integer, default=0)
+    setup_count: Mapped[int] = mapped_column(Integer, default=0)
+    training_metrics_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    validation_metrics_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    baseline_metrics_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    promotion_gates_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    promotion_decision: Mapped[str | None] = mapped_column(String(80))
+    artifact_path: Mapped[str] = mapped_column(Text)
+    artifact_sha256: Mapped[str] = mapped_column(String(64))
+    artifact_size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    parent_model_version_id: Mapped[int | None] = mapped_column(
+        ForeignKey("trading_ml_model_versions.id", ondelete="SET NULL")
+    )
+    champion_model_version_id: Mapped[int | None] = mapped_column(
+        ForeignKey("trading_ml_model_versions.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime)
+    degraded_at: Mapped[datetime | None] = mapped_column(DateTime)
+    rolled_back_at: Mapped[datetime | None] = mapped_column(DateTime)
+    warnings_json: Mapped[list] = mapped_column(JsonType, default=list)
+    explanation: Mapped[str] = mapped_column(Text, default="")
+
+
+class TradingMLTrainingRun(Base):
+    __tablename__ = "trading_ml_training_runs"
+    __table_args__ = (
+        Index("ix_trading_ml_runs_market_started", "market_family", "started_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_uid: Mapped[str] = mapped_column(String(160), unique=True)
+    market_family: Mapped[str] = mapped_column(String(32))
+    trigger: Mapped[str] = mapped_column(String(80))
+    cursor_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    resource_limits_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    rows_considered: Mapped[int] = mapped_column(Integer, default=0)
+    rows_accepted: Mapped[int] = mapped_column(Integer, default=0)
+    rows_rejected: Mapped[int] = mapped_column(Integer, default=0)
+    rejection_reasons_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    split_metadata_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    status: Mapped[str] = mapped_column(String(40), default="RUNNING")
+    duration_seconds: Mapped[float | None] = mapped_column(Float)
+    candidate_model_version_id: Mapped[int | None] = mapped_column(
+        ForeignKey("trading_ml_model_versions.id", ondelete="SET NULL")
+    )
+    error_message: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class TradingMLPrediction(Base):
+    __tablename__ = "trading_ml_predictions"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_object_type",
+            "source_object_id",
+            "model_version_id",
+            name="uq_trading_ml_prediction_source_model",
+        ),
+        Index("ix_trading_ml_predictions_market_created", "market_family", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_object_type: Mapped[str] = mapped_column(String(80))
+    source_object_id: Mapped[str] = mapped_column(String(160))
+    model_version_id: Mapped[int] = mapped_column(
+        ForeignKey("trading_ml_model_versions.id", ondelete="CASCADE")
+    )
+    market_family: Mapped[str] = mapped_column(String(32))
+    feature_hash: Mapped[str] = mapped_column(String(64))
+    probability_positive_r: Mapped[float | None] = mapped_column(Float)
+    predicted_net_r: Mapped[float | None] = mapped_column(Float)
+    uncertainty: Mapped[float | None] = mapped_column(Float)
+    baseline_output_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    proposed_confidence_adjustment: Mapped[float] = mapped_column(Float, default=0.0)
+    applied_confidence_adjustment: Mapped[float] = mapped_column(Float, default=0.0)
+    guardrails_json: Mapped[list] = mapped_column(JsonType, default=list)
+    explanation_json: Mapped[list] = mapped_column(JsonType, default=list)
+    realized_outcome_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    evaluated_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
