@@ -14,7 +14,7 @@ import math
 from types import MappingProxyType
 from typing import Callable, Iterable, Mapping, Protocol, Sequence
 
-from .contracts import TradingMLExample
+from .contracts import InsufficientTrainingEvidenceError, TradingMLExample
 
 
 _EPSILON = 1e-15
@@ -146,7 +146,7 @@ class PurgedWalkForwardEvaluator:
         decision_timestamps = tuple(sorted({row.decision_timestamp for row in ordered}))
         required_groups = self.min_folds + 1
         if len(decision_timestamps) < required_groups:
-            raise ValueError(
+            raise InsufficientTrainingEvidenceError(
                 f"At least {required_groups} distinct decision timestamps are required for {self.min_folds} folds"
             )
 
@@ -163,7 +163,7 @@ class PurgedWalkForwardEvaluator:
                 if row.decision_timestamp < validation_start and row.outcome_timestamp < embargo_cutoff
             )
             if not train:
-                raise ValueError(
+                raise InsufficientTrainingEvidenceError(
                     "Insufficient chronological history after applying purge and embargo for "
                     f"fold {fold_index + 1}"
                 )

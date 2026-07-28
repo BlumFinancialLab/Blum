@@ -9,7 +9,14 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.core.database import Base
-from app.models import BackgroundJobState, BrainRuntimeEvent, DashboardSnapshot, TradingMLModelVersion
+from app.models import (
+    BackgroundJobState,
+    BrainRuntimeEvent,
+    DashboardSnapshot,
+    TradingMLModelVersion,
+    TradingMLTrainingRun,
+)
+from app.services.trading_ml.contracts import InsufficientTrainingEvidenceError
 from app.services.trading_ml.dataset import DatasetSlice
 from app.services.trading_ml.feature_store import ProjectionResult, _row_from_example
 from app.services.trading_ml.registry import TradingMLModelRegistry
@@ -27,13 +34,14 @@ def db():
 
 
 class FakeProjector:
-    def __init__(self):
+    def __init__(self, source_count=16):
+        self.source_count = source_count
         self.offsets = {"equity": 0, "forex": 0}
         self.rows = {"equity": [], "forex": []}
 
     def project(self, db, *, market_family, limit):
         offset = self.offsets[market_family]
-        source = examples(16)[offset : offset + limit]
+        source = examples(self.source_count)[offset : offset + limit]
         mapped = [
             replace(
                 row,
@@ -57,7 +65,7 @@ class FakeProjector:
             },
             rows_considered=len(mapped),
             rows_rejected=0,
-            is_exhausted=self.offsets[market_family] >= 16,
+            is_exhausted=self.offsets[market_family] >= self.source_count,
         )
 
     def scan(self, *, market_family):
@@ -107,6 +115,27 @@ def test_worker_isolates_market_family_failure(db, tmp_path, monkeypatch):
     result = instance.run_once(db, "test")
     assert result["markets"]["equity"]["status"] == "FAILED"
     assert result["markets"]["forex"]["status"] == "SHADOW"
+
+
+def test_worker_records_insufficient_chronology_as_evidence_gap(db, tmp_path, monkeypatch):
+    instance = TradingMLLearningWorker(artifact_root=tmp_path, max_rows=320, max_runtime_seconds=30)
+    instance.projector = FakeProjector(source_count=320)
+
+    def insufficient(*args, **kwargs):
+        raise InsufficientTrainingEvidenceError(
+            "Insufficient chronological history after applying purge and embargo for fold 1"
+        )
+
+    monkeypatch.setattr("app.services.trading_ml.worker.BoundedOptunaChallengerSearch.search", insufficient)
+
+    result = instance.run_once(db, "test")
+
+    assert result["status"] == "COMPLETED"
+    assert result["markets"]["equity"]["status"] == "INSUFFICIENT_EVIDENCE"
+    assert result["markets"]["forex"]["status"] == "INSUFFICIENT_EVIDENCE"
+    assert {
+        row.status for row in db.query(TradingMLTrainingRun).all()
+    } == {"INSUFFICIENT_EVIDENCE"}
 
 
 def test_worker_governs_invalid_active_artifact_outside_read_path(db, tmp_path):

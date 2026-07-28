@@ -8,6 +8,10 @@ from types import MappingProxyType
 from typing import Literal, Mapping
 
 
+class InsufficientTrainingEvidenceError(ValueError):
+    """Raised when valid labels cannot form leakage-safe validation folds."""
+
+
 @dataclass(frozen=True)
 class TradingMLExample:
     source_object_type: str

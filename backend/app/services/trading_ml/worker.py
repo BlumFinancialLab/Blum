@@ -17,7 +17,12 @@ from app.models import BackgroundJobState, TradingMLModelVersion, TradingMLTrain
 from app.services.central_brain_runtime import BrainEventBus
 from app.services.dashboard_snapshots import DashboardSnapshotService
 
-from .contracts import CATEGORICAL_FEATURES, NUMERIC_FEATURES, TradingMLExample
+from .contracts import (
+    CATEGORICAL_FEATURES,
+    NUMERIC_FEATURES,
+    InsufficientTrainingEvidenceError,
+    TradingMLExample,
+)
 from .feature_store import TradingMLFeatureStoreProjector
 from .registry import TradingMLModelRegistry, TradingMLPromotionService
 from .training import BoundedOptunaChallengerSearch, OnlineShadowTrainer, SklearnTradingModelTrainer
@@ -237,18 +242,34 @@ class TradingMLLearningWorker:
                 "reused_dataset": True,
             }
 
-        search = BoundedOptunaChallengerSearch(
-            max_trials=self.settings.trading_ml_optuna_trials,
-            timeout_seconds=min(
-                self.settings.trading_ml_optuna_timeout_seconds,
-                max(1, int(self.max_runtime_seconds - (time.perf_counter() - started))),
-            ),
-            min_folds=self.settings.trading_ml_min_folds,
-        ).search(rows)
-        stable = SklearnTradingModelTrainer(
-            min_folds=self.settings.trading_ml_min_folds,
-            parameters=search.parameters,
-        ).fit(rows)
+        try:
+            search = BoundedOptunaChallengerSearch(
+                max_trials=self.settings.trading_ml_optuna_trials,
+                timeout_seconds=min(
+                    self.settings.trading_ml_optuna_timeout_seconds,
+                    max(1, int(self.max_runtime_seconds - (time.perf_counter() - started))),
+                ),
+                min_folds=self.settings.trading_ml_min_folds,
+            ).search(rows)
+            stable = SklearnTradingModelTrainer(
+                min_folds=self.settings.trading_ml_min_folds,
+                parameters=search.parameters,
+            ).fit(rows)
+        except InsufficientTrainingEvidenceError as exc:
+            run.status = "INSUFFICIENT_EVIDENCE"
+            run.rejection_reasons_json = {
+                "evidence_gap": str(exc),
+                "policy": "Leakage-safe validation cannot be relaxed to manufacture a challenger.",
+            }
+            run.completed_at = datetime.utcnow()
+            run.duration_seconds = round(time.perf_counter() - started, 4)
+            db.commit()
+            return {
+                "status": "INSUFFICIENT_EVIDENCE",
+                "rows_considered": projection.rows_considered,
+                "sample_count": len(rows),
+                "reason": str(exc),
+            }
         candidate = self.registry.store_candidate(
             db,
             market_family=market_family,
