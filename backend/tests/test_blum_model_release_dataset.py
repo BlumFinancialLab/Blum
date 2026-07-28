@@ -1,11 +1,23 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
+import json
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 
+from app.analyst.release_dataset import build_release_dataset
+from app.analyst.release_redaction import sanitize_payload
 from app.analyst.release_contracts import ReleaseExample, ReleaseManifest
+from app.core.database import Base
+from app.models import (
+    BlumKnowledgeRecord,
+    BlumThesisOutcome,
+    BlumTrainingExample,
+    TrainingExampleQualityScore,
+)
 
 
 REVISION = "a" * 40
@@ -93,3 +105,120 @@ def test_release_manifest_rejects_non_commit_revision() -> None:
 
     with pytest.raises(ValidationError):
         ReleaseManifest.model_validate(payload)
+
+
+def test_redaction_removes_tokens_email_and_broker_identifiers() -> None:
+    result = sanitize_payload(
+        {
+            "text": "Mail trader@example.com with bearer hf_abcdefghijklmnopqrstuvwxyz.",
+            "api_key": "hf_secret",
+            "broker_account_id": "ABC-123",
+        }
+    )
+    serialized = json.dumps(result.payload)
+
+    assert "trader@example.com" not in serialized
+    assert "hf_secret" not in serialized
+    assert "ABC-123" not in serialized
+    assert result.blocked_fields == ["api_key", "broker_account_id"]
+    assert result.pii_matches == ["email", "hugging_face_token"]
+
+
+def test_unlicensed_verbatim_source_blocks_publication() -> None:
+    result = sanitize_payload(
+        {
+            "raw_article": "A complete third-party article body.",
+            "summary": "Revenue growth accelerated.",
+        }
+    )
+
+    assert result.publishable is False
+    assert result.payload == {"summary": "Revenue growth accelerated."}
+
+
+def test_release_dataset_uses_temporal_splits_without_lineage_leakage(tmp_path) -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    start = datetime(2025, 1, 1)
+    with Session(engine) as db:
+        for index in range(12):
+            record = BlumKnowledgeRecord(
+                ticker=f"T{index:02d}",
+                sector="Technology",
+                source_type="signal_snapshot",
+                reasoning_hash=f"reason-{index}",
+                market_regime="risk_on",
+                blum_reasoning={
+                    "supporting_evidence": ["Relative strength improved."],
+                    "contradicting_evidence": ["Volume is not confirmed."],
+                    "risks": ["Volatility could expand."],
+                },
+                created_at=start + timedelta(days=index),
+            )
+            db.add(record)
+            db.flush()
+            example = BlumTrainingExample(
+                knowledge_record_id=record.id,
+                task_type="financial_thesis_generation",
+                messages={
+                    "items": [
+                        {"role": "system", "content": "Use supplied evidence only."},
+                        {"role": "user", "content": f"Evaluate T{index:02d}."},
+                        {"role": "assistant", "content": '{"status":"watch"}'},
+                    ]
+                },
+                input_payload={"ticker": f"T{index:02d}"},
+                output_payload={
+                    "supporting_evidence": ["Relative strength improved."],
+                    "contradicting_evidence": ["Volume is not confirmed."],
+                    "risk_assessment": ["Volatility could expand."],
+                },
+                export_ready=True,
+                created_at=start + timedelta(days=index),
+            )
+            db.add(example)
+            db.flush()
+            db.add(
+                TrainingExampleQualityScore(
+                    training_example_id=example.id,
+                    thesis_id=record.id,
+                    final_training_value_score=80,
+                    data_quality_score=82,
+                    contradiction_handling_score=79,
+                    confidence_calibration_score=76,
+                    include_in_sft=True,
+                )
+            )
+            db.add(
+                BlumThesisOutcome(
+                    knowledge_record_id=record.id,
+                    ticker=f"T{index:02d}",
+                    horizon_days=7,
+                    outcome="correct",
+                    success=True,
+                    realized_return=0.03,
+                    outcome_payload={"benchmark_excess": 0.01},
+                )
+            )
+        db.commit()
+
+        manifest = build_release_dataset(
+            db,
+            source_revision=REVISION,
+            output_dir=tmp_path,
+            min_score=70,
+        )
+
+    rows = []
+    for split in ("train", "validation", "test"):
+        with (tmp_path / f"{split}.jsonl").open(encoding="utf-8") as handle:
+            rows.extend(json.loads(line) for line in handle if line.strip())
+    lineage_splits: dict[str, set[str]] = {}
+    for row in rows:
+        lineage_splits.setdefault(row["thesis_lineage_id"], set()).add(row["split"])
+
+    assert all(len(splits) == 1 for splits in lineage_splits.values())
+    assert manifest.split_counts["train"] == 9
+    assert manifest.split_counts["validation"] == 1
+    assert manifest.split_counts["test"] == 2
+    assert rows[0]["created_at"] < rows[-1]["created_at"]
