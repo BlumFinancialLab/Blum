@@ -1,0 +1,8 @@
+accelerate>=1.6,<2
+datasets>=3.5,<5
+huggingface-hub>=0.30,<2
+peft>=0.15,<1
+pyyaml>=6.0,<7
+trackio>=0.5,<1
+transformers>=4.51,<6
+trl>=0.18,<1
