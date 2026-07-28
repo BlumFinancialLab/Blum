@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from model_release.training.hf_job import dataset_digest
 from model_release.training.train_sft import (
     DatasetIntegrityError,
     load_training_config,
@@ -60,3 +61,14 @@ def test_training_accepts_expected_manifest_hash(tmp_path) -> None:
     manifest = verify_dataset_manifest(tmp_path, expected_sha256=expected)
 
     assert manifest["dataset_sha256"] == expected
+
+
+def test_hf_job_digest_matches_release_manifest(tmp_path) -> None:
+    for name in ("train.jsonl", "validation.jsonl", "test.jsonl", "excluded.jsonl"):
+        (tmp_path / name).write_text(f'{{"name":"{name}"}}\n', encoding="utf-8")
+
+    first = dataset_digest(tmp_path)
+    second = dataset_digest(tmp_path)
+
+    assert first == second
+    assert len(first) == 64
