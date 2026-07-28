@@ -2160,3 +2160,42 @@ CPU job. `GET /api/trading-ml/status` reads that snapshot only;
 do not claim guaranteed profitability or copy readiness. Forex forward evidence
 was still limited to 38 outcomes at design time, so the evidence gates, not
 training speed, determine when a model may become active.
+
+## BLUM Finance Model Release
+
+BLUM now has a standalone, reproducible model-release boundary. BLUM Engine
+remains the source of market truth; BLUM Finance is trained only to reproduce
+evidence-bound financial reasoning, contradiction handling, risk disclosure,
+technical invalidation and calibrated abstention.
+
+The release pipeline:
+
+1. selects only SFT-approved examples above a configured quality threshold;
+2. removes secrets, personal identifiers, broker identifiers and unlicensed
+   verbatim source material;
+3. deduplicates examples and applies grouped temporal splits so one thesis
+   lineage cannot cross train, validation and test;
+4. records source revision, row counts, split periods and content SHA-256;
+5. trains a Qwen3-4B LoRA against an immutable dataset revision;
+6. compares the candidate with the exact immutable base revision;
+7. rejects candidates with insufficient samples, no target improvement,
+   no-fabrication regression, weak structured validity, incomplete risk or
+   invalidation logic, or degraded calibration;
+8. requires Transformers and GGUF smoke tests before replacing
+   `Italianhype/Blum`.
+
+The first audited dataset is published at
+[`Italianhype/Blum-Finance-Reasoning`](https://huggingface.co/datasets/Italianhype/Blum-Finance-Reasoning).
+It contains 521 real BLUM reasoning examples with a 416/52/53 grouped temporal
+split. The immutable dataset revision and hashes are recorded in
+`BLUM_FINANCE_MODEL_RELEASE_REPORT.md`.
+
+Inference and installation do not send telemetry. `blum-contribute` creates a
+local redacted bundle only after explicit consent; network upload requires the
+additional `--push` flag. Contributions enter
+[`Italianhype/Blum-Finance-Memory`](https://huggingface.co/datasets/Italianhype/Blum-Finance-Memory)
+in quarantine and never modify active weights automatically.
+
+The primary model is not published by this pipeline until the evidence gate
+passes. Language-model reasoning scores do not demonstrate trading alpha,
+future profitability or suitability for unattended capital execution.
