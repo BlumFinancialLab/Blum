@@ -87,7 +87,7 @@ class Settings(BaseSettings):
     trading_ml_worker_minutes: int = 15
     trading_ml_new_label_threshold: int = 25
     trading_ml_max_runtime_seconds: int = 120
-    trading_ml_max_rows_per_slice: int = 5000
+    trading_ml_max_rows_per_slice: int = 500
     trading_ml_min_replay_samples: int = 300
     trading_ml_min_folds: int = 3
     trading_ml_min_assets: int = 6

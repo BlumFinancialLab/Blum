@@ -59,7 +59,10 @@ adjustment and guardrails.
 `TradingMLLearningWorker` performs bounded projection, shadow update,
 challenger validation, promotion evaluation and snapshot publication
 independently for equities and Forex. One market-family failure does not abort
-the other. The scheduler delays first execution and runs every 15 minutes.
+the other. Each resumable slice accepts at most 500 examples per market family,
+so CPU-basic deployments make frequent progress without one large training job
+blocking the runtime. The scheduler delays first execution and runs every 15
+minutes.
 
 `GET /api/trading-ml/status` is snapshot-only and side-effect free.
 `POST /api/trading-ml/run` explicitly starts one bounded slice.

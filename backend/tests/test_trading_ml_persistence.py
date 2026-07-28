@@ -163,6 +163,7 @@ def test_trading_ml_settings_have_evidence_bound_defaults():
 
     assert settings.trading_ml_enabled is True
     assert settings.trading_ml_max_runtime_seconds == 120
+    assert settings.trading_ml_max_rows_per_slice == 500
     assert settings.trading_ml_min_replay_samples == 300
     assert settings.trading_ml_min_folds == 3
     assert settings.trading_ml_min_assets == 6

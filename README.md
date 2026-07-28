@@ -2153,7 +2153,9 @@ the model, feature hash, probability, predicted net R, baseline, adjustment and
 guardrails in `trading_ml_predictions`.
 
 The bounded background worker runs every 15 minutes and publishes
-`trading_ml_status`. `GET /api/trading-ml/status` reads that snapshot only;
+`trading_ml_status`. Each cursor-backed slice accepts at most 500 new examples
+per market family, preventing an initial backlog from becoming a monolithic
+CPU job. `GET /api/trading-ml/status` reads that snapshot only;
 `POST /api/trading-ml/run` is the explicit manual bounded trigger. These models
 do not claim guaranteed profitability or copy readiness. Forex forward evidence
 was still limited to 38 outcomes at design time, so the evidence gates, not
