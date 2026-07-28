@@ -2118,3 +2118,43 @@ The Paper Trading page defaults to an `Azioni / ETF` tab and exposes Forex in a
 separate tab. Both views are derived client-side from the same snapshot. The
 projection reserves bounded capacity for each active market group so frequent
 Forex decisions cannot evict all equity rows from the visible journal.
+
+## Trading ML Champion/Challenger
+
+BLUM now has a supervised trading-learning lane for equities and Forex. It uses
+scikit-learn because the available audited evidence does not justify a deep
+reinforcement-learning policy with trading authority. The design has two
+speeds:
+
+- an `SGDClassifier` updates rapidly from new terminal outcomes but remains
+  permanently shadow-only;
+- deterministic `HistGradientBoostingClassifier` and regressor challengers are
+  evaluated on purged expanding walk-forward folds before they can advise.
+
+Point-in-time, cost-adjusted labels remain in SQL as the source of truth.
+Bounded Polars scans and immutable partitioned Parquet files accelerate
+training reads without changing evidence. Hyperparameter search is limited to
+12 Optuna trials and 90 seconds. No GET endpoint starts projection, training,
+search or promotion.
+
+Promotion requires at least 300 replay outcomes, three purged folds, six
+assets/pairs, positive net expectancy after costs, benchmark-aware calibration
+improvement and non-concentrated positive P/L. Artifacts are loaded only from
+the configured trusted directory after SHA-256 and feature-schema validation.
+Drift, negative forward expectancy or artifact failure degrades the model and
+supports rollback to a verified prior champion; otherwise deterministic BLUM
+retains full authority.
+
+An active model may adjust confidence by at most five points. Combined learned
+influence is capped at ten points. It cannot remove stale-data, liquidity,
+event, execution, portfolio or deterministic no-trade blockers. A validated
+negative Forex forecast may add a veto. Every write-oriented decision records
+the model, feature hash, probability, predicted net R, baseline, adjustment and
+guardrails in `trading_ml_predictions`.
+
+The bounded background worker runs every 15 minutes and publishes
+`trading_ml_status`. `GET /api/trading-ml/status` reads that snapshot only;
+`POST /api/trading-ml/run` is the explicit manual bounded trigger. These models
+do not claim guaranteed profitability or copy readiness. Forex forward evidence
+was still limited to 38 outcomes at design time, so the evidence gates, not
+training speed, determine when a model may become active.

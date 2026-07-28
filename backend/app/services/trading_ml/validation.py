@@ -78,10 +78,13 @@ class EvaluationMetrics:
     recall: float | None
     calibration_error: float | None
     net_expectancy: float | None
+    expected_net_r: float | None
     max_drawdown: float | None
     benchmark_excess: float | None
     asset_concentration: float | None
     regime_concentration: float | None
+    asset_selection_concentration: float | None
+    regime_selection_concentration: float | None
     per_asset: Mapping[str, float] = field(default_factory=dict)
     per_regime: Mapping[str, float] = field(default_factory=dict)
 
@@ -323,10 +326,13 @@ def _metrics(records: Iterable[tuple[TradingMLExample, FoldPrediction]]) -> Eval
             recall=None,
             calibration_error=None,
             net_expectancy=None,
+            expected_net_r=None,
             max_drawdown=None,
             benchmark_excess=None,
             asset_concentration=None,
             regime_concentration=None,
+            asset_selection_concentration=None,
+            regime_selection_concentration=None,
         )
 
     weights = tuple(max(0.0, float(row.sample_weight)) for row, _ in items)
@@ -352,13 +358,30 @@ def _metrics(records: Iterable[tuple[TradingMLExample, FoldPrediction]]) -> Eval
     selected_weights = tuple(max(0.0, float(row.sample_weight)) for row, _ in selected)
     selected_weight_total = sum(selected_weights)
     selected_returns = tuple(row.realized_net_r for row, _ in selected)
+    expected_returns = tuple(
+        (float(prediction.predicted_net_r), weight)
+        for (row, prediction), weight in zip(selected, selected_weights)
+        if prediction.predicted_net_r is not None and weight > 0
+    )
     selected_excess = tuple(row.benchmark_excess for row, _ in selected)
-    per_asset = _concentration(selected, key=lambda row: row.asset_key)
-    per_regime = _concentration(selected, key=lambda row: row.regime)
+    per_asset = _positive_pnl_concentration(selected, key=lambda row: row.asset_key)
+    per_regime = _positive_pnl_concentration(selected, key=lambda row: row.regime)
+    selection_per_asset = _selection_concentration(selected, key=lambda row: row.asset_key)
+    selection_per_regime = _selection_concentration(selected, key=lambda row: row.regime)
     comparable_excess = tuple(
         (float(excess), weight)
         for excess, weight in zip(selected_excess, selected_weights)
-        if excess is not None
+        if excess is not None and weight > 0
+    )
+    outcome_ordered_returns = tuple(
+        row.realized_net_r
+        for row, _ in sorted(
+            selected,
+            key=lambda item: (
+                item[0].outcome_timestamp,
+                example_source_uid(item[0]),
+            ),
+        )
     )
     return EvaluationMetrics(
         sample_size=len(items),
@@ -372,7 +395,15 @@ def _metrics(records: Iterable[tuple[TradingMLExample, FoldPrediction]]) -> Eval
         net_expectancy=(
             _weighted_mean(selected_returns, selected_weights) if selected_weight_total > 0 else None
         ),
-        max_drawdown=_max_drawdown(selected_returns) if selected_returns else None,
+        expected_net_r=(
+            _weighted_mean(
+                tuple(value for value, _ in expected_returns),
+                tuple(weight for _, weight in expected_returns),
+            )
+            if expected_returns
+            else None
+        ),
+        max_drawdown=_max_drawdown(outcome_ordered_returns) if outcome_ordered_returns else None,
         benchmark_excess=(
             _weighted_mean(
                 tuple(value for value, _ in comparable_excess),
@@ -383,6 +414,8 @@ def _metrics(records: Iterable[tuple[TradingMLExample, FoldPrediction]]) -> Eval
         ),
         asset_concentration=max(per_asset.values()) if per_asset else None,
         regime_concentration=max(per_regime.values()) if per_regime else None,
+        asset_selection_concentration=max(selection_per_asset.values()) if selection_per_asset else None,
+        regime_selection_concentration=max(selection_per_regime.values()) if selection_per_regime else None,
         per_asset=per_asset,
         per_regime=per_regime,
     )
@@ -429,7 +462,21 @@ def _expected_calibration_error(
     )
 
 
-def _concentration(
+def _positive_pnl_concentration(
+    selected: tuple[tuple[TradingMLExample, FoldPrediction], ...],
+    *,
+    key: Callable[[TradingMLExample], str],
+) -> dict[str, float]:
+    contributions: dict[str, float] = defaultdict(float)
+    for row, _ in selected:
+        contributions[key(row)] += max(0.0, row.realized_net_r * row.sample_weight)
+    total = sum(contributions.values())
+    if total <= 0:
+        return {}
+    return {name: contribution / total for name, contribution in sorted(contributions.items())}
+
+
+def _selection_concentration(
     selected: tuple[tuple[TradingMLExample, FoldPrediction], ...],
     *,
     key: Callable[[TradingMLExample], str],

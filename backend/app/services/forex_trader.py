@@ -53,6 +53,7 @@ from app.services.forex_risk import BlumForexPortfolioRiskEngine, ForexPortfolio
 from app.services.promoted_strategy_registry import BlumPromotedStrategyRegistry
 from app.services.replay_data import MultiProviderReplayDataService
 from app.services.dashboard_snapshots import DashboardSnapshotService
+from app.services.trading_ml.inference import TradingMLInferenceService, advice_payload
 from app.core.config import get_settings
 
 
@@ -236,6 +237,7 @@ class BlumForexTraderCore:
         self.learning = BlumForexLearningEngine()
         self.model_council = FinancialModelCouncil()
         self.manager = BlumForexPositionManagerAgent()
+        self.supervised_advisor = TradingMLInferenceService()
 
     def evaluate_input(self, market: AgentMarketInput, *, strategy: ForexStrategyEvidence) -> EvaluationOutcome:
         context = self.context.analyze(market)
@@ -302,6 +304,75 @@ class BlumForexTraderCore:
             db.flush()
             context_output = evaluation.agent_outputs.get("context", {})
             price_output = evaluation.agent_outputs.get("price_action", {})
+            supervised = self.supervised_advisor.advise(
+                db,
+                market_family="forex",
+                features=self._supervised_features(market, evaluation),
+                baseline_output={
+                    "approved": evaluation.approved,
+                    "confidence": evaluation.proposal.confidence,
+                    "blockers": list(evaluation.blockers),
+                    "expected_r": evaluation.proposal.expected_r,
+                },
+                deterministic_blockers=evaluation.blockers,
+                source_object_type="forex_decision",
+                source_object_id=str(decision.id),
+                persist=True,
+                decision_timestamp=now,
+                asset_key=market.pair,
+                setup_type=evaluation.proposal.setup_family,
+                regime=str(context_output.get("regime") or "unknown"),
+            )
+            supervised_payload = advice_payload(supervised)
+            bandit_delta = (
+                float(evaluation.proposal.knowledge_context.get("confidence_adjustment") or 0.0)
+                if evaluation.proposal.knowledge_context.get("status") in {"CONTEXT_ELIGIBLE", "POLICY_ELIGIBLE"}
+                else 0.0
+            )
+            supervised_fraction = supervised.confidence_adjustment / 100.0
+            remaining = max(0.0, 0.10 - abs(bandit_delta))
+            applied_supervised_fraction = max(-remaining, min(remaining, supervised_fraction))
+            if evaluation.blockers:
+                applied_supervised_fraction = 0.0
+            if supervised.veto_recommended and evaluation.approved:
+                new_blockers = tuple(dict.fromkeys([*evaluation.blockers, "SUPERVISED_MODEL_NEGATIVE_EDGE"]))
+                evaluation = replace(
+                    evaluation,
+                    approved=False,
+                    blockers=new_blockers,
+                    proposal=replace(
+                        evaluation.proposal,
+                        confidence=max(0.0, evaluation.proposal.confidence + applied_supervised_fraction),
+                        actionability_status="BLOCKED",
+                        reason_to_abstain="Validated supervised model indicates negative net edge.",
+                        knowledge_context={
+                            **dict(evaluation.proposal.knowledge_context or {}),
+                            "supervised_model": supervised_payload,
+                        },
+                    ),
+                )
+            else:
+                evaluation = replace(
+                    evaluation,
+                    proposal=replace(
+                        evaluation.proposal,
+                        confidence=max(0.0, min(1.0, evaluation.proposal.confidence + applied_supervised_fraction)),
+                        knowledge_context={
+                            **dict(evaluation.proposal.knowledge_context or {}),
+                            "supervised_model": {
+                                **supervised_payload,
+                                "applied_confidence_adjustment": round(applied_supervised_fraction * 100.0, 4),
+                                "combined_contextual_adjustment_points": round(
+                                    (bandit_delta + applied_supervised_fraction) * 100.0,
+                                    4,
+                                ),
+                            },
+                        },
+                    ),
+                )
+            decision.status = "APPROVED" if evaluation.approved else "REJECTED"
+            decision.blockers = list(evaluation.blockers)
+            decision.proposal_json = _jsonable(asdict(evaluation.proposal))
             model_review = self.model_council.review_forex_decision(
                 db,
                 decision_id=decision.id,
@@ -321,6 +392,7 @@ class BlumForexTraderCore:
             decision.proposal_json = {
                 **dict(decision.proposal_json or {}),
                 "model_council": model_review,
+                "supervised_model": supervised_payload,
             }
             if not evaluation.approved:
                 rejected.append({"pair": market.pair, "blockers": list(evaluation.blockers)})
@@ -456,6 +528,48 @@ class BlumForexTraderCore:
             drawdown_percent=drawdown,
             pair_correlations=correlations,
         )
+
+    @staticmethod
+    def _supervised_features(market: AgentMarketInput, evaluation: EvaluationOutcome) -> dict:
+        proposal = evaluation.proposal
+        context = evaluation.agent_outputs.get("context") or {}
+        price = evaluation.agent_outputs.get("price_action") or {}
+        quote = market.quote
+        spread = max(0.0, quote.ask - quote.bid)
+        return {
+            "aggregate_score": proposal.confidence * 100.0,
+            "confidence": proposal.confidence * 100.0,
+            "trend_score": _number(context.get("trend_score") or context.get("confidence")),
+            "momentum_score": _number(price.get("momentum_score") or price.get("confidence")),
+            "volume_score": None,
+            "volatility_score": market.volatility_score * 100.0,
+            "support_resistance_score": _number(price.get("setup_quality")),
+            "sentiment_score": None,
+            "narrative_score": None,
+            "fundamental_score": None,
+            "regime_score": _number(context.get("confidence")),
+            "expected_gross_r": proposal.expected_gross_pips,
+            "expected_net_r": proposal.expected_r,
+            "expected_cost": proposal.expected_cost_pips,
+            "stop_distance": abs(proposal.entry - proposal.stop),
+            "target_distance": abs(proposal.target - proposal.entry),
+            "data_quality_score": min(frame.quality_score for frame in market.frames.values()) if market.frames else 0.0,
+            "liquidity_score": market.liquidity_score,
+            "spread": spread,
+            "slippage": None,
+            "volatility": market.volatility_score,
+            "recent_return": None,
+            "multi_timeframe_trend": _number(context.get("multi_timeframe_alignment")),
+            "contextual_bandit_adjustment": _number(proposal.knowledge_context.get("confidence_adjustment")),
+            "contextual_bandit_sample_size": _number(proposal.knowledge_context.get("sample_size")),
+            "market_family": "forex",
+            "setup_type": proposal.setup_family,
+            "regime": str(context.get("regime") or "unknown"),
+            "session": market.session,
+            "direction": proposal.direction.value,
+            "timeframe": "1m_5m_15m_1h",
+            "sector_or_currency_family": market.pair[:3] + "/" + market.pair[3:],
+        }
 
     @staticmethod
     def _pair_correlations(db: Session, candidate_pair: str, positions: list[ForexPosition]) -> dict[str, float]:

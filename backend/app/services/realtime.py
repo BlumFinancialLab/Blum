@@ -31,6 +31,7 @@ from app.services.trading_game import TradingGameSimulator
 from app.services.live_forward_paper_trading import LiveForwardPaperTradingService
 from app.services.intraday_paper_engine import BlumIntradayPaperEngine
 from app.services.forex_trader import BlumForexTradingScheduler
+from app.services.trading_ml.worker import TradingMLLearningWorker
 from app.services.alpha_strategy_factory import AlphaStrategyFactory
 from app.services.worker_runtime import runtime_worker_coordinator
 from app.services.adaptive_replay_training import BlumAdaptiveTrainingController, refresh_strategy_factory_state
@@ -192,6 +193,14 @@ def _schedule_learning_jobs() -> None:
                 delay_seconds=delay_seconds,
                 jitter_seconds=30,
             )
+        if settings.trading_ml_enabled:
+            _add_interval_job(
+                run_trading_ml_learning_job,
+                minutes=settings.trading_ml_worker_minutes,
+                job_id="trading_ml_learning",
+                delay_seconds=1590,
+                jitter_seconds=30,
+            )
         return
 
     _add_interval_job(run_learning_cycle_job, minutes=settings.learning_loop_minutes, job_id="financial_brain_learning", delay_seconds=1020, jitter_seconds=45)
@@ -199,6 +208,14 @@ def _schedule_learning_jobs() -> None:
     _add_interval_job(run_blum_learning_loop_job, minutes=settings.learning_loop_minutes, job_id="blum_point_in_time_learning_loop", delay_seconds=1140, jitter_seconds=45)
     if settings.trading_game_enabled:
         _add_interval_job(run_trading_game_job, minutes=settings.learning_loop_minutes, job_id="blum_trading_game", delay_seconds=1200, jitter_seconds=45)
+    if settings.trading_ml_enabled:
+        _add_interval_job(
+            run_trading_ml_learning_job,
+            minutes=settings.trading_ml_worker_minutes,
+            job_id="trading_ml_learning",
+            delay_seconds=1260,
+            jitter_seconds=30,
+        )
 
 
 def scheduled_jobs() -> list[dict]:
@@ -463,6 +480,10 @@ def run_intraday_paper_trading_job() -> None:
 
 def run_forex_trader_job() -> None:
     _run_job("autonomous_forex_trader", lambda db: BlumForexTradingScheduler().run_once(db))
+
+
+def run_trading_ml_learning_job() -> None:
+    _run_job("trading_ml_learning", lambda db: TradingMLLearningWorker().run_once(db, "scheduled"))
 
 
 def run_paper_execution_lifecycle_job() -> None:

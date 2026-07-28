@@ -543,6 +543,7 @@ def test_professional_learning_is_scheduled_as_independent_workers(monkeypatch):
         "blum_financial_model_cycle",
         "blum_point_in_time_learning_loop",
         "blum_trading_game",
+        "trading_ml_learning",
     ]
     assert delays == sorted(delays)
     assert len(set(delays)) == len(delays)

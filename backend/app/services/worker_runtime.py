@@ -54,6 +54,7 @@ WORKER_DEFINITIONS: dict[str, WorkerDefinition] = {
     "paper_execution_lifecycle": WorkerDefinition("paper_execution_lifecycle", "paper_execution", "configured", 60, settings.intraday_max_open_positions),
     "blum_professional_learning_cycle": WorkerDefinition("blum_professional_learning_cycle", "professional_learning", "configured", settings.blum_autonomous_max_seconds_per_job, settings.professional_learning_batch_size),
     "hyperbolic_replay_training": WorkerDefinition("hyperbolic_replay_training", "replay_training", "configured", min(120, settings.replay_max_seconds_per_cycle), settings.replay_max_trades_per_cycle),
+    "trading_ml_learning": WorkerDefinition("trading_ml_learning", "trading_ml", "15m", settings.trading_ml_max_runtime_seconds, settings.trading_ml_max_rows_per_slice),
     "startup_snapshot_warmup": WorkerDefinition("startup_snapshot_warmup", "startup", "startup", 120, settings.blum_autonomous_max_items_per_job),
     "startup_pipeline": WorkerDefinition("startup_pipeline", "startup", "startup", settings.blum_autonomous_max_seconds_per_job, settings.startup_pipeline_limit),
     "autonomous_startup": WorkerDefinition("autonomous_startup", "startup", "startup", settings.blum_autonomous_max_seconds_per_job, settings.blum_autonomous_max_items_per_job),

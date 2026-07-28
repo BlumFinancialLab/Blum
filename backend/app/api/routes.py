@@ -288,6 +288,7 @@ from app.services.intraday_paper_engine import BlumIntradayPaperEngine
 from app.services.paper_forward_opportunity_scanner import PaperForwardOpportunityScanner
 from app.services.performance import performance_recorder
 from app.services.trader_brain import TraderBrainService
+from app.services.trading_ml.worker import TradingMLLearningWorker
 from app.signals.backtest import run_simple_backtest
 from app.signals.engine import SignalEngine
 
@@ -299,6 +300,38 @@ settings = get_settings()
 @router.get("/health")
 def health() -> dict:
     return {"status": "ok", "service": "blum-ai-financial-intelligence"}
+
+
+@router.get("/api/trading-ml/status")
+def trading_ml_status(db: Session = Depends(get_db)) -> dict:
+    """Return the latest snapshot without projecting data or starting training."""
+
+    snapshot = DashboardSnapshotService().latest(db, "trading_ml_status")
+    if snapshot.get("status") == "missing":
+        return {
+            "status": "INITIALIZING",
+            "snapshot_type": "trading_ml_status",
+            "explanation": "No trading ML background snapshot exists yet.",
+            "training_triggered": False,
+        }
+    payload = dict(snapshot.get("payload") or {})
+    payload.update(
+        {
+            "snapshot_status": snapshot.get("status"),
+            "snapshot_created_at": snapshot.get("created_at"),
+            "is_stale": snapshot.get("is_stale"),
+            "warnings": snapshot.get("warnings") or [],
+            "training_triggered": False,
+        }
+    )
+    return payload
+
+
+@router.post("/api/trading-ml/run")
+def run_trading_ml_slice(db: Session = Depends(get_db)) -> dict:
+    """Run one explicit bounded research slice; GET/page render never invokes it."""
+
+    return TradingMLLearningWorker().run_once(db, "manual_api")
 
 
 @router.get("/performance/diagnostics")

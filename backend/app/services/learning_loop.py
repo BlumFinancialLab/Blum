@@ -38,6 +38,7 @@ from app.models import (
 )
 from app.services.technical_analysis_engine import TechnicalAnalysisEngine
 from app.services.replay_execution import ReplayExecutionModel
+from app.services.trading_ml.inference import TradingMLInferenceService, advice_payload
 
 
 settings = get_settings()
@@ -245,6 +246,26 @@ class LearningLoopService:
         )
         db.add(prediction)
         db.flush()
+        supervised = feedback_payload.get("supervised_model_memory") or {}
+        if supervised.get("status") == "ACTIVE":
+            self.predictor.supervised_advisor.advise(
+                db,
+                market_family="equity",
+                features=self.predictor.supervised_features(prediction_context, prediction_payload["prediction"]["signal_scores"], prediction_payload["prediction"]["aggregate_score"], prediction_payload["prediction"]["aggregate_confidence"]),
+                baseline_output={
+                    "direction": prediction.expected_direction,
+                    "confidence": prediction.confidence,
+                    "aggregate_score": prediction_payload["prediction"]["aggregate_score"],
+                },
+                deterministic_blockers=("DETERMINISTIC_NEUTRAL",) if prediction.expected_direction == "neutral" else (),
+                source_object_type="historical_prediction",
+                source_object_id=str(prediction.id),
+                persist=True,
+                decision_timestamp=datetime.combine(sample["analysis_date"], time.min),
+                asset_key=prediction.ticker,
+                setup_type=str(supervised.get("setup_type") or "unknown"),
+                regime=prediction.market_regime,
+            )
 
         outcomes = []
         mistakes = []
@@ -624,6 +645,9 @@ class PointInTimeDataService:
 
 
 class PredictionEngine:
+    def __init__(self) -> None:
+        self.supervised_advisor = TradingMLInferenceService()
+
     def predict(self, context: dict, db: Session | None = None, sample_metadata: dict | None = None) -> dict:
         technical = context["technical"]
         signal_scores = self.signal_scores(context)
@@ -633,7 +657,46 @@ class PredictionEngine:
         aggregate_score = weighted_score(signal_scores, weights_used)
         dominant_direction = direction_from_score(aggregate_score, technical)
         base_confidence = confidence_from_evidence(aggregate_score, context["data_quality_score"], context["market_context"], technical)
-        confidence = round(clamp(base_confidence + feedback["confidence_adjustment"], 15, 88), 1)
+        deterministic_blockers = ("DETERMINISTIC_NEUTRAL",) if dominant_direction == "neutral" else ()
+        supervised_advice = (
+            self.supervised_advisor.advise(
+                db,
+                market_family="equity",
+                features=self.supervised_features(context, signal_scores, aggregate_score, base_confidence),
+                baseline_output={
+                    "direction": dominant_direction,
+                    "confidence": base_confidence,
+                    "aggregate_score": aggregate_score,
+                },
+                deterministic_blockers=deterministic_blockers,
+                asset_key=str((context.get("asset") or {}).get("ticker") or "unknown"),
+                setup_type=str(context.get("setup_type") or "unknown"),
+                regime=str((context.get("market_context") or {}).get("market_regime") or "unknown"),
+            )
+            if db is not None
+            else None
+        )
+        supervised_delta = supervised_advice.confidence_adjustment if supervised_advice is not None else 0.0
+        combined_adjustment = round(
+            clamp(
+                feedback["confidence_adjustment"] + supervised_delta,
+                -settings.trading_ml_max_combined_adjustment,
+                settings.trading_ml_max_combined_adjustment,
+            ),
+            2,
+        )
+        confidence = round(clamp(base_confidence + combined_adjustment, 15, 88), 1)
+        feedback["pre_supervised_confidence_adjustment"] = feedback["confidence_adjustment"]
+        feedback["confidence_adjustment"] = combined_adjustment
+        feedback["supervised_model_memory"] = (
+            advice_payload(supervised_advice)
+            if supervised_advice is not None
+            else {
+                "status": "NO_DATABASE",
+                "applied_confidence_adjustment": 0.0,
+                "explanation": ["Inference is unavailable without a database session."],
+            }
+        )
         feedback["base_confidence"] = base_confidence
         feedback["final_confidence"] = confidence
         timeframes = {
@@ -694,6 +757,50 @@ class PredictionEngine:
             "learning_mode_metadata": mode_metadata,
             "confidence_adjustment": confidence_adjustment,
             "policy": "PredictionEngine uses active learned weights when available; otherwise BASE_SIGNAL_WEIGHTS. Learning memory changes confidence, not source code.",
+        }
+
+    def supervised_features(self, context: dict, signal_scores: dict, aggregate_score: float, confidence: float) -> dict:
+        technical = context.get("technical") or {}
+        indicators = technical.get("technical_indicators") or {}
+        volume = technical.get("volume") or {}
+        volatility = technical.get("volatility") or {}
+        market = context.get("market_context") or {}
+        news = context.get("news") or {}
+        fundamentals = context.get("fundamentals") or {}
+        asset = context.get("asset") or {}
+        return {
+            "aggregate_score": aggregate_score,
+            "confidence": confidence,
+            "trend_score": signal_scores.get("trend_structure"),
+            "momentum_score": signal_scores.get("momentum"),
+            "volume_score": signal_scores.get("volume_confirmation"),
+            "volatility_score": signal_scores.get("volatility_control"),
+            "support_resistance_score": signal_scores.get("support_resistance"),
+            "sentiment_score": signal_scores.get("sentiment"),
+            "narrative_score": signal_scores.get("narrative"),
+            "fundamental_score": signal_scores.get("fundamentals"),
+            "regime_score": signal_scores.get("regime"),
+            "expected_gross_r": None,
+            "expected_net_r": None,
+            "expected_cost": None,
+            "stop_distance": None,
+            "target_distance": None,
+            "data_quality_score": context.get("data_quality_score"),
+            "liquidity_score": volume.get("liquidity_score"),
+            "spread": None,
+            "slippage": None,
+            "volatility": volatility.get("atr_percent") or volatility.get("volatility"),
+            "recent_return": indicators.get("recent_return"),
+            "multi_timeframe_trend": technical.get("multi_timeframe_trend"),
+            "contextual_bandit_adjustment": 0.0,
+            "contextual_bandit_sample_size": 0.0,
+            "market_family": "equity",
+            "setup_type": context.get("setup_type") or "unknown",
+            "regime": market.get("market_regime") or "unknown",
+            "session": context.get("session") or "unknown",
+            "direction": direction_from_score(aggregate_score, technical),
+            "timeframe": context.get("timeframe") or "unknown",
+            "sector_or_currency_family": asset.get("sector") or asset.get("asset_type") or "unknown",
         }
 
     def baseline_prediction(self, context: dict) -> dict:
