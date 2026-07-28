@@ -1,0 +1,136 @@
+---
+language:
+- en
+- it
+license: apache-2.0
+library_name: transformers
+pipeline_tag: text-generation
+base_model: {{ release.base_model }}
+datasets:
+- {{ release.dataset_repository }}
+tags:
+- finance
+- financial-reasoning
+- investment-research
+- risk-management
+- portfolio-analysis
+- market-regime
+- financial-sentiment
+- explainable-ai
+- conversational
+---
+
+# BLUM Finance 4B
+
+**Financial Reasoning, Risk & Trading Intelligence**
+
+BLUM Finance 4B is an open financial reasoning model adapted from
+[`{{ release.base_model }}`](https://huggingface.co/{{ release.base_model }}).
+It turns timestamped evidence into a balanced thesis, contradictory evidence,
+explicit risks, invalidation conditions and a calibrated conclusion.
+
+It is not a price oracle, broker, autonomous execution system or source of live
+market truth. BLUM Engine validates market facts and calculations.
+
+## Quick Start
+
+```python
+from transformers import pipeline
+
+model = pipeline(
+    "text-generation",
+    model="{{ release.model_repository }}",
+    device_map="auto",
+)
+
+messages = [
+    {
+        "role": "system",
+        "content": "Use only supplied point-in-time evidence. Return JSON.",
+    },
+    {
+        "role": "user",
+        "content": '{"ticker":"NVDA","as_of":"2026-07-28T10:00:00Z","evidence":[{"type":"risk","value":"Volume confirmation is missing."}]}',
+    },
+]
+print(model(messages, max_new_tokens=512, do_sample=False))
+```
+
+## Measured Evaluation
+
+The candidate was compared with the exact base revision
+`{{ release.base_revision }}` on an untouched temporal test split.
+
+| Metric | Value |
+|---|---:|
+| Test samples | {{ release.evaluation.sample_size }} |
+| Base aggregate | {{ release.evaluation.base_aggregate_score }} |
+| BLUM aggregate | {{ release.evaluation.candidate_aggregate_score }} |
+| Delta | {{ release.evaluation.aggregate_delta }} |
+| No-fabrication | {{ release.evaluation.no_fabrication }} |
+| Structured validity | {{ release.evaluation.structured_validity }} |
+| Calibration error | {{ release.evaluation.calibration_error }} |
+
+[Evaluation traces]({{ release.evaluation.trace_url }})
+
+These language-model results measure financial reasoning behavior. This evaluation
+does not prove trading alpha, future profitability or benchmark outperformance.
+
+## Intended Use
+
+- financial thesis drafting from supplied evidence;
+- bull/bear contradiction analysis;
+- risk and technical invalidation explanation;
+- portfolio and benchmark-aware research;
+- abstention when evidence is incomplete;
+- English and Italian financial analysis.
+
+## Limitations
+
+- The model can still produce incorrect or stale statements.
+- It has no guaranteed access to current prices, news or filings.
+- Numerical levels must be validated by the calling application.
+- It must not independently authorize or execute a financial transaction.
+- Performance can vary by market, regime, language and prompt structure.
+
+## Known Failure Cases
+
+- Missing or contradictory point-in-time evidence can force an abstention.
+- Unsupported prompts may still elicit plausible but incorrect market facts.
+- Long filings can exceed the context supplied by the caller.
+- The model is not validated for broker execution or unattended capital control.
+
+## Related BLUM Resources
+
+- [BLUM Engine Space](https://huggingface.co/spaces/Italianhype/Blum)
+- [Reasoning dataset](https://huggingface.co/datasets/{{ release.dataset_repository }})
+
+## Community Memory
+
+Inference and installation send no telemetry. Users may explicitly create a
+redacted contribution with `blum contribute`. Contributions enter
+`Italianhype/Blum-Finance-Memory` in quarantine and never update active weights
+without review, versioning and out-of-sample validation.
+
+## Lineage
+
+- Base revision: `{{ release.base_revision }}`
+- Candidate revision: `{{ release.candidate_revision }}`
+- Dataset revision: `{{ release.dataset_revision }}`
+- Dataset: [`{{ release.dataset_repository }}`](https://huggingface.co/datasets/{{ release.dataset_repository }})
+
+## Disclaimer
+
+For research and educational use. This model does not provide financial advice,
+guaranteed signals or guaranteed profits.
+
+## Citation
+
+```bibtex
+@misc{blum_finance_4b,
+  title = {BLUM Finance 4B},
+  author = {Italianhype},
+  year = {2026},
+  url = {https://huggingface.co/Italianhype/Blum}
+}
+```

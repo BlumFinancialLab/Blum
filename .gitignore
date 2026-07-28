@@ -11,3 +11,5 @@ frontend/out/
 backend/app/static/
 *.db
 .worktrees/
+.artifacts/
+model_release/.cache/

@@ -1,0 +1,40 @@
+---
+language:
+- en
+- it
+license: other
+task_categories:
+- text-generation
+tags:
+- finance
+- financial-reasoning
+- preference-data
+---
+
+# BLUM Finance Reasoning
+
+Versioned reasoning examples exported from BLUM Engine at revision
+`{{ source_revision }}`.
+
+The dataset uses grouped temporal splits. Records from the same thesis lineage never
+cross train, validation and test. Secrets, personal identifiers, broker identifiers
+and unlicensed verbatim sources are excluded.
+
+## Splits
+
+| Split | Rows | Start | End |
+|---|---:|---|---|
+{% for split, count in split_counts.items() -%}
+| {{ split }} | {{ count }} | {{ split_date_ranges[split].start }} | {{ split_date_ranges[split].end }} |
+{% endfor %}
+
+## Redistribution
+
+The final dataset license is assigned only after the release audit confirms that all
+included material can be redistributed. The model's Apache-2.0 license does not
+automatically license this dataset.
+
+## Safety
+
+The dataset is research material, not investment advice. Its outcomes may be
+inconclusive and do not prove future returns.
