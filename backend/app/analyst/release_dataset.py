@@ -150,7 +150,31 @@ def _candidate_payload(
 ) -> dict[str, Any]:
     output = example.output_payload or {}
     reasoning = record.blum_reasoning or {}
-    messages = (example.messages or {}).get("items", [])
+    supporting = _strings(
+        output.get("supporting_evidence")
+        or reasoning.get("supporting_evidence")
+    )
+    contradicting = _strings(
+        output.get("contradicting_evidence")
+        or reasoning.get("contradicting_evidence")
+    )
+    risks = _strings(
+        output.get("risk_assessment")
+        or reasoning.get("risks")
+    )
+    invalidation = _strings(
+        output.get("invalidation_conditions")
+        or reasoning.get("invalidation_conditions")
+    )
+    messages = _normalized_messages(
+        record=record,
+        output=output,
+        reasoning=reasoning,
+        supporting=supporting,
+        contradicting=contradicting,
+        risks=risks,
+        invalidation=invalidation,
+    )
     label = outcome.outcome if outcome is not None else "insufficient_evidence"
     status = "mature" if outcome is not None and label in MATURE_OUTCOMES else "inconclusive"
     benchmark_excess = None
@@ -168,18 +192,9 @@ def _candidate_payload(
         "task_type": example.task_type,
         "messages": messages,
         "evidence": {
-            "supporting": _strings(
-                output.get("supporting_evidence")
-                or reasoning.get("supporting_evidence")
-            ),
-            "contradicting": _strings(
-                output.get("contradicting_evidence")
-                or reasoning.get("contradicting_evidence")
-            ),
-            "risks": _strings(
-                output.get("risk_assessment")
-                or reasoning.get("risks")
-            ),
+            "supporting": supporting,
+            "contradicting": contradicting,
+            "risks": risks,
             "provenance": [
                 {
                     "source_type": record.source_type or "blum_knowledge_record",
@@ -199,6 +214,93 @@ def _candidate_payload(
             "confidence_calibration_score": quality.confidence_calibration_score,
         },
     }
+
+
+def _normalized_messages(
+    *,
+    record: BlumKnowledgeRecord,
+    output: dict[str, Any],
+    reasoning: dict[str, Any],
+    supporting: list[str],
+    contradicting: list[str],
+    risks: list[str],
+    invalidation: list[str],
+) -> list[dict[str, str]]:
+    raw_status = str(
+        output.get("actionability")
+        or output.get("status")
+        or reasoning.get("actionability")
+        or reasoning.get("classification")
+        or "watch"
+    ).strip().lower()
+    allowed_statuses = {
+        "avoid",
+        "watch",
+        "wait_for_trigger",
+        "actionable_if_confirmed",
+        "manage_open_position",
+        "reduce",
+        "exit",
+        "insufficient_evidence",
+    }
+    status = raw_status if raw_status in allowed_statuses else "watch"
+    if not supporting and not contradicting:
+        status = "insufficient_evidence"
+
+    thesis = str(
+        output.get("executive_thesis")
+        or output.get("final_view")
+        or reasoning.get("executive_thesis")
+        or reasoning.get("final_view")
+        or f"Evidence for {record.ticker} remains incomplete."
+    ).strip()
+    safe_risks = risks or ["Risk evidence is incomplete and requires verification."]
+    safe_invalidation = (
+        invalidation
+        or contradicting
+        or ["The thesis must be reassessed when refreshed evidence changes."]
+    )
+    confidence = max(0.0, min(100.0, float(record.confidence or 0.0)))
+    request_payload = {
+        "ticker": record.ticker,
+        "as_of": record.created_at.isoformat(),
+        "horizon": "swing",
+        "market_context": record.market_context or {},
+        "portfolio_context": {},
+        "evidence": [
+            {"type": "supporting", "value": value} for value in supporting
+        ]
+        + [{"type": "contradicting", "value": value} for value in contradicting]
+        + [{"type": "risk", "value": value} for value in safe_risks],
+        "question": "Evaluate the evidence and state what would change the view.",
+    }
+    response_payload = {
+        "status": status,
+        "thesis": thesis,
+        "bull_case": supporting,
+        "bear_case": contradicting,
+        "risks": safe_risks,
+        "invalidation_conditions": safe_invalidation,
+        "confidence": confidence,
+        "what_would_change_the_view": safe_invalidation,
+    }
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are BLUM Finance, an evidence-bound financial reasoning model. "
+                "Use only supplied point-in-time evidence and abstain when it is insufficient."
+            ),
+        },
+        {
+            "role": "user",
+            "content": json.dumps(request_payload, ensure_ascii=False, sort_keys=True),
+        },
+        {
+            "role": "assistant",
+            "content": json.dumps(response_payload, ensure_ascii=False, sort_keys=True),
+        },
+    ]
 
 
 def _assign_temporal_splits(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

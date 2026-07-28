@@ -222,3 +222,14 @@ def test_release_dataset_uses_temporal_splits_without_lineage_leakage(tmp_path) 
     assert manifest.split_counts["validation"] == 1
     assert manifest.split_counts["test"] == 2
     assert rows[0]["created_at"] < rows[-1]["created_at"]
+    assistant_payload = json.loads(rows[0]["messages"][-1]["content"])
+    assert {
+        "status",
+        "thesis",
+        "bull_case",
+        "bear_case",
+        "risks",
+        "invalidation_conditions",
+        "confidence",
+        "what_would_change_the_view",
+    }.issubset(assistant_payload)
