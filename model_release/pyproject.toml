@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "blum-finance"
+version = "0.1.0"
+description = "Structured local inference and opt-in contribution tools for BLUM Finance."
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+dependencies = [
+  "pydantic>=2.10,<3",
+]
+
+[project.optional-dependencies]
+inference = [
+  "accelerate>=1.2",
+  "torch>=2.4",
+  "transformers>=4.51",
+]
+hub = [
+  "huggingface-hub>=0.30",
+]
+test = [
+  "pytest>=8.3",
+]
+
+[project.scripts]
+blum-contribute = "blum_finance.contributions:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["blum_finance"]
