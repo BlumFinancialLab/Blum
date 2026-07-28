@@ -7,6 +7,7 @@ from model_release.blum_finance.schemas import (
     FinancialReasoningRequest,
     FinancialReasoningResponse,
 )
+from model_release.blum_finance.inference import BlumFinancePipeline
 
 
 def test_request_requires_point_in_time_evidence() -> None:
@@ -51,3 +52,27 @@ def test_insufficient_evidence_response_can_abstain() -> None:
     )
 
     assert response.status == "insufficient_evidence"
+
+
+def test_pipeline_can_dispatch_to_explicit_mlx_runtime(monkeypatch) -> None:
+    pipeline = BlumFinancePipeline(runtime="mlx")
+    monkeypatch.setattr(
+        pipeline,
+        "_generate_with_mlx",
+        lambda messages: (
+            '{"status":"watch","thesis":"Wait for confirmation.",'
+            '"bull_case":[],"bear_case":[],"risks":[],"invalidation_conditions":[],'
+            '"confidence":42,"what_would_change_the_view":["New evidence."]}'
+        ),
+    )
+
+    response = pipeline.generate(
+        {
+            "ticker": "NVDA",
+            "as_of": "2026-07-28T10:00:00Z",
+            "evidence": [{"type": "technical", "value": "Volume is incomplete."}],
+        }
+    )
+
+    assert response.status == "watch"
+    assert response.confidence == 42

@@ -59,6 +59,7 @@ def test_model_card_contains_discoverability_and_limitations(tmp_path) -> None:
     assert "Qwen/Qwen3-4B" in text
     assert "0.68" in text
     assert "does not prove trading alpha" in text
+    assert "Not measured (0 labeled outcomes)" in text
     assert "TODO" not in text
 
 
@@ -108,3 +109,68 @@ def test_publish_requires_exact_repository_confirmation(tmp_path) -> None:
             confirmed_repository="Italianhype/Other",
             authenticated_user="Italianhype",
         )
+
+
+def test_mlx_release_requires_only_mlx_smoke_test(tmp_path) -> None:
+    release = manifest(
+        runtime="mlx",
+        base_model="mlx-community/Qwen3-4B-4bit",
+        transformers_smoke_test_passed=False,
+        gguf_smoke_test_passed=False,
+        mlx_smoke_test_passed=True,
+    )
+    weights = tmp_path / "model.safetensors"
+    weights.write_bytes(b"weights")
+    release.artifact_hashes["model.safetensors"] = __import__("hashlib").sha256(
+        weights.read_bytes()
+    ).hexdigest()
+
+    validate_publication(
+        release,
+        repository_dir=tmp_path,
+        confirmed_repository="Italianhype/Blum",
+        authenticated_user="Italianhype",
+    )
+
+
+def test_mlx_release_refuses_missing_mlx_smoke_test(tmp_path) -> None:
+    release = manifest(
+        runtime="mlx",
+        base_model="mlx-community/Qwen3-4B-4bit",
+        transformers_smoke_test_passed=False,
+        gguf_smoke_test_passed=False,
+        mlx_smoke_test_passed=False,
+    )
+
+    with pytest.raises(CandidateNotPromoted, match="MLX"):
+        validate_publication(
+            release,
+            repository_dir=tmp_path,
+            confirmed_repository="Italianhype/Blum",
+            authenticated_user="Italianhype",
+        )
+
+
+def test_mlx_model_card_uses_mlx_quick_start(tmp_path) -> None:
+    release = manifest(
+        runtime="mlx",
+        base_model="mlx-community/Qwen3-4B-4bit",
+        transformers_smoke_test_passed=False,
+        gguf_smoke_test_passed=False,
+        mlx_smoke_test_passed=True,
+    )
+
+    output = render_model_card(release, output=tmp_path / "README.md")
+    text = output.read_text(encoding="utf-8")
+
+    assert "library_name: mlx" in text
+    assert "from mlx_lm import load, generate" in text
+
+
+def test_model_card_explains_governed_incremental_learning(tmp_path) -> None:
+    output = render_model_card(manifest(), output=tmp_path / "README.md")
+    text = output.read_text(encoding="utf-8")
+
+    assert "explicit opt-in" in text
+    assert "versioned challenger" in text
+    assert "never trains inside an inference request" in text

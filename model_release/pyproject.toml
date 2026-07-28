@@ -18,6 +18,9 @@ inference = [
   "torch>=2.4",
   "transformers>=4.51",
 ]
+mlx = [
+  "mlx-lm>=0.31,<0.32",
+]
 hub = [
   "huggingface-hub>=0.30",
 ]

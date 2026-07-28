@@ -2166,7 +2166,7 @@ training speed, determine when a model may become active.
 BLUM now has a standalone, reproducible model-release boundary. BLUM Engine
 remains the source of market truth; BLUM Finance is trained only to reproduce
 evidence-bound financial reasoning, contradiction handling, risk disclosure,
-technical invalidation and calibrated abstention.
+technical invalidation and conservative abstention.
 
 The release pipeline:
 
@@ -2179,10 +2179,9 @@ The release pipeline:
 5. trains a Qwen3-4B LoRA against an immutable dataset revision;
 6. compares the candidate with the exact immutable base revision;
 7. rejects candidates with insufficient samples, no target improvement,
-   no-fabrication regression, weak structured validity, incomplete risk or
-   invalidation logic, or degraded calibration;
-8. requires Transformers and GGUF smoke tests before replacing
-   `Italianhype/Blum`.
+   absolute or relative no-fabrication failure, weak structured validity,
+   incomplete risk or invalidation logic, or degraded measured calibration;
+8. requires runtime-specific smoke tests before replacing `Italianhype/Blum`.
 
 The first audited dataset is published at
 [`Italianhype/Blum-Finance-Reasoning`](https://huggingface.co/datasets/Italianhype/Blum-Finance-Reasoning).
@@ -2190,12 +2189,32 @@ It contains 521 real BLUM reasoning examples with a 416/52/53 grouped temporal
 split. The immutable dataset revision and hashes are recorded in
 `BLUM_FINANCE_MODEL_RELEASE_REPORT.md`.
 
+The first downloadable model is published at
+[`Italianhype/Blum`](https://huggingface.co/Italianhype/Blum) as **BLUM Finance
+4B**, an MLX QLoRA derivative of the immutable
+`mlx-community/Qwen3-4B-4bit` revision. Training uses assistant-only loss and
+early stopping. A reproducible preprocessing derivative removes output numbers
+that were absent from the point-in-time input and caps unvalidated confidence
+at 70 without changing input evidence or split membership.
+
+On the 53-example temporal test, the released candidate produced 100% valid
+BLUM JSON, 100% numerical consistency, 92.86% no-fabrication score and a
+96.26% aggregate reasoning score. The exact base produced readable prose but
+zero schema-valid BLUM responses, so the aggregate delta measures task
+adherence rather than general intelligence. The test has no labeled market
+outcomes; confidence calibration is therefore **not measured**, and these
+results do not establish trading alpha.
+
 Inference and installation do not send telemetry. `blum-contribute` creates a
 local redacted bundle only after explicit consent; network upload requires the
 additional `--push` flag. Contributions enter
 [`Italianhype/Blum-Finance-Memory`](https://huggingface.co/datasets/Italianhype/Blum-Finance-Memory)
-in quarantine and never modify active weights automatically.
+in quarantine and never modify active weights automatically. Accepted examples
+can enter an immutable future training snapshot; each incremental cycle creates
+a versioned challenger and promotes it only after the same held-out gates.
+Training never runs inside an inference request or on a frontend page.
 
-The primary model is not published by this pipeline until the evidence gate
-passes. Language-model reasoning scores do not demonstrate trading alpha,
-future profitability or suitability for unattended capital execution.
+The current model release requires Apple Silicon and MLX. A portable
+Transformers/GGUF release remains a separate validation target. Language-model
+reasoning scores do not demonstrate trading alpha, future profitability or
+suitability for unattended capital execution.

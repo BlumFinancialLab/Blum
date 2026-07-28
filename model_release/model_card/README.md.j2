@@ -3,7 +3,7 @@ language:
 - en
 - it
 license: apache-2.0
-library_name: transformers
+library_name: {{ release.runtime }}
 pipeline_tag: text-generation
 base_model: {{ release.base_model }}
 datasets:
@@ -18,6 +18,8 @@ tags:
 - financial-sentiment
 - explainable-ai
 - conversational
+- mlx
+- qwen3
 ---
 
 # BLUM Finance 4B
@@ -27,14 +29,41 @@ tags:
 BLUM Finance 4B is an open financial reasoning model adapted from
 [`{{ release.base_model }}`](https://huggingface.co/{{ release.base_model }}).
 It turns timestamped evidence into a balanced thesis, contradictory evidence,
-explicit risks, invalidation conditions and a calibrated conclusion.
+explicit risks, invalidation conditions and an explicit confidence value.
 
 It is not a price oracle, broker, autonomous execution system or source of live
 market truth. BLUM Engine validates market facts and calculations.
 
 ## Quick Start
 
+{% if release.runtime == "mlx" %}
+```bash
+pip install "mlx-lm>=0.31,<0.32"
+```
+{% endif %}
+
 ```python
+{% if release.runtime == "mlx" %}
+from mlx_lm import load, generate
+
+model, tokenizer = load("{{ release.model_repository }}")
+prompt = tokenizer.apply_chat_template(
+    [
+        {
+            "role": "system",
+            "content": "Use only supplied point-in-time evidence. Return JSON.",
+        },
+        {
+            "role": "user",
+            "content": '{"ticker":"NVDA","as_of":"2026-07-28T10:00:00Z","evidence":[{"type":"risk","value":"Volume confirmation is missing."}]}',
+        },
+    ],
+    tokenize=False,
+    add_generation_prompt=True,
+    enable_thinking=False,
+)
+print(generate(model, tokenizer, prompt=prompt, max_tokens=512, verbose=False))
+{% else %}
 from transformers import pipeline
 
 model = pipeline(
@@ -54,6 +83,7 @@ messages = [
     },
 ]
 print(model(messages, max_new_tokens=512, do_sample=False))
+{% endif %}
 ```
 
 ## Measured Evaluation
@@ -69,9 +99,14 @@ The candidate was compared with the exact base revision
 | Delta | {{ release.evaluation.aggregate_delta }} |
 | No-fabrication | {{ release.evaluation.no_fabrication }} |
 | Structured validity | {{ release.evaluation.structured_validity }} |
-| Calibration error | {{ release.evaluation.calibration_error }} |
+| Calibration error | {% if release.evaluation.calibration_sample_size > 0 %}{{ release.evaluation.calibration_error }} ({{ release.evaluation.calibration_sample_size }} labeled outcomes){% else %}Not measured (0 labeled outcomes){% endif %} |
 
 [Evaluation traces]({{ release.evaluation.trace_url }})
+
+The base score can be low when otherwise readable prose fails the required JSON
+contract. The aggregate delta therefore measures BLUM task adherence, evidence
+handling and safety structure on this test; it is not a general intelligence
+comparison with the base model.
 
 These language-model results measure financial reasoning behavior. This evaluation
 does not prove trading alpha, future profitability or benchmark outperformance.
@@ -82,7 +117,7 @@ does not prove trading alpha, future profitability or benchmark outperformance.
 - bull/bear contradiction analysis;
 - risk and technical invalidation explanation;
 - portfolio and benchmark-aware research;
-- abstention when evidence is incomplete;
+- conservative abstention when evidence is incomplete;
 - English and Italian financial analysis.
 
 ## Limitations
@@ -90,8 +125,14 @@ does not prove trading alpha, future profitability or benchmark outperformance.
 - The model can still produce incorrect or stale statements.
 - It has no guaranteed access to current prices, news or filings.
 - Numerical levels must be validated by the calling application.
+- The current held-out set has no labeled market outcomes, so confidence is
+  conservatively capped but not empirically calibrated.
 - It must not independently authorize or execute a financial transaction.
 - Performance can vary by market, regime, language and prompt structure.
+{% if release.runtime == "mlx" %}
+- This release uses the MLX runtime and requires Apple Silicon. A portable
+  Transformers/GGUF release remains a separate validation target.
+{% endif %}
 
 ## Known Failure Cases
 
@@ -108,9 +149,19 @@ does not prove trading alpha, future profitability or benchmark outperformance.
 ## Community Memory
 
 Inference and installation send no telemetry. Users may explicitly create a
-redacted contribution with `blum contribute`. Contributions enter
+redacted contribution with `blum-contribute`. Contributions enter
 `Italianhype/Blum-Finance-Memory` in quarantine and never update active weights
 without review, versioning and out-of-sample validation.
+
+Incremental learning is explicit opt-in. Accepted, deduplicated contributions
+can join a future immutable training snapshot only after provenance, privacy,
+schema and quality checks. Each training cycle creates a versioned challenger,
+compares it with the active model on an untouched test split and promotes it
+only when the release gates pass. A failed challenger is retained as evidence
+and cannot replace the active model.
+
+BLUM never trains inside an inference request or lets anonymous input mutate
+released weights.
 
 ## Lineage
 

@@ -63,6 +63,7 @@ def evaluate_predictions(
             outcomes,
             bins=10,
         ),
+        calibration_sample_size=len(outcomes),
     )
     return metric, traces
 

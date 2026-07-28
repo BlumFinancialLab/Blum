@@ -23,10 +23,14 @@ def validate_publication(
         raise CandidateNotPromoted("The candidate did not pass the promotion gate.")
     if not manifest.evaluation_validated:
         raise CandidateNotPromoted("Evaluation evidence has not been validated.")
-    if not manifest.transformers_smoke_test_passed:
-        raise CandidateNotPromoted("Transformers smoke test has not passed.")
-    if not manifest.gguf_smoke_test_passed:
-        raise CandidateNotPromoted("GGUF smoke test has not passed.")
+    if manifest.runtime == "mlx":
+        if not manifest.mlx_smoke_test_passed:
+            raise CandidateNotPromoted("MLX smoke test has not passed.")
+    else:
+        if not manifest.transformers_smoke_test_passed:
+            raise CandidateNotPromoted("Transformers smoke test has not passed.")
+        if not manifest.gguf_smoke_test_passed:
+            raise CandidateNotPromoted("GGUF smoke test has not passed.")
     if confirmed_repository != manifest.model_repository:
         raise ValueError(
             "Repository confirmation does not match the release manifest."

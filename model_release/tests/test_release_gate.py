@@ -34,6 +34,20 @@ def test_candidate_with_hallucination_regression_is_rejected() -> None:
     assert "no_fabrication_regression" in decision.reasons
 
 
+def test_candidate_with_low_absolute_no_fabrication_is_rejected() -> None:
+    decision = promotion_gate(
+        base=metrics(aggregate_score=0.30, no_fabrication=0.20),
+        candidate=metrics(
+            aggregate_score=0.70,
+            aggregate_ci_lower=0.64,
+            no_fabrication=0.43,
+        ),
+    )
+
+    assert decision.promoted is False
+    assert "no_fabrication_below_gate" in decision.reasons
+
+
 def test_candidate_with_better_evidence_and_no_regression_is_promoted() -> None:
     decision = promotion_gate(
         base=metrics(aggregate_score=0.61, aggregate_ci_lower=0.58),

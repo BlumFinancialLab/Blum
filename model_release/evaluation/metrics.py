@@ -32,6 +32,7 @@ class EvaluationMetrics(BaseModel):
     numerical_consistency: float = Field(ge=0, le=1)
     no_fabrication: float = Field(ge=0, le=1)
     calibration_error: float = Field(ge=0, le=1)
+    calibration_sample_size: int = Field(default=0, ge=0)
 
 
 def bootstrap_ci(
