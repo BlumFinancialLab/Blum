@@ -937,18 +937,47 @@ class ForexStrategyRepository:
         if selected is None:
             from app.services.forex_contracts import ForexReadiness
 
-            strategy_id = "forex-exploration-bootstrap-v1"
-            exploratory = ForexStrategyEvidence(
-                strategy_id=strategy_id,
-                readiness=ForexReadiness.PAPER_TRADE_ELIGIBLE,
-                sample_size=0,
-                net_expectancy_r=0.0,
-                strategy_version="exploration-v1",
-                contextual_memory={"cells": self._policy_cells(db, {strategy_id})},
-                evidence_lane="exploration_paper",
-                certified_for_copy_readiness=False,
+            bootstrap_id = "forex-exploration-bootstrap-v1"
+            failed_global_policy = db.scalar(
+                select(ForexPolicyState.id)
+                .where(
+                    ForexPolicyState.strategy_id == bootstrap_id,
+                    ForexPolicyState.evidence_grade == "POLICY_ELIGIBLE",
+                    ForexPolicyState.confidence_adjustment <= -0.03,
+                )
+                .limit(1)
             )
-            return {pair: exploratory for pair in pairs}
+            output: dict[str, ForexStrategyEvidence] = {}
+            for pair in pairs:
+                if failed_global_policy is None:
+                    strategy_id = bootstrap_id
+                else:
+                    pair_slug = "".join(
+                        character.lower()
+                        for character in pair.split("=", 1)[0]
+                        if character.isalnum()
+                    )
+                    strategy_id = (
+                        "forex-exploration-momentum-breakout-"
+                        f"{pair_slug}-v2"
+                    )
+                output[pair] = ForexStrategyEvidence(
+                    strategy_id=strategy_id,
+                    readiness=ForexReadiness.PAPER_TRADE_ELIGIBLE,
+                    sample_size=0,
+                    net_expectancy_r=0.0,
+                    strategy_version=(
+                        "pair-specific-recovery-v2"
+                        if failed_global_policy is not None
+                        else "exploration-v1"
+                    ),
+                    contextual_memory={
+                        "cells": self._policy_cells(db, {strategy_id})
+                    },
+                    evidence_lane="exploration_paper",
+                    certified_for_copy_readiness=False,
+                )
+            return output
         current = db.scalar(select(ForexStrategyReadiness).where(ForexStrategyReadiness.strategy_id == selected.strategy_id))
         if current and current.readiness_level in {"DEGRADED", "SUSPENDED"}:
             return {}

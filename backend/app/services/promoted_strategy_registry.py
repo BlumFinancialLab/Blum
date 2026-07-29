@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
@@ -75,6 +77,74 @@ class BlumPromotedStrategyRegistry:
                 latest_by_setup[row.setup_type] = projection
         output = list(latest_by_setup.values())
         return sorted(output, key=lambda item: (item.walk_forward_score, item.validated_trade_count), reverse=True)
+
+    def bootstrap_exploration(
+        self,
+        *,
+        market: str,
+        asset_class: str,
+    ) -> PromotedIntradayStrategy:
+        """Build a non-certified, reduced-risk contract for evidence collection.
+
+        This contract is used only when the registry has no promoted or
+        evidence-backed challenger. The normal signal, data, cost, liquidity,
+        session, sizing, and execution gates still apply.
+        """
+
+        normalized_market = normalize_market(market)
+        normalized_class = str(asset_class or "Stock").strip() or "Stock"
+        spec = canonical_strategy_spec("intraday_breakout")
+        risk_multiplier = min(
+            0.10,
+            max(
+                0.05,
+                float(settings.intraday_experimental_risk_multiplier),
+            ),
+        )
+        slug = "-".join(
+            part
+            for part in (
+                normalized_market.lower().replace("_", "-"),
+                normalized_class.lower().replace("_", "-"),
+            )
+            if part
+        )
+        metrics = {
+            "certification_version": "bootstrap_exploration_v1",
+            "validation_verdict": "UNVALIDATED_EXPLORATION",
+            "evidence_lane": "bootstrap_exploration_paper",
+            "paper_risk_multiplier": risk_multiplier,
+            "certified_for_copy_readiness": False,
+            "net_expectancy_r": 0.0,
+            "benchmark_excess": None,
+            "sample_size": 0,
+            "guardrail": (
+                "Paper evidence only; strict point-in-time, cost, liquidity, "
+                "risk, and execution gates remain mandatory."
+            ),
+        }
+        return PromotedIntradayStrategy(
+            validation_id=None,
+            strategy_id=f"bootstrap-intraday-breakout-{slug}-v1",
+            setup_type="intraday_breakout",
+            supported_markets=(normalized_market,),
+            supported_asset_classes=(normalized_class,),
+            timeframe_stack=tuple(spec.required_timeframes),
+            entry_rules={"entry_rule": spec.entry_rule},
+            stop_rules={"stop_atr_multiple": spec.stop_atr_multiple},
+            target_rules={"target_r_multiple": spec.target_r_multiple},
+            minimum_confidence=50.0,
+            minimum_edge_score=50.0,
+            validated_trade_count=0,
+            walk_forward_score=50.0,
+            expected_costs={},
+            max_allowed_drawdown=0.0,
+            promotion_timestamp=datetime.utcnow(),
+            model_version="bootstrap-exploration-v1",
+            evidence_type=PAPER_FORWARD_INTRADAY_EXPERIMENTAL,
+            executable_strategy=spec.to_payload(),
+            metrics=metrics,
+        )
 
     @staticmethod
     def _experimental_rows(db: Session) -> list[ReplayStrategyValidation]:

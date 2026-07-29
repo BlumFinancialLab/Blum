@@ -16,7 +16,7 @@ REQUIRED_INTRADAY_TIMEFRAMES = ("1d", "15m", "5m", "1m")
 
 @dataclass(frozen=True)
 class PromotedIntradayStrategy:
-    validation_id: int
+    validation_id: int | None
     strategy_id: str
     setup_type: str
     supported_markets: tuple[str, ...]
@@ -78,7 +78,7 @@ class IntradayDecision:
     desk: str
     benchmark_ticker: str
     strategy_id: str
-    validation_id: int
+    validation_id: int | None
     setup_type: str
     decision_timestamp: datetime
     entry_price: float | None = None

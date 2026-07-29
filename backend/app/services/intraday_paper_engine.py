@@ -141,6 +141,16 @@ class BlumIntradayPaperEngine:
                         asset_class=asset.asset_type or asset.category or "Stock",
                     )
                     evidence_lane = "experimental_paper" if strategies else evidence_lane
+                if not strategies and settings.intraday_experimental_paper_enabled:
+                    strategies = [
+                        self.registry.bootstrap_exploration(
+                            market=market,
+                            asset_class=asset.asset_type
+                            or asset.category
+                            or "Stock",
+                        )
+                    ]
+                    evidence_lane = "bootstrap_exploration_paper"
                 if not strategies:
                     blockers.append({"ticker": asset.ticker, "market": market, "reason": "NO_PROMOTED_INTRADAY_STRATEGY"})
                     continue
@@ -326,9 +336,9 @@ class BlumIntradayPaperEngine:
         feedback = self.paper.feedback_metadata(db, ticker=asset.ticker, setup_type=decision.setup_type)
         evidence_lane = str(decision.evidence.get("evidence_lane") or "certified_paper")
         trade_evidence_type = (
-            PAPER_FORWARD_INTRADAY_EXPERIMENTAL
-            if evidence_lane == "experimental_paper"
-            else PAPER_FORWARD_INTRADAY
+            PAPER_FORWARD_INTRADAY
+            if evidence_lane == "certified_paper"
+            else PAPER_FORWARD_INTRADAY_EXPERIMENTAL
         )
         costs = decision.costs or {}
         observed_entry = float(decision.entry_price or 0.0)
@@ -402,7 +412,10 @@ class BlumIntradayPaperEngine:
             confirmation_condition=(
                 "All certified-strategy and strict data gates passed."
                 if evidence_lane == "certified_paper"
-                else "Experimental challenger passed strict data, cost and execution gates; evidence remains uncertified."
+                else (
+                    "Uncertified exploration contract passed strict data, "
+                    "trigger, cost, liquidity, risk and execution gates."
+                )
             ),
             entry_price=None,
             entry_date=None,

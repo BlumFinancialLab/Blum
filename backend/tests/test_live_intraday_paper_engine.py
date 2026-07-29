@@ -252,6 +252,51 @@ def test_registry_exposes_positive_cost_adjusted_challenger_as_experimental_only
     assert experimental[0].metrics["paper_risk_multiplier"] == 0.25
 
 
+def test_registry_builds_uncertified_bootstrap_for_evidence_generation():
+    strategy = BlumPromotedStrategyRegistry().bootstrap_exploration(
+        market="USA",
+        asset_class="Stock",
+    )
+
+    assert strategy.validation_id is None
+    assert strategy.strategy_id == "bootstrap-intraday-breakout-usa-stock-v1"
+    assert strategy.metrics["evidence_lane"] == "bootstrap_exploration_paper"
+    assert strategy.metrics["paper_risk_multiplier"] <= 0.10
+    assert strategy.metrics["certified_for_copy_readiness"] is False
+    assert strategy.validated_trade_count == 0
+
+
+def test_intraday_engine_uses_bootstrap_only_when_no_registry_strategy(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.intraday_paper_engine.settings.intraday_experimental_paper_enabled",
+        True,
+    )
+    with setup_db() as db:
+        asset = seed_asset(db)
+        seed_complete_stack(db, asset)
+        engine = BlumIntradayPaperEngine(
+            refresh_missing=False,
+            now_provider=lambda: NOW,
+        )
+
+        result = engine.run_once(db, trigger="test", assets=[asset])
+
+        trade = db.scalar(
+            select(LiveForwardPaperTrade).where(
+                LiveForwardPaperTrade.evidence_type
+                == PAPER_FORWARD_INTRADAY_EXPERIMENTAL
+            )
+        )
+
+    assert result["candidates_approved"] == 1
+    assert trade is not None
+    assert trade.promoted_validation_id is None
+    assert trade.risk_percent <= 0.10
+    assert trade.frozen_decision_payload["evidence"][
+        "evidence_lane"
+    ] == "bootstrap_exploration_paper"
+
+
 def test_registry_accepts_measured_zero_overfitting_risk(monkeypatch):
     monkeypatch.setattr("app.services.promoted_strategy_registry.settings.intraday_experimental_min_samples", 100)
     with setup_db() as db:
@@ -497,17 +542,18 @@ def test_intraday_discovery_rotates_across_the_stored_asset_universe():
 
         first = engine.run_once(db, trigger="test")
         second = engine.run_once(db, trigger="test")
+        runs = db.scalars(
+            select(IntradayPaperRun).order_by(IntradayPaperRun.id)
+        ).all()
+        first_tickers = set(
+            runs[-2].summary_json["asset_discovery"]["selected_tickers"]
+        )
+        second_tickers = set(
+            runs[-1].summary_json["asset_discovery"]["selected_tickers"]
+        )
 
-    first_tickers = {
-        row["ticker"]
-        for row in first["blockers"]
-        if row.get("reason") == "NO_PROMOTED_INTRADAY_STRATEGY"
-    }
-    second_tickers = {
-        row["ticker"]
-        for row in second["blockers"]
-        if row.get("reason") == "NO_PROMOTED_INTRADAY_STRATEGY"
-    }
+    assert first["assets_checked"] == 10
+    assert second["assets_checked"] == 10
     assert len(first_tickers) == 10
     assert len(second_tickers) == 10
     assert first_tickers.isdisjoint(second_tickers)

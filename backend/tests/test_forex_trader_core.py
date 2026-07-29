@@ -174,6 +174,50 @@ def test_empty_registry_bootstrap_loads_eligible_reinforcement_policy(db):
     assert policy_cells[0]["confidence_adjustment"] == pytest.approx(0.041)
 
 
+def test_negative_global_bootstrap_policy_rotates_to_pair_specific_challenger(db):
+    db.add(
+        ForexPolicyState(
+            policy_key="STRATEGY|forex-exploration-bootstrap-v1|ALL|ALL|ALL|ALL",
+            strategy_id="forex-exploration-bootstrap-v1",
+            session="ALL",
+            regime="ALL",
+            setup_family="ALL",
+            direction="ALL",
+            sample_size=20,
+            q_value=-0.35,
+            reward_sum=-7.0,
+            reward_sq_sum=5.0,
+            evidence_grade="POLICY_ELIGIBLE",
+            confidence_adjustment=-0.041,
+        )
+    )
+    db.commit()
+
+    strategies = ForexStrategyRepository().load(
+        db,
+        ["EURUSD=X", "GBPUSD=X"],
+    )
+
+    assert strategies["EURUSD=X"].strategy_id == (
+        "forex-exploration-momentum-breakout-eurusd-v2"
+    )
+    assert strategies["GBPUSD=X"].strategy_id == (
+        "forex-exploration-momentum-breakout-gbpusd-v2"
+    )
+    assert strategies["EURUSD=X"].evidence_lane == "exploration_paper"
+    assert strategies["EURUSD=X"].certified_for_copy_readiness is False
+    assert strategies["EURUSD=X"].contextual_memory["cells"] == []
+    assert (
+        BlumForexTraderCore()
+        .evaluate_input(
+            market_input(),
+            strategy=strategies["EURUSD=X"],
+        )
+        .approved
+        is True
+    )
+
+
 def strategy_with_memory(*, grade: str, adjustment: float) -> ForexStrategyEvidence:
     base = strategy()
     return ForexStrategyEvidence(
