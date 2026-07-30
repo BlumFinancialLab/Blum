@@ -97,6 +97,12 @@ class Settings(BaseSettings):
     trading_ml_optuna_trials: int = 12
     trading_ml_optuna_timeout_seconds: int = 90
     trading_ml_artifact_root: str = "/data/trading_ml"
+    finrlx_enabled: bool = Field(default=False, alias="BLUM_FINRLX_ENABLED")
+    finrlx_runner_command: str = Field(default="", alias="BLUM_FINRLX_RUNNER_COMMAND")
+    finrlx_artifact_root: str = Field(default="/data/trading_ml/finrlx", alias="BLUM_FINRLX_ARTIFACT_ROOT")
+    finrlx_manifest_path: str = Field(default="", alias="BLUM_FINRLX_MANIFEST_PATH")
+    finrlx_feature_schema_hash: str = Field(default="", alias="BLUM_FINRLX_FEATURE_SCHEMA_HASH")
+    finrlx_timeout_seconds: int = Field(default=90, alias="BLUM_FINRLX_TIMEOUT_SECONDS")
     trading_game_enabled: bool = Field(default=True, alias="TRADING_GAME_ENABLED")
     trading_game_initial_capital: float = Field(default=100.0, alias="TRADING_GAME_INITIAL_CAPITAL")
     trading_game_target_capital: float = Field(default=10000.0, alias="TRADING_GAME_TARGET_CAPITAL")

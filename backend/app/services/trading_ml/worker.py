@@ -24,6 +24,7 @@ from .contracts import (
     TradingMLExample,
 )
 from .feature_store import TradingMLFeatureStoreProjector
+from .finrlx import FinRLXQuantEngine
 from .registry import TradingMLModelRegistry, TradingMLPromotionService
 from .training import BoundedOptunaChallengerSearch, OnlineShadowTrainer, SklearnTradingModelTrainer
 
@@ -49,6 +50,7 @@ class TradingMLLearningWorker:
         )
         self.registry = TradingMLModelRegistry(self.root)
         self.promotion = TradingMLPromotionService(self.root)
+        self.finrlx = FinRLXQuantEngine()
 
     def run_once(self, db: Session, trigger: str = "scheduled") -> dict:
         started = time.perf_counter()
@@ -74,11 +76,13 @@ class TradingMLLearningWorker:
                     "error": f"{type(exc).__name__}: {exc}",
                 }
 
+        finrlx = self._run_finrlx(started)
         duration = time.perf_counter() - started
         payload = {
             "status": "COMPLETED" if any(item.get("status") != "FAILED" for item in markets.values()) else "FAILED",
             "trigger": trigger,
             "markets": markets,
+            "finrlx": finrlx,
             "duration_seconds": round(duration, 4),
             "bounded": True,
             "decision_policy": "shadow/challenger models have no authority; only evidence-gated ACTIVE models advise within guardrails",
@@ -114,6 +118,38 @@ class TradingMLLearningWorker:
             payload={"markets": markets, "items_processed": total_processed},
         )
         return payload
+
+    def _run_finrlx(self, started: float) -> dict:
+        """Run optional external research without affecting core worker success."""
+        try:
+            status = self.finrlx.status()
+            if status.get("status") != "NO_VALIDATED_ARTIFACT":
+                return status
+            remaining_seconds = self.max_runtime_seconds - (time.perf_counter() - started)
+            if remaining_seconds < 1:
+                return {
+                    "status": "BUDGET_EXHAUSTED",
+                    "reason": "Core trading ML lanes consumed the current worker budget.",
+                    "paper_only": True,
+                }
+            return self.finrlx.run_training(
+                market_family="forex",
+                request={
+                    "feature_store_root": str((self.root / "feature_store").resolve()),
+                    "artifact_root": str(
+                        Path(getattr(self.finrlx, "artifact_root", self.root / "finrlx")).resolve()
+                    ),
+                    "max_rows": self.max_rows,
+                    "max_runtime_seconds": max(1, int(remaining_seconds)),
+                    "paper_only": True,
+                },
+            )
+        except Exception as exc:
+            return {
+                "status": "FAILED",
+                "reason": f"{type(exc).__name__}: {exc}",
+                "paper_only": True,
+            }
 
     def _run_market(self, db: Session, market_family: str, trigger: str, started: float) -> dict:
         active = db.scalar(

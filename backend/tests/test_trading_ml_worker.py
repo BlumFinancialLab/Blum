@@ -168,3 +168,35 @@ def test_end_to_end_challenger_audit_chain(db, tmp_path):
     assert model.dataset_hash
     assert model.artifact_sha256
     assert model.status == "SHADOW"
+
+
+class FakeFinRLXEngine:
+    enabled = True
+
+    def __init__(self):
+        self.training_requests = []
+
+    def status(self):
+        return {"status": "NO_VALIDATED_ARTIFACT", "paper_only": True}
+
+    def run_training(self, *, market_family, request):
+        self.training_requests.append((market_family, request))
+        return {
+            "status": "VALIDATED_SHADOW",
+            "paper_only": True,
+            "manifest": {"algorithm": "PPO", "market_family": market_family},
+        }
+
+
+def test_worker_runs_optional_finrlx_research_inside_existing_budget(db, tmp_path):
+    instance = worker(tmp_path)
+    finrlx = FakeFinRLXEngine()
+    instance.finrlx = finrlx
+
+    result = instance.run_once(db, "test")
+
+    assert result["finrlx"]["status"] == "VALIDATED_SHADOW"
+    assert finrlx.training_requests[0][0] == "forex"
+    assert finrlx.training_requests[0][1]["max_rows"] == 8
+    stored = db.query(DashboardSnapshot).filter_by(snapshot_type="trading_ml_status").first()
+    assert stored.payload_json["finrlx"]["paper_only"] is True

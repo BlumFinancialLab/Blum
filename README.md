@@ -2161,6 +2161,46 @@ do not claim guaranteed profitability or copy readiness. Forex forward evidence
 was still limited to 38 outcomes at design time, so the evidence gates, not
 training speed, determine when a model may become active.
 
+### Optional FinRL-X Quant Challenger
+
+BLUM exposes an optional FinRL-X-compatible boundary for quantitative policy
+research. The integration is pinned to
+`AI4Finance-Foundation/FinRL-Trading` revision
+`e65d6f0483ead7d2ef4a5fc940cdf960392a25c1`. FinRL-X, PyTorch and
+Stable-Baselines3 are not application startup dependencies: a separately
+configured executable receives bounded JSON requests from the existing
+background Trading ML worker.
+
+Every external artifact is rejected before use unless its manifest has the
+expected provider, pinned upstream revision, supported algorithm, exact feature
+schema, compatible market/action schema, SHA-256 digest and `paper_only=true`.
+The accepted algorithms are PPO, SAC, TD3, DDPG, A2C and deterministic
+baselines. The worker publishes FinRL-X availability and validation state in
+the existing `trading_ml_status` snapshot.
+
+For Forex, validated policy output is stored in each decision under
+`finrlx_quant` as shadow evidence. It may return only a bounded directional
+score. BLUM continues to own data freshness, macro-event vetoes, costs, risk,
+lots, margin, stops, targets and simulated execution. Existing blockers force
+the external proposal to `HOLD`; no external proposal can open an order or
+remove a blocker.
+
+The integration is disabled by default:
+
+```dotenv
+BLUM_FINRLX_ENABLED=false
+BLUM_FINRLX_RUNNER_COMMAND=/absolute/path/to/finrlx-runner
+BLUM_FINRLX_ARTIFACT_ROOT=/data/trading_ml/finrlx
+BLUM_FINRLX_MANIFEST_PATH=/data/trading_ml/finrlx/manifest.json
+BLUM_FINRLX_FEATURE_SCHEMA_HASH=
+BLUM_FINRLX_TIMEOUT_SECONDS=90
+```
+
+Leaving `BLUM_FINRLX_FEATURE_SCHEMA_HASH` empty binds validation to BLUM's
+current Trading ML feature schema. Training remains background-only and
+bounded. This integration does not add broker connectivity, real-money
+execution, automatic promotion, or a claim of alpha.
+
 ## BLUM Finance Model Release
 
 BLUM now has a standalone, reproducible model-release boundary. BLUM Engine

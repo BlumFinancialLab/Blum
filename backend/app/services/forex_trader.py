@@ -53,6 +53,7 @@ from app.services.forex_risk import BlumForexPortfolioRiskEngine, ForexPortfolio
 from app.services.promoted_strategy_registry import BlumPromotedStrategyRegistry
 from app.services.replay_data import MultiProviderReplayDataService
 from app.services.dashboard_snapshots import DashboardSnapshotService
+from app.services.trading_ml.finrlx import FinRLXQuantEngine
 from app.services.trading_ml.inference import TradingMLInferenceService, advice_payload
 from app.core.config import get_settings
 
@@ -238,6 +239,7 @@ class BlumForexTraderCore:
         self.model_council = FinancialModelCouncil()
         self.manager = BlumForexPositionManagerAgent()
         self.supervised_advisor = TradingMLInferenceService()
+        self.quant_advisor = FinRLXQuantEngine()
 
     def evaluate_input(self, market: AgentMarketInput, *, strategy: ForexStrategyEvidence) -> EvaluationOutcome:
         context = self.context.analyze(market)
@@ -304,10 +306,11 @@ class BlumForexTraderCore:
             db.flush()
             context_output = evaluation.agent_outputs.get("context", {})
             price_output = evaluation.agent_outputs.get("price_action", {})
+            ml_features = self._supervised_features(market, evaluation)
             supervised = self.supervised_advisor.advise(
                 db,
                 market_family="forex",
-                features=self._supervised_features(market, evaluation),
+                features=ml_features,
                 baseline_output={
                     "approved": evaluation.approved,
                     "confidence": evaluation.proposal.confidence,
@@ -373,6 +376,20 @@ class BlumForexTraderCore:
             decision.status = "APPROVED" if evaluation.approved else "REJECTED"
             decision.blockers = list(evaluation.blockers)
             decision.proposal_json = _jsonable(asdict(evaluation.proposal))
+            quant_proposal = self.quant_advisor.propose(
+                market_family="forex",
+                features=ml_features,
+                context={
+                    "pair": market.pair,
+                    "session": market.session,
+                    "regime": context_output.get("regime"),
+                    "setup_type": evaluation.proposal.setup_family,
+                    "spread": market.quote.ask - market.quote.bid,
+                    "decision_timestamp": now.isoformat(),
+                },
+                deterministic_blockers=evaluation.blockers,
+            )
+            quant_payload = quant_proposal.to_payload()
             model_review = self.model_council.review_forex_decision(
                 db,
                 decision_id=decision.id,
@@ -393,6 +410,7 @@ class BlumForexTraderCore:
                 **dict(decision.proposal_json or {}),
                 "model_council": model_review,
                 "supervised_model": supervised_payload,
+                "finrlx_quant": quant_payload,
             }
             if not evaluation.approved:
                 rejected.append({"pair": market.pair, "blockers": list(evaluation.blockers)})

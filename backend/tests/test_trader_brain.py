@@ -710,11 +710,14 @@ def test_paper_trading_page_separates_equity_and_forex_from_one_snapshot():
     assert text.count("api.traderPaperTrading(50)") == 1
 
 
-def test_paper_trading_summary_does_not_prefer_narrow_zero_counts_over_terminal_totals():
+def test_paper_trading_summary_uses_selected_market_totals_without_global_leakage():
     page = Path(__file__).resolve().parents[2] / "frontend" / "app" / "paper-trading" / "page.tsx"
     text = page.read_text()
 
-    assert "maxAvailableCount(counts.candidates, candidates.length, snapshot.candidate_count)" in text
-    assert "maxAvailableCount(counts.closed, closedTrades.length, snapshot.closed_count)" in text
-    assert "snapshot.candidate_count ?? counts.candidates" not in text
-    assert "snapshot.closed_count ?? counts.closed" not in text
+    assert 'const selectedMarketKey = marketTab === "forex" ? "forex" : "equities"' in text
+    assert "marketCounts[selectedMarketKey]" in text
+    assert "marketMetrics[selectedMarketKey]" in text
+    assert "maxAvailableCount(counts.candidates, candidates.length)" in text
+    assert "maxAvailableCount(counts.closed, closedTrades.length)" in text
+    assert "snapshot.candidate_count" not in text
+    assert "snapshot.closed_count" not in text

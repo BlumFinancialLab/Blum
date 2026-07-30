@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.services.forex_trader import BlumForexTraderCore
 from app.services.trading_ml.contracts import TradingMLAdvice
+from app.services.trading_ml.finrlx import QuantPolicyProposal
 from test_forex_trader_core import NOW, db, market_input, strategy  # noqa: F401
 
 
@@ -20,6 +21,24 @@ class FakeAdvisor:
             veto_recommended=not self.positive,
             explanation=("test evidence",),
             guardrails=("DETERMINISTIC_AUTHORITY",),
+        )
+
+
+class FakeQuantAdvisor:
+    def __init__(self):
+        self.calls = []
+
+    def propose(self, **kwargs):
+        self.calls.append(kwargs)
+        return QuantPolicyProposal(
+            status="SHADOW",
+            action="LONG",
+            directional_score=0.72,
+            confidence=0.68,
+            uncertainty=0.21,
+            reason="test FinRL-X challenger",
+            model="finrlx:PPO:test",
+            guardrails=("PAPER_ONLY", "SHADOW_ONLY", "DETERMINISTIC_AUTHORITY"),
         )
 
 
@@ -65,3 +84,26 @@ def test_positive_model_is_a_bounded_advisor_not_a_risk_bypass(db):
     decision = db.query(__import__("app.models", fromlist=["ForexDecision"]).ForexDecision).one()
     assert decision.proposal_json["supervised_model"]["model_uid"] == "forex-test-champion"
     assert decision.proposal_json["knowledge_context"]["supervised_model"]["combined_contextual_adjustment_points"] <= 10.0
+
+
+def test_finrlx_challenger_is_recorded_without_execution_authority(db):
+    core = BlumForexTraderCore()
+    core.supervised_advisor = FakeAdvisor(positive=True)
+    quant = FakeQuantAdvisor()
+    core.quant_advisor = quant
+
+    result = core.run_cycle(
+        db,
+        inputs=[market_input()],
+        strategies={"EURUSD=X": strategy()},
+        now=NOW,
+        cycle_key="finrlx-shadow",
+    )
+
+    decision = db.query(__import__("app.models", fromlist=["ForexDecision"]).ForexDecision).one()
+    assert result["trades_opened"] == 1
+    assert decision.proposal_json["finrlx_quant"]["status"] == "SHADOW"
+    assert decision.proposal_json["finrlx_quant"]["action"] == "LONG"
+    assert decision.proposal_json["finrlx_quant"]["paper_only"] is True
+    assert decision.risk_json
+    assert quant.calls[0]["deterministic_blockers"] == ()

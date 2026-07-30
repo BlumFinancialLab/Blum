@@ -4,6 +4,7 @@ from .contracts import FeatureSchema, TradingMLAdvice, TradingMLExample
 from .dataset import DatasetSlice, TradingMLDatasetRepository
 from .feature_store import FeatureStoreLockTimeout, ProjectionResult, TradingMLFeatureStoreProjector
 from .features import EVIDENCE_WEIGHTS, FutureFeatureDataError, IneligibleFeatureDataError, TradingMLFeatureBuilder, UnlabeledFeatureDataError
+from .finrlx import FinRLXArtifactValidator, FinRLXQuantEngine, QuantPolicyProposal
 from .inference import TradingMLInferenceService
 from .registry import TradingMLModelRegistry, TradingMLPromotionService
 from .training import BoundedOptunaChallengerSearch, OnlineShadowTrainer, SklearnTradingModelTrainer
@@ -14,6 +15,8 @@ __all__ = [
     "DatasetSlice",
     "FeatureSchema",
     "FeatureStoreLockTimeout",
+    "FinRLXArtifactValidator",
+    "FinRLXQuantEngine",
     "FutureFeatureDataError",
     "IneligibleFeatureDataError",
     "TradingMLAdvice",
@@ -30,4 +33,5 @@ __all__ = [
     "BoundedOptunaChallengerSearch",
     "UnlabeledFeatureDataError",
     "ProjectionResult",
+    "QuantPolicyProposal",
 ]
