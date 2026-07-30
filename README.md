@@ -2119,6 +2119,14 @@ separate tab. Both views are derived client-side from the same snapshot. The
 projection reserves bounded capacity for each active market group so frequent
 Forex decisions cannot evict all equity rows from the visible journal.
 
+Terminal outcomes without a fill keep `net_pnl_eur=null` and are displayed as
+`not realized`; they are never presented as zero-profit trades. Small measured
+P/L remains visible with additional decimal precision. Intraday Forex uses a
+separate margin-accounting contract: position size is expressed in base
+currency units, risk and P/L are converted to EUR using point-in-time FX data,
+and only simulated margin is reserved. Missing conversion data blocks the
+order rather than assuming an exchange rate.
+
 ## Trading ML Champion/Challenger
 
 BLUM now has a supervised trading-learning lane for equities and Forex. It uses
@@ -2186,12 +2194,17 @@ The accepted algorithms are PPO, SAC, TD3, DDPG, A2C and deterministic
 baselines. The worker publishes FinRL-X availability and validation state in
 the existing `trading_ml_status` snapshot.
 
-For Forex, validated policy output is stored in each decision under
-`finrlx_quant` as shadow evidence. It may return only a bounded directional
-score. BLUM continues to own data freshness, macro-event vetoes, costs, risk,
-lots, margin, stops, targets and simulated execution. Existing blockers force
-the external proposal to `HOLD`; no external proposal can open an order or
-remove a blocker.
+For Forex and strict intraday candidates, policy output is stored under
+`finrlx_quant` together with a `finrlx_overlay` audit. It may return only a
+bounded directional score or target-weight proposal. The overlay remains
+frozen until a chronological holdout has at least 100 samples, directional
+accuracy is at least 52%, mean policy net R is positive, and the Ridge return
+forecast beats its constant baseline. Only then can alignment move confidence
+by at most five points; disagreement requires another confirmation. BLUM
+continues to own data freshness, macro-event vetoes, costs, risk, units/lots,
+margin, stops, targets and simulated execution. Existing blockers force the
+external proposal to `HOLD`; no external proposal can open an order or remove
+a blocker.
 
 The Python configuration remains fail-closed by default. The production Docker
 image explicitly enables the bundled runner:

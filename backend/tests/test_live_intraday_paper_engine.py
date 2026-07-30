@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
+import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
@@ -1037,6 +1038,114 @@ def test_point_in_time_fx_rate_uses_only_stored_bar_at_or_before_decision() -> N
         resolved = point_in_time_fx_rate(db, asset_currency="USD", account_currency="EUR", at=NOW)
 
     assert resolved == 1.08
+
+
+def test_forex_intraday_lifecycle_reserves_margin_and_books_eur_pnl() -> None:
+    with setup_db() as db:
+        game = LiveForwardPaperGame(
+            game_id="forex-accounting",
+            starting_capital=100.0,
+            current_capital=100.0,
+            cash=100.0,
+            exposure=0.0,
+        )
+        db.add(game)
+        db.flush()
+        trade = LiveForwardPaperTrade(
+            trade_uid="forex-intraday-accounting",
+            game_id=game.id,
+            ticker="EURJPY=X",
+            asset_type="Forex",
+            setup_type="intraday_breakout",
+            status="OPEN",
+            decision_timestamp=NOW,
+            entry_date=NOW.date(),
+            entry_price=187.0,
+            opened_at=NOW,
+            stop_loss=186.5,
+            target_1=187.5,
+            position_size=187.0,
+            expected_risk=0.5,
+            risk_amount=0.5,
+            duplicate_key="forex-intraday-accounting",
+            trading_mode="INTRADAY_PAPER_FORWARD",
+            evidence_type=PAPER_FORWARD_INTRADAY,
+            market="FOREX",
+            desk="ForexDeskAgent",
+            session_name="regular",
+            execution_costs={},
+            frozen_decision_payload={"regime": "trend_up"},
+            intraday_metadata={
+                "accounting_model": "forex_margin_account_v1",
+                "account_fx_rate": 187.0,
+                "margin_reserved_eur": 187.0 / 30.0,
+                "observed_entry_price": 187.0,
+            },
+        )
+        db.add(trade)
+        db.flush()
+        order = PaperExecutionOrder(
+            order_uid="forex-order",
+            duplicate_key="forex-order",
+            paper_trade_id=trade.id,
+            ticker=trade.ticker,
+            side="BUY",
+            order_type="LIMIT",
+            status="FILLED",
+            decision_timestamp=NOW,
+            submitted_at=NOW,
+            theoretical_price=187.0,
+            requested_quantity=187.0,
+            filled_quantity=187.0,
+            remaining_quantity=0.0,
+            average_fill_price=187.0,
+            currency="JPY",
+            account_currency="EUR",
+            fx_rate=187.0,
+        )
+        db.add(order)
+        db.flush()
+        engine = BlumIntradayPaperEngine(
+            now_provider=lambda: NOW,
+            refresh_missing=False,
+        )
+
+        engine._account_filled_order(db, game=game, trade=trade, order=order)
+        margin = 187.0 / 30.0
+        assert trade.notional_value == pytest.approx(187.0)
+        assert game.cash == pytest.approx(100.0 - margin)
+        assert game.exposure == pytest.approx(margin)
+
+        bar = ReplayMarketBar(
+            asset_id=None,
+            source_symbol=trade.ticker,
+            normalized_symbol=trade.ticker,
+            market="FOREX",
+            timeframe="1m",
+            bar_timestamp=NOW + timedelta(minutes=1),
+            open=187.2,
+            high=187.3,
+            low=187.1,
+            close=187.2,
+            volume=0,
+            provider="fixture",
+            acquired_at=NOW,
+            data_quality_score=95.0,
+            source_metadata={},
+        )
+        engine._close_trade(
+            db,
+            game=game,
+            trade=trade,
+            bar=bar,
+            raw_exit=187.2,
+            reason="TIME_STOP",
+        )
+
+    assert trade.net_pnl_eur == pytest.approx(0.2)
+    assert game.current_capital == pytest.approx(100.2)
+    assert game.cash == pytest.approx(100.2)
+    assert game.exposure == 0.0
 
 
 def test_replay_bar_execution_adapter_preserves_halt_and_auction_metadata() -> None:

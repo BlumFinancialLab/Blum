@@ -3,8 +3,10 @@ import test from "node:test";
 import {
   filterPaperLifecycle,
   filterPaperMarket,
+  formatPaperCurrency,
   isForexPaperTrade,
   mergePaperTrades,
+  paperPnlTone,
 } from "../lib/paperTradingView.mjs";
 
 test("a closed trade replaces an older skipped projection of the same trade", () => {
@@ -68,4 +70,17 @@ test("forex identity wins over stale intraday market grouping", () => {
   assert.equal(isForexPaperTrade(rows[1]), false);
   assert.deepEqual(filterPaperMarket(rows, "equities").map((row) => row.trade_id), ["intraday-equity"]);
   assert.deepEqual(filterPaperMarket(rows, "forex").map((row) => row.trade_id), ["intraday-forex"]);
+});
+
+test("missing paper pnl is not rendered as a zero result", () => {
+  assert.equal(formatPaperCurrency(null), "not realized");
+  assert.equal(formatPaperCurrency(undefined), "not realized");
+  assert.equal(paperPnlTone(null), "neutral");
+});
+
+test("small forex pnl remains visible without negative zero", () => {
+  assert.equal(formatPaperCurrency(-0.002048), "-0.002048 EUR");
+  assert.equal(formatPaperCurrency(0.000858), "+0.000858 EUR");
+  assert.equal(formatPaperCurrency(1.234), "+1.23 EUR");
+  assert.equal(paperPnlTone(-0.002048), "negative");
 });

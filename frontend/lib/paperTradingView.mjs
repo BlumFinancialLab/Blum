@@ -65,3 +65,20 @@ export function filterPaperLifecycle(rows, lifecycle) {
       : CANDIDATE_PAPER_STATUSES;
   return rows.filter((row) => statuses.has(normalizePaperStatus(row.status)));
 }
+
+export function formatPaperCurrency(value) {
+  if (value === null || value === undefined || value === "") return "not realized";
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "not realized";
+  const absolute = Math.abs(number);
+  const digits = absolute > 0 && absolute < 0.01 ? 6 : 2;
+  const prefix = number > 0 ? "+" : "";
+  return `${prefix}${number.toFixed(digits)} EUR`;
+}
+
+export function paperPnlTone(value) {
+  if (value === null || value === undefined || value === "") return "neutral";
+  const number = Number(value);
+  if (!Number.isFinite(number) || number === 0) return "neutral";
+  return number > 0 ? "positive" : "negative";
+}

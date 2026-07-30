@@ -80,6 +80,10 @@ class QuantPolicyProposal:
     model: str | None = None
     guardrails: tuple[str, ...] = ()
     paper_only: bool = True
+    validation_sample_count: int = 0
+    directional_accuracy: float | None = None
+    mean_policy_net_r: float | None = None
+    regression_improvement: float | None = None
 
     def to_payload(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -431,6 +435,7 @@ class FinRLXQuantEngine:
         score = _bounded_float(raw.get("directional_score"), minimum=-1.0, maximum=1.0)
         confidence = _optional_bounded_float(raw.get("confidence"))
         uncertainty = _optional_bounded_float(raw.get("uncertainty"))
+        validation = raw.get("validation") if isinstance(raw.get("validation"), Mapping) else {}
         weights: tuple[tuple[str, float], ...] = ()
         if manifest.market_family == "equity":
             weights = _normalize_weights(raw.get("target_weights"))
@@ -448,6 +453,10 @@ class FinRLXQuantEngine:
             model=f"finrlx:{manifest.algorithm}:{manifest.artifact_sha256[:12]}",
             guardrails=("PAPER_ONLY", "SHADOW_ONLY", "DETERMINISTIC_AUTHORITY"),
             paper_only=True,
+            validation_sample_count=max(0, int(validation.get("holdout_count") or 0)),
+            directional_accuracy=_optional_bounded_float(validation.get("directional_accuracy")),
+            mean_policy_net_r=_optional_float(validation.get("mean_policy_net_r")),
+            regression_improvement=_optional_float(validation.get("regression_improvement")),
         )
 
     @classmethod
@@ -509,6 +518,15 @@ def _optional_bounded_float(value: object) -> float | None:
     if value is None:
         return None
     return round(_bounded_float(value, minimum=0.0, maximum=1.0), 6)
+
+
+def _optional_float(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return round(float(value), 6)
+    except (TypeError, ValueError):
+        return None
 
 
 def _normalize_weights(value: object) -> tuple[tuple[str, float], ...]:

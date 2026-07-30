@@ -23,9 +23,11 @@ import {
   CLOSED_PAPER_STATUSES,
   filterPaperLifecycle,
   filterPaperMarket,
+  formatPaperCurrency,
   mergePaperTrades,
   normalizePaperStatus,
   OPEN_PAPER_STATUSES,
+  paperPnlTone,
   paperTradeKey,
 } from "@/lib/paperTradingView.mjs";
 
@@ -497,7 +499,7 @@ function TradeJournal({ rows, onReplay, selectedId }: { rows: PaperForwardTrade[
             <em>{formatCurrency(row.risk_amount)}</em>
           </span>
           <span>
-            <b className={Number(row.net_pnl_eur ?? row.unrealized_pnl) >= 0 ? "positive-text" : "negative-text"}>{formatCurrency(row.net_pnl_eur ?? row.unrealized_pnl)}</b>
+            <b className={pnlToneClass(row.net_pnl_eur ?? row.unrealized_pnl)}>{formatCurrency(row.net_pnl_eur ?? row.unrealized_pnl)}</b>
             <em>{formatPercent(row.pnl_percent)}</em>
           </span>
           <span>
@@ -778,6 +780,9 @@ function outcomeLabel(row: PaperForwardTrade) {
   const label = String(row.outcome_label ?? "").toUpperCase();
   if (label) return label;
   if (status === "DATA_BLOCKED") return "DATA_INVALID";
+  if (row.net_pnl_eur === null || row.net_pnl_eur === undefined || row.net_pnl_eur === "") {
+    return status === "CLOSED" ? "INCONCLUSIVE" : status;
+  }
   const pnl = Number(row.net_pnl_eur);
   if (!Number.isFinite(pnl)) return status === "CLOSED" ? "INCONCLUSIVE" : status;
   if (Math.abs(pnl) < 0.0001) return "BREAKEVEN";
@@ -843,8 +848,12 @@ function formatPrice(value: any) {
 }
 
 function formatCurrency(value: any) {
-  const number = Number(value);
-  return Number.isFinite(number) ? `${number.toFixed(2)} EUR` : "n/a";
+  return formatPaperCurrency(value);
+}
+
+function pnlToneClass(value: any) {
+  const tone = paperPnlTone(value);
+  return tone === "positive" ? "positive-text" : tone === "negative" ? "negative-text" : "";
 }
 
 function formatPercent(value: any) {

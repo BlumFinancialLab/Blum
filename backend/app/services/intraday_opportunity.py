@@ -212,6 +212,7 @@ class BlumIntradayOpportunityEngine:
                 "signal_evidence": signal.evidence,
                 "maximum_holding_minutes": spec.maximum_holding_bars * timeframe_minutes(spec.execution_timeframe),
                 "data_timestamps": {key: value.isoformat() if value else None for key, value in data.latest_timestamps.items()},
+                "data_quality_scores": dict(data.quality_scores),
                 "evidence_lane": evidence_lane,
                 "paper_risk_multiplier": risk_multiplier,
                 "certified_for_copy_readiness": bool(strategy.metrics.get("certified_for_copy_readiness", evidence_lane == "certified_paper")),

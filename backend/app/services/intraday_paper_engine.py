@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 from time import monotonic
 from typing import Callable, Iterable
@@ -37,11 +38,17 @@ from app.services.intraday_no_trade_learning import IntradayNoTradeLearningServi
 from app.services.live_forward_paper_trading import LiveForwardPaperTradingService
 from app.services.cross_market_orchestrator import enabled_agents, parse_names
 from app.services.copy_readiness_evidence import EvidenceTimelineService, strategy_identity
+from app.services.forex_intraday_accounting import (
+    forex_account_pnl,
+    size_forex_intraday_position,
+)
 from app.services.market_desks import MarketDeskRegistry
 from app.services.promoted_strategy_registry import BlumPromotedStrategyRegistry, normalize_market
 from app.services.paper_execution_lifecycle import PaperOrderLifecycleService
 from app.services.realistic_execution import ExecutionMarketBar, ExecutionOrderRequest
 from app.services.trading_intelligence_lab import ensure_live_trade_game
+from app.services.trading_ml.finrlx import FinRLXQuantEngine
+from app.services.trading_ml.finrlx_overlay import FinRLXDecisionOverlay
 
 
 INTRADAY_MODE = "INTRADAY_PAPER_FORWARD"
@@ -92,6 +99,8 @@ class BlumIntradayPaperEngine:
         self.execution = PaperOrderLifecycleService()
         self.learning = IntradayPaperLearningService()
         self.no_trade_learning = IntradayNoTradeLearningService(evaluation_minutes=settings.intraday_no_trade_evaluation_minutes)
+        self.quant_advisor = FinRLXQuantEngine()
+        self.quant_overlay = FinRLXDecisionOverlay()
         self._desk_context: dict[int, tuple[str, str]] = {}
         self._discovery_metadata: dict = {}
 
@@ -169,6 +178,7 @@ class BlumIntradayPaperEngine:
                         benchmark_ticker=benchmark,
                         asset_type=asset.asset_type or "Stock",
                     )
+                    decision = self._apply_quant_overlay(asset, decision)
                     decisions.append({**json_safe(decision.to_dict()), "evidence_lane": evidence_lane})
                     if decision.status != INTRADAY_TRADE_CANDIDATE:
                         self._count_rejection(run, decision.reason_code)
@@ -176,8 +186,10 @@ class BlumIntradayPaperEngine:
                         continue
                     run.candidates_found += 1
                     trade, created = self._open_trade(db, game=game, run=run, asset=asset, decision=decision)
-                    if created:
+                    if created and trade.status != "DATA_BLOCKED":
                         run.candidates_approved += 1
+                    elif created:
+                        blockers.append({"ticker": trade.ticker, "reason": "FX_CONVERSION_UNAVAILABLE"})
                     else:
                         blockers.append({"ticker": trade.ticker, "reason": "DUPLICATE_INTRADAY_DECISION"})
 
@@ -296,6 +308,87 @@ class BlumIntradayPaperEngine:
         }
         return selected
 
+    def _apply_quant_overlay(self, asset: Asset, decision: IntradayDecision) -> IntradayDecision:
+        """Attach FinRL-X evidence and apply only a validated bounded overlay."""
+
+        if decision.status != INTRADAY_TRADE_CANDIDATE:
+            return decision
+        is_forex = str(asset.asset_type or "").strip().lower() in {"forex", "fx", "currency"}
+        market_family = "forex" if is_forex else "equity"
+        costs = decision.costs or {}
+        stop_distance = abs(float(decision.entry_price or 0.0) - float(decision.stop_price or 0.0))
+        target_distance = abs(float(decision.target_price or 0.0) - float(decision.entry_price or 0.0))
+        features = {
+            "aggregate_score": decision.edge_score,
+            "confidence": decision.confidence,
+            "trend_score": decision.edge_score,
+            "momentum_score": decision.edge_score,
+            "volume_score": decision.liquidity_score,
+            "volatility_score": decision.volatility_bps,
+            "support_resistance_score": decision.edge_score,
+            "sentiment_score": None,
+            "narrative_score": None,
+            "fundamental_score": None,
+            "regime_score": decision.confidence,
+            "expected_gross_r": target_distance / max(stop_distance, 1e-9),
+            "expected_net_r": decision.net_expectancy_bps / max(decision.expected_move_bps, 1e-6),
+            "expected_cost": costs.get("total_round_trip_bps"),
+            "stop_distance": stop_distance,
+            "target_distance": target_distance,
+            "data_quality_score": min((decision.evidence.get("data_quality_scores") or {"minimum": 0.0}).values()),
+            "liquidity_score": decision.liquidity_score,
+            "spread": costs.get("spread_bps"),
+            "slippage": costs.get("slippage_bps"),
+            "volatility": decision.volatility_bps,
+            "recent_return": None,
+            "multi_timeframe_trend": decision.edge_score,
+            "contextual_bandit_adjustment": 0.0,
+            "contextual_bandit_sample_size": 0.0,
+            "market_family": market_family,
+            "setup_type": decision.setup_type,
+            "regime": decision.regime,
+            "session": decision.session,
+            "direction": "LONG",
+            "timeframe": "1m_5m_15m_1d",
+            "sector_or_currency_family": asset.sector or asset.asset_type or "unknown",
+        }
+        proposal = self.quant_advisor.propose(
+            market_family=market_family,
+            features=features,
+            context={
+                "ticker": asset.ticker,
+                "timestamp": decision.decision_timestamp.isoformat(),
+                "setup_type": decision.setup_type,
+                "regime": decision.regime,
+            },
+        )
+        overlay = self.quant_overlay.evaluate(
+            baseline_direction="LONG",
+            baseline_confidence=decision.confidence / 100.0,
+            proposal=proposal,
+        )
+        evidence = {
+            **dict(decision.evidence or {}),
+            "finrlx_quant": proposal.to_payload(),
+            "finrlx_overlay": overlay.to_payload(),
+        }
+        if not overlay.applied:
+            return replace(decision, evidence=evidence)
+        confidence = max(
+            0.0,
+            min(100.0, decision.confidence + overlay.confidence_adjustment * 100.0),
+        )
+        if overlay.require_confirmation:
+            return replace(
+                decision,
+                status=INTRADAY_WATCHLIST,
+                reason_code="FINRLX_CONFIRMATION_REQUIRED",
+                explanation="Validated FinRL-X policy disagrees with the baseline; no order is submitted until confirmation.",
+                confidence=confidence,
+                evidence=evidence,
+            )
+        return replace(decision, confidence=confidence, evidence=evidence)
+
     def _portfolio_state(self, db: Session, game: LiveForwardPaperGame) -> IntradayPortfolioState:
         rows = db.scalars(
             select(LiveForwardPaperTrade).where(
@@ -344,6 +437,40 @@ class BlumIntradayPaperEngine:
         observed_entry = float(decision.entry_price or 0.0)
         quantity = float(decision.sizing.quantity if decision.sizing else 0.0)
         is_forex = str(asset.asset_type or "").strip().lower() in {"forex", "fx", "currency"}
+        account_fx_rate = point_in_time_fx_rate(
+            db,
+            asset_currency=asset.currency or "USD",
+            account_currency=self.account_currency,
+            at=decision.decision_timestamp,
+        )
+        forex_sizing = None
+        risk_amount = float(decision.sizing.risk_amount if decision.sizing else 0.0)
+        risk_percent = float(decision.sizing.risk_percent if decision.sizing else 0.0)
+        notional_value = float(decision.sizing.notional if decision.sizing else 0.0)
+        margin_reserved = notional_value
+        if is_forex:
+            evidence_multiplier = max(
+                0.05,
+                min(1.0, float(decision.evidence.get("paper_risk_multiplier") or 1.0)),
+            )
+            target_risk_fraction = (
+                max(0.05, min(1.0, float(decision.confidence or 0.0) / 100.0))
+                * max(0.05, min(1.0, float(decision.edge_score or 0.0) / 100.0))
+                * 0.01
+                * evidence_multiplier
+            )
+            forex_sizing = size_forex_intraday_position(
+                capital_eur=float(game.current_capital or game.starting_capital or 0.0),
+                risk_fraction=target_risk_fraction,
+                entry_price=observed_entry,
+                stop_price=float(decision.stop_price or observed_entry),
+                account_fx_rate=account_fx_rate,
+            )
+            quantity = forex_sizing.quantity_units
+            risk_amount = forex_sizing.risk_amount_eur
+            risk_percent = forex_sizing.risk_fraction * 100.0
+            notional_value = forex_sizing.notional_eur
+            margin_reserved = forex_sizing.margin_eur
         liquidity_basis = "otc_quote_capacity" if is_forex else "reported_volume"
         quote_capacity_units = max(quantity * 20.0, quantity) if is_forex else None
         risk_per_share = max(0.0001, observed_entry - float(decision.stop_price or observed_entry))
@@ -367,6 +494,16 @@ class BlumIntradayPaperEngine:
                 "basis": liquidity_basis,
                 "quote_capacity_units": quote_capacity_units,
                 "reported_volume_required": not is_forex,
+            },
+            "accounting": {
+                "model": "forex_margin_account_v1" if is_forex else "cash_equity_account_v1",
+                "account_currency": self.account_currency,
+                "account_fx_rate": account_fx_rate,
+                "quantity_units": quantity,
+                "quantity_lots": forex_sizing.quantity_lots if forex_sizing else None,
+                "notional_eur": notional_value,
+                "margin_reserved_eur": margin_reserved,
+                "risk_amount_eur": risk_amount,
             },
             "evidence": decision.evidence,
             "regime": decision.regime,
@@ -427,10 +564,19 @@ class BlumIntradayPaperEngine:
             trailing_stop=decision.trailing_stop,
             position_size=0.0,
             notional_value=None,
-            risk_amount=quantity * risk_per_share,
-            risk_percent=float(decision.sizing.risk_percent if decision.sizing else 0.0),
-            expected_risk=quantity * risk_per_share,
-            expected_reward=quantity * max(0.0, float(decision.target_price or observed_entry) - observed_entry),
+            risk_amount=risk_amount,
+            risk_percent=risk_percent,
+            expected_risk=risk_amount,
+            expected_reward=(
+                forex_account_pnl(
+                    entry_price=observed_entry,
+                    exit_price=float(decision.target_price or observed_entry),
+                    quantity_units=quantity,
+                    account_fx_rate=account_fx_rate,
+                )
+                if is_forex and account_fx_rate
+                else quantity * max(0.0, float(decision.target_price or observed_entry) - observed_entry)
+            ),
             expected_r_multiple=max(0.0, float(decision.target_price or observed_entry) - observed_entry) / risk_per_share,
             current_price=observed_entry,
             last_managed_bar_at=decision.decision_timestamp,
@@ -445,6 +591,13 @@ class BlumIntradayPaperEngine:
                 "maximum_holding_minutes": int(decision.evidence.get("maximum_holding_minutes") or self.max_holding_minutes),
                 "liquidity_basis": liquidity_basis,
                 "quote_capacity_units": quote_capacity_units,
+                "accounting_model": "forex_margin_account_v1" if is_forex else "cash_equity_account_v1",
+                "account_fx_rate": account_fx_rate,
+                "quantity_units": quantity if is_forex else None,
+                "quantity_lots": forex_sizing.quantity_lots if forex_sizing else None,
+                "notional_eur": notional_value,
+                "margin_reserved_eur": margin_reserved,
+                "risk_amount_eur": risk_amount,
             },
         )
         db.add(trade)
@@ -461,6 +614,20 @@ class BlumIntradayPaperEngine:
             frozen,
             observed_entry,
         )
+        if is_forex and (forex_sizing is None or forex_sizing.blocker):
+            trade.status = "DATA_BLOCKED"
+            trade.actionability_state = "data_blocked"
+            trade.outcome_label = "DATA_INVALID"
+            trade.lesson_learned = "Forex candidate was not submitted because point-in-time account-currency conversion was unavailable."
+            self.paper.append_event(
+                db,
+                trade.id,
+                "INTRADAY_DATA_BLOCKED",
+                trade.lesson_learned,
+                {"blocker": forex_sizing.blocker if forex_sizing else "FX_CONVERSION_UNAVAILABLE"},
+                observed_entry,
+            )
+            return trade, True
         request = ExecutionOrderRequest(
             order_key=f"execution:{duplicate_key}",
             ticker=trade.ticker,
@@ -477,12 +644,7 @@ class BlumIntradayPaperEngine:
             latency_bars=1,
             currency=asset.currency or "USD",
             account_currency=self.account_currency,
-            fx_rate=point_in_time_fx_rate(
-                db,
-                asset_currency=asset.currency or "USD",
-                account_currency=self.account_currency,
-                at=decision.decision_timestamp,
-            ),
+            fx_rate=account_fx_rate,
             fx_spread_bps=settings.paper_execution_fx_spread_bps,
             liquidity_score=decision.liquidity_score,
             liquidity_basis=liquidity_basis,
@@ -556,15 +718,26 @@ class BlumIntradayPaperEngine:
         metadata["theoretical_entry_price"] = order.theoretical_price
         metadata["executed_entry_price"] = order.average_fill_price
         trade.intraday_metadata = metadata
-        trade.notional_value = float(trade.entry_price or 0.0) * float(trade.position_size or 0.0)
+        is_forex = self._is_forex_trade(trade)
+        account_fx_rate = float(order.fx_rate or metadata.get("account_fx_rate") or 1.0)
+        quote_notional = float(trade.entry_price or 0.0) * float(trade.position_size or 0.0)
+        trade.notional_value = quote_notional / account_fx_rate if is_forex else quote_notional
         risk_per_share = max(0.0001, float(trade.entry_price or 0.0) - float(trade.stop_loss or trade.entry_price or 0.0))
-        trade.risk_amount = risk_per_share * float(trade.position_size or 0.0)
+        quote_risk = risk_per_share * float(trade.position_size or 0.0)
+        trade.risk_amount = quote_risk / account_fx_rate if is_forex else quote_risk
         trade.expected_risk = trade.risk_amount
+        reserved_capital = (
+            float(metadata.get("margin_reserved_eur") or 0.0)
+            if is_forex
+            else float(trade.notional_value or 0.0)
+        )
+        metadata["reserved_capital_eur"] = reserved_capital
+        trade.intraday_metadata = metadata
         trade.last_managed_bar_at = trade.opened_at
         self._create_ledger_trade(db, game, trade)
         self.paper.append_event(db, trade.id, "INTRADAY_TRADE_OPENED", "Paper position opened only after a later executable fill.", {"order_id": order.id, "quantity": trade.position_size, "theoretical_price": order.theoretical_price, "executed_price": order.average_fill_price}, trade.entry_price)
-        game.cash = max(0.0, float(game.cash or 0.0) - float(trade.notional_value or 0.0))
-        game.exposure = float(game.exposure or 0.0) + float(trade.notional_value or 0.0)
+        game.cash = max(0.0, float(game.cash or 0.0) - reserved_capital)
+        game.exposure = float(game.exposure or 0.0) + reserved_capital
         game.open_positions = int(game.open_positions or 0) + 1
         game.updated_at = trade.opened_at or datetime.utcnow()
 
@@ -655,7 +828,15 @@ class BlumIntradayPaperEngine:
                     float(trade.trailing_stop or 0.0),
                     float(bar.close) - max(0.0001, float(bar.high) - float(bar.low)) * trailing_multiple,
                 )
-                trade.unrealized_pnl = (float(bar.close) - float(trade.entry_price or bar.close)) * float(trade.position_size or 0.0)
+                if self._is_forex_trade(trade):
+                    trade.unrealized_pnl = forex_account_pnl(
+                        entry_price=float(trade.entry_price or bar.close),
+                        exit_price=float(bar.close),
+                        quantity_units=float(trade.position_size or 0.0),
+                        account_fx_rate=float((trade.intraday_metadata or {}).get("account_fx_rate") or 1.0),
+                    )
+                else:
+                    trade.unrealized_pnl = (float(bar.close) - float(trade.entry_price or bar.close)) * float(trade.position_size or 0.0)
                 self.paper.append_event(db, trade.id, "INTRADAY_TRADE_UPDATED", "Position marked using a later one-minute bar.", {"bar_timestamp": bar.bar_timestamp.isoformat()}, float(bar.close))
         return {"trades_updated": updated, "trades_closed": closed}
 
@@ -687,9 +868,25 @@ class BlumIntradayPaperEngine:
         one_way_bps = float(costs.get("one_way_bps") or 0.0)
         exit_fill = float(raw_exit) * (1 - one_way_bps / 10_000)
         quantity = float(trade.position_size or 0.0)
+        is_forex = self._is_forex_trade(trade)
+        account_fx_rate = float((trade.intraday_metadata or {}).get("account_fx_rate") or 1.0)
         observed_entry = float((trade.intraday_metadata or {}).get("observed_entry_price") or trade.entry_price or 0.0)
-        gross = (float(raw_exit) - observed_entry) * quantity
-        net = (exit_fill - float(trade.entry_price or 0.0)) * quantity
+        if is_forex:
+            gross = forex_account_pnl(
+                entry_price=observed_entry,
+                exit_price=float(raw_exit),
+                quantity_units=quantity,
+                account_fx_rate=account_fx_rate,
+            )
+            net = forex_account_pnl(
+                entry_price=float(trade.entry_price or 0.0),
+                exit_price=exit_fill,
+                quantity_units=quantity,
+                account_fx_rate=account_fx_rate,
+            )
+        else:
+            gross = (float(raw_exit) - observed_entry) * quantity
+            net = (exit_fill - float(trade.entry_price or 0.0)) * quantity
         total_cost = max(0.0, gross - net)
         initial_risk = max(0.0001, float(trade.expected_risk or trade.risk_amount or 0.0001))
         trade.status = "CLOSED"
@@ -699,13 +896,15 @@ class BlumIntradayPaperEngine:
         trade.closed_at = bar.bar_timestamp
         trade.gross_pnl_eur = round(gross, 6)
         trade.net_pnl_eur = round(net, 6)
-        trade.pnl_per_share = round(exit_fill - float(trade.entry_price or 0.0), 6)
+        unit_pnl = exit_fill - float(trade.entry_price or 0.0)
+        trade.pnl_per_share = round(unit_pnl / account_fx_rate if is_forex else unit_pnl, 8)
         trade.pnl_percent = round((exit_fill / float(trade.entry_price or 1.0) - 1) * 100, 6)
         trade.r_multiple = round(net / initial_risk, 6)
         trade.costs_paid = round(total_cost, 6)
-        trade.spread_cost = round(float(costs.get("spread_bps") or 0.0) / 10_000 * observed_entry * quantity, 6)
-        trade.slippage_cost = round(float(costs.get("slippage_bps") or 0.0) * 2 / 10_000 * observed_entry * quantity, 6)
-        trade.commission_cost = round(float(costs.get("commission_bps") or 0.0) * 2 / 10_000 * observed_entry * quantity, 6)
+        conversion = account_fx_rate if is_forex else 1.0
+        trade.spread_cost = round(float(costs.get("spread_bps") or 0.0) / 10_000 * observed_entry * quantity / conversion, 6)
+        trade.slippage_cost = round(float(costs.get("slippage_bps") or 0.0) * 2 / 10_000 * observed_entry * quantity / conversion, 6)
+        trade.commission_cost = round(float(costs.get("commission_bps") or 0.0) * 2 / 10_000 * observed_entry * quantity / conversion, 6)
         trade.stop_hit = reason == "STOP_HIT"
         trade.invalidation_hit = reason == "INVALIDATION_HIT"
         trade.target_1_hit = reason == "TARGET_HIT"
@@ -713,8 +912,18 @@ class BlumIntradayPaperEngine:
         self._update_benchmark_outcome(db, trade, bar.bar_timestamp)
         trade.lesson_learned = intraday_lesson(trade)
         trade.unrealized_pnl = 0.0
-        game.cash = float(game.cash or 0.0) + exit_fill * quantity
-        game.exposure = max(0.0, float(game.exposure or 0.0) - float(trade.notional_value or 0.0))
+        reserved_capital = float(
+            (trade.intraday_metadata or {}).get("reserved_capital_eur")
+            or (trade.intraday_metadata or {}).get("margin_reserved_eur")
+            or trade.notional_value
+            or 0.0
+        )
+        if is_forex:
+            game.cash = float(game.cash or 0.0) + reserved_capital + net
+            game.exposure = max(0.0, float(game.exposure or 0.0) - reserved_capital)
+        else:
+            game.cash = float(game.cash or 0.0) + exit_fill * quantity
+            game.exposure = max(0.0, float(game.exposure or 0.0) - float(trade.notional_value or 0.0))
         game.realized_pl = float(game.realized_pl or 0.0) + net
         game.current_capital = float(game.cash or 0.0) + float(game.exposure or 0.0)
         game.open_positions = max(0, int(game.open_positions or 0) - 1)
@@ -736,6 +945,10 @@ class BlumIntradayPaperEngine:
             ledger.excess_return_vs_benchmark = trade.excess_return_vs_benchmark
         self.paper.append_event(db, trade.id, "INTRADAY_TRADE_CLOSED", f"Intraday paper trade closed: {reason}.", {"bar_timestamp": bar.bar_timestamp.isoformat(), "gross_pnl": gross, "net_pnl": net, "costs_paid": total_cost}, exit_fill)
         self.paper.append_event(db, trade.id, "INTRADAY_OUTCOME_EVALUATED", "Closed intraday outcome evaluated against stored benchmark data when available.", {"r_multiple": trade.r_multiple, "benchmark_return": trade.benchmark_return_same_period, "benchmark_excess": trade.excess_return_vs_benchmark}, exit_fill)
+
+    @staticmethod
+    def _is_forex_trade(trade: LiveForwardPaperTrade) -> bool:
+        return str(trade.asset_type or "").strip().lower() in {"forex", "fx", "currency"}
 
     def _update_benchmark_outcome(self, db: Session, trade: LiveForwardPaperTrade, exit_timestamp: datetime) -> None:
         benchmark = db.scalar(select(Asset).where(func.upper(Asset.ticker) == str(trade.benchmark_ticker or "").upper()).limit(1))

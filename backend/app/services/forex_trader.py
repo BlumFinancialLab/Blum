@@ -54,6 +54,7 @@ from app.services.promoted_strategy_registry import BlumPromotedStrategyRegistry
 from app.services.replay_data import MultiProviderReplayDataService
 from app.services.dashboard_snapshots import DashboardSnapshotService
 from app.services.trading_ml.finrlx import FinRLXQuantEngine
+from app.services.trading_ml.finrlx_overlay import FinRLXDecisionOverlay
 from app.services.trading_ml.inference import TradingMLInferenceService, advice_payload
 from app.core.config import get_settings
 
@@ -240,6 +241,7 @@ class BlumForexTraderCore:
         self.manager = BlumForexPositionManagerAgent()
         self.supervised_advisor = TradingMLInferenceService()
         self.quant_advisor = FinRLXQuantEngine()
+        self.quant_overlay = FinRLXDecisionOverlay()
 
     def evaluate_input(self, market: AgentMarketInput, *, strategy: ForexStrategyEvidence) -> EvaluationOutcome:
         context = self.context.analyze(market)
@@ -390,6 +392,47 @@ class BlumForexTraderCore:
                 deterministic_blockers=evaluation.blockers,
             )
             quant_payload = quant_proposal.to_payload()
+            quant_overlay = self.quant_overlay.evaluate(
+                baseline_direction=evaluation.proposal.direction.value,
+                baseline_confidence=evaluation.proposal.confidence,
+                proposal=quant_proposal,
+                deterministic_blockers=evaluation.blockers,
+            )
+            if quant_overlay.applied:
+                overlay_blockers = tuple(evaluation.blockers)
+                if quant_overlay.require_confirmation:
+                    overlay_blockers = tuple(
+                        dict.fromkeys([*overlay_blockers, "FINRLX_CONFIRMATION_REQUIRED"])
+                    )
+                evaluation = replace(
+                    evaluation,
+                    approved=evaluation.approved and not quant_overlay.require_confirmation,
+                    blockers=overlay_blockers,
+                    proposal=replace(
+                        evaluation.proposal,
+                        confidence=max(
+                            0.0,
+                            min(
+                                1.0,
+                                evaluation.proposal.confidence
+                                + quant_overlay.confidence_adjustment,
+                            ),
+                        ),
+                        actionability_status=(
+                            "BLOCKED"
+                            if quant_overlay.require_confirmation
+                            else evaluation.proposal.actionability_status
+                        ),
+                        knowledge_context={
+                            **dict(evaluation.proposal.knowledge_context or {}),
+                            "finrlx_overlay": quant_overlay.to_payload(),
+                        },
+                    ),
+                )
+            quant_payload["decision_overlay"] = quant_overlay.to_payload()
+            decision.status = "APPROVED" if evaluation.approved else "REJECTED"
+            decision.blockers = list(evaluation.blockers)
+            decision.proposal_json = _jsonable(asdict(evaluation.proposal))
             model_review = self.model_council.review_forex_decision(
                 db,
                 decision_id=decision.id,

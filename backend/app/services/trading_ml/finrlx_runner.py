@@ -195,6 +195,7 @@ def _propose(payload: Mapping[str, Any]) -> dict[str, Any]:
             f"FinRL-X weight-contract challenger; chronological validation "
             f"n={artifact['validation']['holdout_count']}."
         ),
+        "validation": dict(artifact.get("validation") or {}),
     }
     if market_family == "equity":
         ticker = str(
@@ -324,12 +325,17 @@ def _fit_and_validate(
     score = 0.65 * ((probability - 0.5) * 2.0) + 0.35 * np.tanh(predicted_return)
     action = np.where(score > 0.05, 1.0, np.where(score < -0.05, -1.0, 0.0))
     policy_reward = action * return_test
+    regression_mae = float(np.mean(np.abs(predicted_return - return_test)))
+    baseline_mae = float(np.mean(np.abs(return_test - np.mean(return_train))))
     return {
         "holdout_count": int(len(x_test)),
         "directional_accuracy": round(float(accuracy_score(y_test, probability >= 0.5)), 6),
         "mean_policy_net_r": round(float(np.mean(policy_reward)), 6),
         "mean_observed_net_r": round(float(np.mean(return_test)), 6),
         "participation_rate": round(float(np.mean(action != 0)), 6),
+        "regression_mae": round(regression_mae, 6),
+        "baseline_regression_mae": round(baseline_mae, 6),
+        "regression_improvement": round(baseline_mae - regression_mae, 6),
         "chronological_split": True,
     }
 
