@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   filterPaperLifecycle,
   filterPaperMarket,
+  isForexPaperTrade,
   mergePaperTrades,
 } from "../lib/paperTradingView.mjs";
 
@@ -41,4 +42,30 @@ test("market filtering preserves separate equity and forex histories", () => {
 
   assert.deepEqual(filterPaperMarket(rows, "equities").map((row) => row.trade_id), ["equity"]);
   assert.deepEqual(filterPaperMarket(rows, "forex").map((row) => row.trade_id), ["forex"]);
+});
+
+test("forex identity wins over stale intraday market grouping", () => {
+  const rows = [
+    {
+      trade_id: "intraday-forex",
+      ticker: "EURJPY=X",
+      market_group: "intraday",
+      market: "FOREX",
+      asset_type: "Forex",
+      status: "CLOSED",
+    },
+    {
+      trade_id: "intraday-equity",
+      ticker: "NVDA",
+      market_group: "intraday",
+      market: "us_equity",
+      asset_type: "Stock",
+      status: "CLOSED",
+    },
+  ];
+
+  assert.equal(isForexPaperTrade(rows[0]), true);
+  assert.equal(isForexPaperTrade(rows[1]), false);
+  assert.deepEqual(filterPaperMarket(rows, "equities").map((row) => row.trade_id), ["intraday-equity"]);
+  assert.deepEqual(filterPaperMarket(rows, "forex").map((row) => row.trade_id), ["intraday-forex"]);
 });

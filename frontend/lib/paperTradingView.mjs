@@ -41,8 +41,20 @@ export function mergePaperTrades(snapshot) {
   return Array.from(byTrade.values());
 }
 
+export function isForexPaperTrade(row) {
+  const ticker = String(row?.ticker ?? "").trim().toUpperCase();
+  const market = String(row?.market ?? "").trim().toUpperCase();
+  const assetType = String(row?.asset_type ?? "").trim().toUpperCase();
+  return row?.market_group === "forex"
+    || ticker.endsWith("=X")
+    || market.includes("FOREX")
+    || ["FX", "CURRENCY"].includes(market)
+    || assetType.includes("FOREX")
+    || ["FX", "CURRENCY", "CURRENCY_PAIR"].includes(assetType);
+}
+
 export function filterPaperMarket(rows, market) {
-  return rows.filter((row) => market === "forex" ? row.market_group === "forex" : row.market_group !== "forex");
+  return rows.filter((row) => market === "forex" ? isForexPaperTrade(row) : !isForexPaperTrade(row));
 }
 
 export function filterPaperLifecycle(rows, lifecycle) {

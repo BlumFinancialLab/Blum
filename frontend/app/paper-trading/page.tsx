@@ -204,9 +204,11 @@ export default function PaperTradingPage() {
     );
   }
 
-  const metrics = snapshot.metrics?.aggregate ?? snapshot.metrics ?? {};
-  const counts = snapshot.counts?.aggregate ?? snapshot.counts ?? {};
   const marketMetrics = snapshot.metrics?.by_market ?? {};
+  const marketCounts = snapshot.counts?.by_market ?? {};
+  const selectedMarketKey = marketTab === "forex" ? "forex" : "equities";
+  const metrics = marketMetrics[selectedMarketKey] ?? snapshot.metrics?.aggregate ?? snapshot.metrics ?? {};
+  const counts = marketCounts[selectedMarketKey] ?? snapshot.counts?.aggregate ?? snapshot.counts ?? {};
   const game = snapshot.game ?? {};
   const statusLabel = snapshot.readiness_status ?? snapshot.readiness ?? readiness;
   const actionability = snapshot.actionability_summary ?? {};
@@ -227,12 +229,12 @@ export default function PaperTradingPage() {
       />
 
       <section className="terminal-command-grid">
-        <MetricCard label="Candidates" value={numberLike(maxAvailableCount(counts.candidates, candidates.length, snapshot.candidate_count))} subvalue="Frozen or skipped decisions" icon={<Target size={15} />} tone={candidates.length ? "attention" : "neutral"} />
-        <MetricCard label="Open" value={numberLike(snapshot.open_count ?? counts.open ?? openPositions.length)} subvalue="Forward paper positions" icon={<Clock size={15} />} tone={openPositions.length ? "positive" : "neutral"} />
-        <MetricCard label="Closed" value={numberLike(maxAvailableCount(counts.closed, closedTrades.length, snapshot.closed_count))} subvalue="Evaluated outcomes" icon={<BookOpen size={15} />} tone={closedTrades.length ? "positive" : "neutral"} />
+        <MetricCard label="Candidates" value={numberLike(maxAvailableCount(counts.candidates, candidates.length))} subvalue={`${marketTab === "forex" ? "Forex" : "Azioni / ETF"} frozen or skipped`} icon={<Target size={15} />} tone={candidates.length ? "attention" : "neutral"} />
+        <MetricCard label="Open" value={numberLike(counts.open ?? openPositions.length)} subvalue={`${marketTab === "forex" ? "Forex" : "Azioni / ETF"} paper positions`} icon={<Clock size={15} />} tone={openPositions.length ? "positive" : "neutral"} />
+        <MetricCard label="Closed" value={numberLike(maxAvailableCount(counts.closed, closedTrades.length))} subvalue={`${marketTab === "forex" ? "Forex" : "Azioni / ETF"} evaluated outcomes`} icon={<BookOpen size={15} />} tone={closedTrades.length ? "positive" : "neutral"} />
         <MetricCard label="No trade" value={numberLike(counts.decisions_rejected)} subvalue="Rejected without P/L" icon={<ShieldAlert size={15} />} tone={Number(counts.decisions_rejected) ? "attention" : "info"} />
-        <MetricCard label="Realized P/L" value={formatCurrency(snapshot.realized_pnl ?? metrics.realized_pnl)} subvalue={`Unrealized ${formatCurrency(snapshot.unrealized_pnl ?? metrics.unrealized_pnl)}`} icon={<TrendingUp size={15} />} tone={moneyTone(snapshot.realized_pnl ?? metrics.realized_pnl)} />
-        <MetricCard label="Win / Avg R" value={`${formatPercent01(snapshot.win_rate ?? metrics.win_rate)} / ${formatR(snapshot.average_r ?? metrics.average_r)}`} subvalue={`Benchmark excess ${formatPercent01(snapshot.benchmark_excess ?? metrics.benchmark_excess)}`} icon={<TrendingDown size={15} />} tone={moneyTone(snapshot.benchmark_excess ?? metrics.benchmark_excess)} />
+        <MetricCard label="Realized P/L" value={formatCurrency(metrics.realized_pnl)} subvalue={`Unrealized ${formatCurrency(metrics.unrealized_pnl)}`} icon={<TrendingUp size={15} />} tone={moneyTone(metrics.realized_pnl)} />
+        <MetricCard label="Win / Avg R" value={`${formatPercent01(metrics.win_rate)} / ${formatR(metrics.average_r)}`} subvalue={`Benchmark excess ${formatPercent01(metrics.benchmark_excess)}`} icon={<TrendingDown size={15} />} tone={moneyTone(metrics.benchmark_excess)} />
       </section>
 
       <section className="terminal-command-grid" style={{ marginTop: 12 }}>
@@ -243,7 +245,7 @@ export default function PaperTradingPage() {
 
       <section className="radar-tabs" style={{ marginTop: 12 }} role="tablist" aria-label="Paper trading market">
         {PAPER_MARKET_TABS.map((tab) => {
-          const count = trades.filter((row) => tab.id === "forex" ? row.market_group === "forex" : row.market_group !== "forex").length;
+          const count = filterPaperMarket(trades, tab.id).length;
           return (
             <button
               key={tab.id}

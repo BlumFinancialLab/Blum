@@ -77,6 +77,40 @@ def seed_standard_trade(db: Session, game: LiveForwardPaperGame) -> LiveForwardP
     return trade
 
 
+def seed_intraday_forex_paper_trade(
+    db: Session,
+    game: LiveForwardPaperGame,
+) -> LiveForwardPaperTrade:
+    trade = LiveForwardPaperTrade(
+        trade_uid="paper-intraday-forex-1",
+        duplicate_key="paper-intraday-forex-1-key",
+        game_id=game.id,
+        ticker="EURJPY=X",
+        asset_name="EUR/JPY",
+        asset_type="Forex",
+        setup_type="forex_momentum_scalp",
+        market="FOREX",
+        status="CLOSED",
+        decision_timestamp=NOW - timedelta(hours=4),
+        opened_at=NOW - timedelta(hours=3),
+        closed_at=NOW - timedelta(hours=1),
+        entry_price=170.0,
+        exit_price=170.2,
+        stop_loss=169.9,
+        target_1=170.2,
+        position_size=1.0,
+        net_pnl_eur=2.0,
+        gross_pnl_eur=2.2,
+        r_multiple=2.0,
+        evidence_type="INTRADAY_PAPER_FORWARD",
+        trading_mode="intraday_paper",
+        outcome_label="win",
+    )
+    db.add(trade)
+    db.flush()
+    return trade
+
+
 def seed_forex_cycle(db: Session) -> ForexTraderCycle:
     cycle = ForexTraderCycle(
         cycle_uid="fx-cycle-unified",
@@ -262,6 +296,28 @@ def test_projection_combines_standard_and_forex_without_double_counting():
         assert payload["metrics"]["aggregate"]["benchmark_excess"] == 0.03
         assert payload["metrics"]["by_market"]["forex"]["realized_pnl"] == 5.0
         assert payload["metrics"]["by_market"]["standard"]["realized_pnl"] == 10.0
+
+
+def test_intraday_forex_paper_trade_is_classified_by_asset_not_execution_lane():
+    with setup_db() as db:
+        game = seed_game(db)
+        equity = seed_standard_trade(db, game)
+        forex = seed_intraday_forex_paper_trade(db, game)
+        db.commit()
+
+        payload = UnifiedPaperTradingProjectionService().build(db)
+        rows = {row["trade_id"]: row for row in payload["trades"]}
+
+        assert rows[f"paper:{equity.id}"]["market_group"] == "standard"
+        assert rows[f"paper:{equity.id}"]["trading_lane"] == "standard"
+        assert rows[f"paper:{forex.id}"]["market_group"] == "forex"
+        assert rows[f"paper:{forex.id}"]["trading_lane"] == "intraday"
+        assert payload["counts"]["by_market"]["equities"]["closed"] == 1
+        assert payload["metrics"]["by_market"]["equities"]["realized_pnl"] == 10.0
+        assert payload["counts"]["by_market"]["forex"]["closed"] == 1
+        assert payload["metrics"]["by_market"]["forex"]["realized_pnl"] == 2.0
+        assert payload["counts"]["aggregate"]["closed"] == 2
+        assert payload["metrics"]["aggregate"]["realized_pnl"] == 12.0
 
 
 def test_visible_projection_reserves_capacity_for_each_market_group():

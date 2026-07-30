@@ -51,6 +51,24 @@ def _iso(value: Any) -> str | None:
     return value.isoformat() if value is not None else None
 
 
+def _is_forex_asset(
+    *,
+    ticker: Any,
+    market: Any,
+    asset_type: Any,
+) -> bool:
+    normalized_ticker = str(ticker or "").strip().upper()
+    normalized_market = str(market or "").strip().upper()
+    normalized_asset_type = str(asset_type or "").strip().upper()
+    return (
+        normalized_ticker.endswith("=X")
+        or "FOREX" in normalized_market
+        or normalized_market in {"FX", "CURRENCY"}
+        or "FOREX" in normalized_asset_type
+        or normalized_asset_type in {"FX", "CURRENCY", "CURRENCY_PAIR"}
+    )
+
+
 class UnifiedPaperTradingProjectionService:
     """Background-built projection across paper-forward execution engines.
 
@@ -152,15 +170,22 @@ class UnifiedPaperTradingProjectionService:
         rows = [*paper_projection_rows, *forex_position_rows, *forex_decision_rows]
         rows.sort(key=lambda row: row.get("sort_timestamp") or "", reverse=True)
 
+        equity_paper_rows = [
+            row for row in paper_projection_rows if row["market_group"] != "forex"
+        ]
+        forex_paper_rows = [
+            row for row in paper_projection_rows if row["market_group"] == "forex"
+        ]
         by_market = {
+            "equities": self._summarize(equity_paper_rows),
             "standard": self._summarize(
-                [row for row in paper_projection_rows if row["market_group"] == "standard"]
+                [row for row in equity_paper_rows if row["trading_lane"] == "standard"]
             ),
             "intraday": self._summarize(
-                [row for row in paper_projection_rows if row["market_group"] == "intraday"]
+                [row for row in equity_paper_rows if row["trading_lane"] == "intraday"]
             ),
             "forex": self._with_candidate_counts(
-                self._summarize(forex_position_rows),
+                self._summarize([*forex_paper_rows, *forex_position_rows]),
                 candidate_count=forex_decision_total,
                 rejected_count=forex_rejected_total,
             ),
@@ -379,12 +404,21 @@ class UnifiedPaperTradingProjectionService:
     def _paper_row(self, trade: LiveForwardPaperTrade) -> dict:
         payload = trade.frozen_decision_payload or {}
         direction = payload.get("direction") or payload.get("action") or "LONG"
-        market_group = (
+        trading_lane = (
             "intraday"
             if trade.intraday_run_id is not None
             or "INTRADAY" in str(trade.evidence_type or "").upper()
             or "INTRADAY" in str(trade.trading_mode or "").upper()
             else "standard"
+        )
+        market_group = (
+            "forex"
+            if _is_forex_asset(
+                ticker=trade.ticker,
+                market=trade.market,
+                asset_type=trade.asset_type,
+            )
+            else trading_lane
         )
         timestamp = trade.closed_at or trade.opened_at or trade.decision_timestamp or trade.created_at
         return {
@@ -392,6 +426,7 @@ class UnifiedPaperTradingProjectionService:
             "source_trade_id": trade.id,
             "source_engine": "paper_forward",
             "market_group": market_group,
+            "trading_lane": trading_lane,
             "market": trade.market or "equity",
             "ticker": trade.ticker,
             "asset_name": trade.asset_name or trade.ticker,
@@ -455,6 +490,7 @@ class UnifiedPaperTradingProjectionService:
             "source_trade_id": position.id,
             "source_engine": "forex_trader",
             "market_group": "forex",
+            "trading_lane": "forex_agent",
             "market": "forex",
             "ticker": position.pair,
             "asset_name": position.pair,
@@ -524,6 +560,7 @@ class UnifiedPaperTradingProjectionService:
             "source_trade_id": decision.id,
             "source_engine": "forex_decision",
             "market_group": "forex",
+            "trading_lane": "forex_agent",
             "market": "forex",
             "ticker": decision.pair,
             "asset_name": decision.pair,
