@@ -174,15 +174,16 @@ def test_end_to_end_challenger_audit_chain(db, tmp_path):
 class FakeFinRLXEngine:
     enabled = True
 
-    def __init__(self):
+    def __init__(self, *, result_by_market=None):
         self.training_requests = []
+        self.result_by_market = result_by_market or {}
 
-    def status(self):
+    def status(self, market_family="forex"):
         return {"status": "NO_VALIDATED_ARTIFACT", "paper_only": True}
 
     def run_training(self, *, market_family, request):
         self.training_requests.append((market_family, request))
-        return {
+        return self.result_by_market.get(market_family) or {
             "status": "VALIDATED_SHADOW",
             "paper_only": True,
             "manifest": {"algorithm": "PPO", "market_family": market_family},
@@ -198,7 +199,9 @@ def test_worker_runs_optional_finrlx_research_inside_existing_budget(db, tmp_pat
 
     assert result["finrlx"]["status"] == "VALIDATED_SHADOW"
     assert finrlx.training_requests[0][0] == "forex"
+    assert finrlx.training_requests[1][0] == "equity"
     assert finrlx.training_requests[0][1]["max_rows"] == 8
+    assert set(result["finrlx"]["markets"]) == {"equity", "forex"}
     stored = db.query(DashboardSnapshot).filter_by(snapshot_type="trading_ml_status").first()
     assert stored.payload_json["finrlx"]["paper_only"] is True
 
@@ -222,4 +225,25 @@ def test_worker_initializes_finrlx_before_core_lanes_exhaust_budget(
     result = instance.run_once(db, "test")
 
     assert result["finrlx"]["status"] == "VALIDATED_SHADOW"
-    assert len(finrlx.training_requests) == 1
+    assert len(finrlx.training_requests) == 2
+
+
+def test_worker_can_validate_equity_when_forex_evidence_is_single_class(db, tmp_path):
+    instance = worker(tmp_path)
+    finrlx = FakeFinRLXEngine(
+        result_by_market={
+            "forex": {
+                "status": "INSUFFICIENT_EVIDENCE",
+                "reason": "Both positive and negative outcomes are required.",
+                "sample_count": 500,
+                "paper_only": True,
+            }
+        }
+    )
+    instance.finrlx = finrlx
+
+    result = instance.run_once(db, "test")
+
+    assert result["finrlx"]["status"] == "VALIDATED_SHADOW"
+    assert result["finrlx"]["markets"]["forex"]["status"] == "INSUFFICIENT_EVIDENCE"
+    assert result["finrlx"]["markets"]["equity"]["status"] == "VALIDATED_SHADOW"

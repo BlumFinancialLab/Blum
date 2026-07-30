@@ -324,7 +324,13 @@ class FinRLXQuantEngine:
                         "feature_schema_hash": self.feature_schema_hash,
                     },
                 },
-                timeout_seconds=self.timeout_seconds,
+                timeout_seconds=max(
+                    1,
+                    min(
+                        self.timeout_seconds,
+                        int(request.get("max_runtime_seconds") or self.timeout_seconds),
+                    ),
+                ),
             )
             manifest_path = result.get("manifest_path")
             if not manifest_path:
@@ -457,12 +463,23 @@ class FinRLXQuantEngine:
         return False
 
     def _manifest_path_for(self, market_family: str) -> Path | None:
-        if self.manifest_path is not None:
+        if (
+            self.manifest_path is not None
+            and self._manifest_market_family(self.manifest_path) == market_family.lower()
+        ):
             return self.manifest_path
         discovered = (self.artifact_root / market_family.lower() / "manifest.json").resolve()
         if discovered.is_file() and discovered.is_relative_to(self.artifact_root):
             return discovered
         return None
+
+    @staticmethod
+    def _manifest_market_family(manifest_path: Path) -> str:
+        try:
+            raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return ""
+        return str(raw.get("market_family") or "").lower()
 
     @staticmethod
     def _hold(

@@ -123,35 +123,57 @@ class TradingMLLearningWorker:
 
     def _run_finrlx(self, started: float) -> dict:
         """Run optional external research without affecting core worker success."""
-        try:
-            status = self.finrlx.status()
-            if status.get("status") != "NO_VALIDATED_ARTIFACT":
-                return status
+        markets: dict[str, dict] = {}
+        for market_family in ("forex", "equity"):
             remaining_seconds = self.max_runtime_seconds - (time.perf_counter() - started)
             if remaining_seconds < 1:
-                return {
+                markets[market_family] = {
                     "status": "BUDGET_EXHAUSTED",
-                    "reason": "Core trading ML lanes consumed the current worker budget.",
+                    "reason": "The FinRL-X initialization slice consumed its bounded budget.",
                     "paper_only": True,
                 }
-            return self.finrlx.run_training(
-                market_family="forex",
-                request={
-                    "feature_store_root": str((self.root / "feature_store").resolve()),
-                    "artifact_root": str(
-                        Path(getattr(self.finrlx, "artifact_root", self.root / "finrlx")).resolve()
+                continue
+            try:
+                status = self.finrlx.status(market_family=market_family)
+                if status.get("status") != "NO_VALIDATED_ARTIFACT":
+                    markets[market_family] = status
+                    continue
+                per_market_budget = max(
+                    1,
+                    min(
+                        int(remaining_seconds),
+                        max(5, self.max_runtime_seconds // 4),
                     ),
-                    "max_rows": self.max_rows,
-                    "max_runtime_seconds": max(1, int(remaining_seconds)),
+                )
+                markets[market_family] = self.finrlx.run_training(
+                    market_family=market_family,
+                    request={
+                        "feature_store_root": str((self.root / "feature_store").resolve()),
+                        "artifact_root": str(
+                            Path(
+                                getattr(
+                                    self.finrlx,
+                                    "artifact_root",
+                                    self.root / "finrlx",
+                                )
+                            ).resolve()
+                        ),
+                        "max_rows": self.max_rows,
+                        "max_runtime_seconds": per_market_budget,
+                        "paper_only": True,
+                    },
+                )
+            except Exception as exc:
+                markets[market_family] = {
+                    "status": "FAILED",
+                    "reason": f"{type(exc).__name__}: {exc}",
                     "paper_only": True,
-                },
-            )
-        except Exception as exc:
-            return {
-                "status": "FAILED",
-                "reason": f"{type(exc).__name__}: {exc}",
-                "paper_only": True,
-            }
+                }
+        return {
+            "status": _aggregate_finrlx_status(markets.values()),
+            "markets": markets,
+            "paper_only": True,
+        }
 
     def _run_market(self, db: Session, market_family: str, trigger: str, started: float) -> dict:
         active = db.scalar(
@@ -387,3 +409,22 @@ def _example_from_store_row(row: dict) -> TradingMLExample:
         benchmark_excess=float(row["benchmark_excess"]) if row.get("benchmark_excess") is not None else None,
         sample_weight=float(row["sample_weight"]),
     )
+
+
+def _aggregate_finrlx_status(results: Iterable[dict]) -> str:
+    statuses = {str(result.get("status") or "FAILED").upper() for result in results}
+    for preferred in (
+        "VALIDATED_SHADOW",
+        "READY_SHADOW",
+        "INSUFFICIENT_EVIDENCE",
+        "NO_VALIDATED_ARTIFACT",
+        "BUDGET_EXHAUSTED",
+        "DISABLED",
+        "UNAVAILABLE",
+        "REJECTED",
+        "TIMEOUT",
+        "FAILED",
+    ):
+        if preferred in statuses:
+            return preferred
+    return "FAILED"
