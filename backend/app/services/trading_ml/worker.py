@@ -142,7 +142,7 @@ class TradingMLLearningWorker:
                     1,
                     min(
                         int(remaining_seconds),
-                        max(5, self.max_runtime_seconds // 4),
+                        max(10, self.max_runtime_seconds // 2),
                     ),
                 )
                 markets[market_family] = self.finrlx.run_training(

@@ -247,3 +247,21 @@ def test_worker_can_validate_equity_when_forex_evidence_is_single_class(db, tmp_
     assert result["finrlx"]["status"] == "VALIDATED_SHADOW"
     assert result["finrlx"]["markets"]["forex"]["status"] == "INSUFFICIENT_EVIDENCE"
     assert result["finrlx"]["markets"]["equity"]["status"] == "VALIDATED_SHADOW"
+
+
+def test_finrlx_market_training_gets_half_of_worker_budget(tmp_path):
+    instance = TradingMLLearningWorker(
+        artifact_root=tmp_path,
+        max_rows=500,
+        max_runtime_seconds=120,
+    )
+    finrlx = FakeFinRLXEngine()
+    instance.finrlx = finrlx
+
+    result = instance._run_finrlx(time.perf_counter())
+
+    assert result["status"] == "VALIDATED_SHADOW"
+    assert {
+        request["max_runtime_seconds"]
+        for _, request in finrlx.training_requests
+    } == {60}
