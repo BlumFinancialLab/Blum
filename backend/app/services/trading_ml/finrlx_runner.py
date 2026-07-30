@@ -210,18 +210,79 @@ def _propose(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _load_feature_rows(root: Path, market_family: str, *, max_rows: int) -> list[dict[str, Any]]:
-    directory = root / "features" / f"market_family={market_family}"
-    paths = sorted(directory.glob("**/*.parquet")) if directory.is_dir() else []
+    paths = _select_feature_paths(root, market_family, max_rows=max_rows)
     if not paths:
         return []
+    required_columns = list(
+        dict.fromkeys(
+            [
+                "source_uid",
+                "market_family",
+                "decision_timestamp",
+                "outcome_timestamp",
+                "realized_net_r",
+                "label_positive_r",
+                "sample_weight",
+                *NUMERIC_FEATURES,
+                *CATEGORICAL_FEATURES,
+            ]
+        )
+    )
     frame = (
         pl.scan_parquet([str(path) for path in paths], hive_partitioning=False)
         .filter(pl.col("market_family") == market_family)
+        .select(required_columns)
         .sort(["decision_timestamp", "outcome_timestamp", "source_uid"])
         .tail(max_rows)
         .collect()
     )
     return frame.to_dicts()
+
+
+def _select_feature_paths(
+    root: Path,
+    market_family: str,
+    *,
+    max_rows: int,
+) -> list[Path]:
+    """Select the newest immutable parts needed for one bounded sample.
+
+    The feature-store manifest is append-only and records the row count for
+    every part. Reading it avoids globbing and hydrating the complete history
+    when the runner only needs the latest bounded training window.
+    """
+
+    resolved_root = root.expanduser().resolve()
+    manifest_path = resolved_root / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        partitions = manifest.get("partitions")
+        if not isinstance(partitions, list):
+            raise ValueError("partitions must be a list")
+    except (OSError, json.JSONDecodeError, ValueError):
+        directory = resolved_root / "features" / f"market_family={market_family}"
+        return sorted(directory.glob("**/*.parquet")) if directory.is_dir() else []
+
+    selected: list[Path] = []
+    selected_rows = 0
+    for partition in reversed(partitions):
+        if not isinstance(partition, dict):
+            continue
+        if str(partition.get("market_family") or "").lower() != market_family:
+            continue
+        candidate = (resolved_root / str(partition.get("path") or "")).resolve()
+        if not candidate.is_relative_to(resolved_root) or not candidate.is_file():
+            continue
+        try:
+            partition_rows = max(1, int(partition.get("rows") or 1))
+        except (TypeError, ValueError):
+            partition_rows = 1
+        selected.append(candidate)
+        selected_rows += partition_rows
+        if selected_rows >= max_rows:
+            break
+    selected.reverse()
+    return selected
 
 
 def _fit_policy(

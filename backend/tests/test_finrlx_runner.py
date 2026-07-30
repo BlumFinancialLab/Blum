@@ -13,6 +13,7 @@ from app.services.trading_ml.contracts import (
     NUMERIC_FEATURES,
 )
 from app.services.trading_ml.finrlx import FinRLXQuantEngine
+from app.services.trading_ml.finrlx_runner import _select_feature_paths
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -226,3 +227,37 @@ def test_docker_enables_pinned_upstream_runner_without_broker_execution():
     assert "BLUM_FINRLX_ENABLED=true" in dockerfile
     assert "BLUM_FINRLX_RUNNER_COMMAND=/app/scripts/finrlx_runner.py" in dockerfile
     assert "APCA_API_KEY" not in dockerfile
+
+
+def test_runner_selects_only_recent_manifest_partitions_needed_for_sample(tmp_path):
+    root = tmp_path / "feature-store"
+    partitions = []
+    for index, rows in enumerate((400, 300, 250)):
+        relative = (
+            Path("features")
+            / "market_family=equity"
+            / "year=2026"
+            / f"month={index + 1:02d}"
+            / f"part-{index}.parquet"
+        )
+        target = root / relative
+        target.parent.mkdir(parents=True)
+        target.touch()
+        partitions.append(
+            {
+                "path": str(relative),
+                "market_family": "equity",
+                "rows": rows,
+            }
+        )
+    (root / "manifest.json").write_text(
+        json.dumps({"partitions": partitions}),
+        encoding="utf-8",
+    )
+
+    selected = _select_feature_paths(root, "equity", max_rows=500)
+
+    assert selected == [
+        root / partitions[1]["path"],
+        root / partitions[2]["path"],
+    ]
