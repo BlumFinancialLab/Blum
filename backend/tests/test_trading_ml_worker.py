@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+import time
 
 import polars as pl
 import pytest
@@ -200,3 +201,25 @@ def test_worker_runs_optional_finrlx_research_inside_existing_budget(db, tmp_pat
     assert finrlx.training_requests[0][1]["max_rows"] == 8
     stored = db.query(DashboardSnapshot).filter_by(snapshot_type="trading_ml_status").first()
     assert stored.payload_json["finrlx"]["paper_only"] is True
+
+
+def test_worker_initializes_finrlx_before_core_lanes_exhaust_budget(
+    db,
+    tmp_path,
+    monkeypatch,
+):
+    instance = worker(tmp_path)
+    instance.max_runtime_seconds = 2
+    finrlx = FakeFinRLXEngine()
+    instance.finrlx = finrlx
+
+    def consume_budget(session, market_family, trigger, started):
+        time.sleep(2.05)
+        return {"status": "SHADOW", "rows_considered": 0}
+
+    monkeypatch.setattr(instance, "_run_market", consume_budget)
+
+    result = instance.run_once(db, "test")
+
+    assert result["finrlx"]["status"] == "VALIDATED_SHADOW"
+    assert len(finrlx.training_requests) == 1

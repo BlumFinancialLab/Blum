@@ -59,6 +59,9 @@ class TradingMLLearningWorker:
         state.last_started_at = datetime.utcnow()
         state.max_items = self.max_rows * 2
         db.commit()
+        # Give the optional shadow challenger a bounded initialization slice
+        # before the heavier core lanes can consume the entire worker budget.
+        finrlx = self._run_finrlx(started)
         markets: dict[str, dict] = {}
         total_processed = 0
         for market_family in ("equity", "forex"):
@@ -76,7 +79,6 @@ class TradingMLLearningWorker:
                     "error": f"{type(exc).__name__}: {exc}",
                 }
 
-        finrlx = self._run_finrlx(started)
         duration = time.perf_counter() - started
         payload = {
             "status": "COMPLETED" if any(item.get("status") != "FAILED" for item in markets.values()) else "FAILED",
