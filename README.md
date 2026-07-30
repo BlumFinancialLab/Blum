@@ -2161,15 +2161,23 @@ do not claim guaranteed profitability or copy readiness. Forex forward evidence
 was still limited to 38 outcomes at design time, so the evidence gates, not
 training speed, determine when a model may become active.
 
-### Optional FinRL-X Quant Challenger
+### FinRL-X Quant Challenger
 
-BLUM exposes an optional FinRL-X-compatible boundary for quantitative policy
-research. The integration is pinned to
-`AI4Finance-Foundation/FinRL-Trading` revision
-`e65d6f0483ead7d2ef4a5fc940cdf960392a25c1`. FinRL-X, PyTorch and
-Stable-Baselines3 are not application startup dependencies: a separately
-configured executable receives bounded JSON requests from the existing
-background Trading ML worker.
+BLUM includes a paper-only quantitative challenger built against the actual
+[`AI4Finance-Foundation/FinRL-Trading`](https://github.com/AI4Finance-Foundation/FinRL-Trading)
+weight-centric strategy contract. The Apache-2.0 upstream package is installed
+from immutable revision
+`e65d6f0483ead7d2ef4a5fc940cdf960392a25c1`; BLUM's runner imports
+`BaseStrategy`, `StrategyConfig`, and `StrategyResult` from that pinned source.
+It does not import FinRL-X in the API process.
+
+The bundled runner consumes BLUM's immutable point-in-time Parquet feature
+store, uses a chronological holdout, and writes a deterministic classification
+and net-R policy as safe JSON. It never loads pickle artifacts. The runner is
+invoked as a bounded subprocess by the existing background Trading ML worker,
+so GET endpoints and page rendering cannot start training. A newly started
+process auto-discovers a previously validated market-specific manifest under
+`BLUM_FINRLX_ARTIFACT_ROOT`.
 
 Every external artifact is rejected before use unless its manifest has the
 expected provider, pinned upstream revision, supported algorithm, exact feature
@@ -2185,21 +2193,29 @@ lots, margin, stops, targets and simulated execution. Existing blockers force
 the external proposal to `HOLD`; no external proposal can open an order or
 remove a blocker.
 
-The integration is disabled by default:
+The Python configuration remains fail-closed by default. The production Docker
+image explicitly enables the bundled runner:
 
 ```dotenv
-BLUM_FINRLX_ENABLED=false
-BLUM_FINRLX_RUNNER_COMMAND=/absolute/path/to/finrlx-runner
+BLUM_FINRLX_ENABLED=true
+BLUM_FINRLX_RUNNER_COMMAND=/app/scripts/finrlx_runner.py
 BLUM_FINRLX_ARTIFACT_ROOT=/data/trading_ml/finrlx
-BLUM_FINRLX_MANIFEST_PATH=/data/trading_ml/finrlx/manifest.json
+BLUM_FINRLX_MANIFEST_PATH=
 BLUM_FINRLX_FEATURE_SCHEMA_HASH=
 BLUM_FINRLX_TIMEOUT_SECONDS=90
 ```
 
 Leaving `BLUM_FINRLX_FEATURE_SCHEMA_HASH` empty binds validation to BLUM's
 current Trading ML feature schema. Training remains background-only and
-bounded. This integration does not add broker connectivity, real-money
-execution, automatic promotion, or a claim of alpha.
+bounded. Insufficient outcomes produce `INSUFFICIENT_EVIDENCE` and no artifact,
+rather than a synthetic policy.
+
+This integration operationalizes FinRL-X's strategy boundary; it does not
+enable the upstream Alpaca deployment path or claim to run PPO/SAC/TD3 merely
+because those names exist upstream. The first bundled challenger is a
+deterministic, auditable policy because BLUM's current evidence volume does not
+justify giving a deep RL policy influence. It adds no broker connectivity,
+real-money execution, automatic promotion, or claim of alpha.
 
 ## BLUM Finance Model Release
 

@@ -24,6 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     gcc \
     g++ \
+    git \
     libpq-dev \
     postgresql \
     postgresql-contrib \
@@ -33,12 +34,18 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.5.1
 RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --no-deps \
+    "git+https://github.com/AI4Finance-Foundation/FinRL-Trading.git@e65d6f0483ead7d2ef4a5fc940cdf960392a25c1"
 
 COPY backend ./backend
 COPY scripts ./scripts
 COPY --from=frontend /workspace/frontend/out ./backend/app/static
 
-RUN chmod +x /app/scripts/start.sh
+ENV BLUM_FINRLX_ENABLED=true \
+    BLUM_FINRLX_RUNNER_COMMAND=/app/scripts/finrlx_runner.py \
+    BLUM_FINRLX_ARTIFACT_ROOT=/data/trading_ml/finrlx
+
+RUN chmod +x /app/scripts/start.sh /app/scripts/finrlx_runner.py
 
 EXPOSE 7860
 CMD ["/app/scripts/start.sh"]

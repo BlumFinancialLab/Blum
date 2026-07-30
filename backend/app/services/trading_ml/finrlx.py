@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 import shlex
 import subprocess
+import sys
 from typing import Any, Mapping
 
 from app.core.config import get_settings
@@ -208,7 +209,7 @@ class FinRLXQuantEngine:
             expected_feature_schema_hash=self.feature_schema_hash,
         )
 
-    def status(self) -> dict[str, Any]:
+    def status(self, market_family: str = "forex") -> dict[str, Any]:
         if not self.enabled:
             return {
                 "status": "DISABLED",
@@ -222,16 +223,18 @@ class FinRLXQuantEngine:
                 "reason": "Configured FinRL-X runner is not executable.",
                 "paper_only": True,
             }
-        if self.manifest_path is None:
+        manifest_path = self._manifest_path_for(market_family)
+        if manifest_path is None:
             return {
                 "status": "NO_VALIDATED_ARTIFACT",
                 "runner": command[0],
+                "market_family": market_family,
                 "paper_only": True,
             }
         try:
             manifest = self.validator.validate(
-                self.manifest_path,
-                market_family=self._manifest_market_family(),
+                manifest_path,
+                market_family=market_family,
             )
         except InvalidFinRLXArtifact as exc:
             return {
@@ -242,6 +245,7 @@ class FinRLXQuantEngine:
         return {
             "status": "READY_SHADOW",
             "runner": command[0],
+            "manifest_path": str(manifest_path),
             "manifest": manifest.to_payload(),
             "paper_only": True,
         }
@@ -265,14 +269,15 @@ class FinRLXQuantEngine:
         command = self._command()
         if not command:
             return self._hold("UNAVAILABLE", "FinRL-X runner is unavailable.")
-        if self.manifest_path is None:
+        manifest_path = self._manifest_path_for(market_family)
+        if manifest_path is None:
             return self._hold(
                 "NO_VALIDATED_ARTIFACT",
                 "No validated FinRL-X artifact is configured.",
             )
         try:
             manifest = self.validator.validate(
-                self.manifest_path,
+                manifest_path,
                 market_family=market_family,
             )
             raw = self._invoke(
@@ -282,6 +287,7 @@ class FinRLXQuantEngine:
                     "features": dict(features),
                     "context": dict(context or {}),
                     "manifest": manifest.to_payload(),
+                    "manifest_path": str(manifest_path),
                 },
                 timeout_seconds=min(5, self.timeout_seconds),
             )
@@ -322,6 +328,15 @@ class FinRLXQuantEngine:
             )
             manifest_path = result.get("manifest_path")
             if not manifest_path:
+                status = str(result.get("status") or "FAILED").upper()
+                if status != "TRAINED":
+                    return {
+                        "status": status,
+                        "reason": str(result.get("reason") or "FinRL-X runner did not produce an artifact."),
+                        "sample_count": int(result.get("sample_count") or 0),
+                        "minimum_samples": result.get("minimum_samples"),
+                        "paper_only": True,
+                    }
                 raise InvalidFinRLXArtifact("runner did not publish a manifest path")
             manifest = self.validator.validate(
                 str(manifest_path),
@@ -330,7 +345,9 @@ class FinRLXQuantEngine:
             self.manifest_path = Path(str(manifest_path)).expanduser().resolve()
             return {
                 "status": "VALIDATED_SHADOW",
+                "manifest_path": str(self.manifest_path),
                 "manifest": manifest.to_payload(),
+                "validation": result.get("validation") or {},
                 "paper_only": True,
             }
         except InvalidFinRLXArtifact as exc:
@@ -351,6 +368,11 @@ class FinRLXQuantEngine:
     def _command(self) -> list[str]:
         if not self.runner_command:
             return []
+        direct_executable = Path(self.runner_command).expanduser()
+        if direct_executable.is_absolute() and direct_executable.is_file():
+            if direct_executable.stat().st_mode & 0o111:
+                resolved = str(direct_executable.resolve())
+                return [sys.executable, resolved] if direct_executable.suffix == ".py" else [resolved]
         try:
             command = shlex.split(self.runner_command)
         except ValueError:
@@ -362,7 +384,8 @@ class FinRLXQuantEngine:
             return []
         if not executable.stat().st_mode & 0o111:
             return []
-        command[0] = str(executable.resolve())
+        resolved = str(executable.resolve())
+        command[0:1] = [sys.executable, resolved] if executable.suffix == ".py" else [resolved]
         return command
 
     def _invoke(
@@ -433,14 +456,13 @@ class FinRLXQuantEngine:
             return any(cls._contains_forbidden_field(item) for item in value)
         return False
 
-    def _manifest_market_family(self) -> str:
-        if self.manifest_path is None:
-            return "forex"
-        try:
-            raw = json.loads(self.manifest_path.read_text(encoding="utf-8"))
-            return str(raw.get("market_family") or "forex")
-        except (OSError, json.JSONDecodeError):
-            return "forex"
+    def _manifest_path_for(self, market_family: str) -> Path | None:
+        if self.manifest_path is not None:
+            return self.manifest_path
+        discovered = (self.artifact_root / market_family.lower() / "manifest.json").resolve()
+        if discovered.is_file() and discovered.is_relative_to(self.artifact_root):
+            return discovered
+        return None
 
     @staticmethod
     def _hold(
