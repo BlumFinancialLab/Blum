@@ -46,6 +46,8 @@ from app.services.forex_trader import (
     ForexStrategyRepository,
     ForexTraderSnapshotService,
 )
+from app.services.trading_ml.forex_history import ForexHistoricalDatasetService
+from test_forex_historical_dataset import SOURCE_URL, _write_dataset
 from app.main import app
 
 
@@ -327,6 +329,38 @@ def test_only_eligible_contextual_memory_changes_confidence() -> None:
     assert eligible.proposal.confidence == pytest.approx(baseline.proposal.confidence + 0.08)
     assert eligible.proposal.confidence_components["contextual_memory_adjustment"] == 8.0
     assert eligible.proposal.knowledge_context["status"] == "CONTEXT_ELIGIBLE"
+
+
+def test_historical_forex_knowledge_is_bounded_and_audited_in_decision(
+    tmp_path,
+) -> None:
+    source = tmp_path / "forex.csv"
+    artifact = tmp_path / "forex_historical_knowledge.json"
+    _write_dataset(source)
+    service = ForexHistoricalDatasetService(
+        source_path=source,
+        source_url=SOURCE_URL,
+        license_name="CC BY-SA 4.0",
+        source_version="1",
+        sample_weight=0.25,
+    )
+    bundle = service.prepare()
+    service.write_knowledge(bundle, artifact)
+    core = BlumForexTraderCore(historical_knowledge_path=artifact)
+
+    baseline = BlumForexTraderCore(
+        historical_knowledge_path=tmp_path / "missing.json"
+    ).evaluate_input(market_input(), strategy=strategy())
+    learned = core.evaluate_input(market_input(), strategy=strategy())
+
+    history = learned.proposal.knowledge_context["historical_forex"]
+    assert history["status"] == "AVAILABLE"
+    assert history["sample_size"] >= 10
+    assert abs(learned.proposal.confidence - baseline.proposal.confidence) <= 0.030001
+    assert (
+        learned.proposal.confidence_components["historical_knowledge_adjustment"]
+        == pytest.approx(history["confidence_adjustment"] * 100.0)
+    )
 
 
 def test_replay_memory_uses_session_wildcard_and_setup_alias() -> None:

@@ -25,6 +25,11 @@ from .contracts import (
 )
 from .feature_store import TradingMLFeatureStoreProjector
 from .finrlx import FinRLXQuantEngine
+from .forex_history import (
+    KAGGLE_FOREX_SOURCE_URL,
+    ForexHistoricalDatasetService,
+    bundled_forex_history_path,
+)
 from .registry import TradingMLModelRegistry, TradingMLPromotionService
 from .training import BoundedOptunaChallengerSearch, OnlineShadowTrainer, SklearnTradingModelTrainer
 
@@ -38,12 +43,24 @@ class TradingMLLearningWorker:
         artifact_root: str | Path | None = None,
         max_runtime_seconds: int | None = None,
         max_rows: int | None = None,
+        forex_history_source: str | Path | None = None,
     ) -> None:
         settings = get_settings()
         self.root = Path(artifact_root or settings.trading_ml_artifact_root)
         self.max_runtime_seconds = int(max_runtime_seconds or settings.trading_ml_max_runtime_seconds)
         self.max_rows = int(max_rows or settings.trading_ml_max_rows_per_slice)
         self.settings = settings
+        configured_history = (
+            Path(settings.forex_history_source_path)
+            if settings.forex_history_source_path
+            else bundled_forex_history_path()
+        )
+        self.forex_history_source = Path(
+            forex_history_source or configured_history
+        )
+        self.forex_history_enabled = bool(
+            forex_history_source is not None or settings.forex_history_enabled
+        )
         self.projector = TradingMLFeatureStoreProjector(
             root=self.root / "feature_store",
             max_rows_per_projection=self.max_rows,
@@ -59,6 +76,7 @@ class TradingMLLearningWorker:
         state.last_started_at = datetime.utcnow()
         state.max_items = self.max_rows * 2
         db.commit()
+        forex_history = self._ensure_forex_history()
         # Give the optional shadow challenger a bounded initialization slice
         # before the heavier core lanes can consume the entire worker budget.
         finrlx = self._run_finrlx(started)
@@ -85,6 +103,7 @@ class TradingMLLearningWorker:
             "trigger": trigger,
             "markets": markets,
             "finrlx": finrlx,
+            "forex_history": forex_history,
             "duration_seconds": round(duration, 4),
             "bounded": True,
             "decision_policy": "shadow/challenger models have no authority; only evidence-gated ACTIVE models advise within guardrails",
@@ -121,6 +140,54 @@ class TradingMLLearningWorker:
         )
         return payload
 
+    def _ensure_forex_history(self) -> dict:
+        if not self.forex_history_enabled:
+            return {
+                "status": "DISABLED",
+                "reason": "External Forex history bootstrap is disabled.",
+                "paper_authority": False,
+            }
+        if not self.forex_history_source.is_file():
+            return {
+                "status": "UNAVAILABLE",
+                "reason": f"Forex history source is missing: {self.forex_history_source}",
+                "paper_authority": False,
+            }
+        try:
+            service = ForexHistoricalDatasetService(
+                source_path=self.forex_history_source,
+                source_url=KAGGLE_FOREX_SOURCE_URL,
+                license_name="CC BY-SA 4.0",
+                source_version="1",
+                sample_weight=self.settings.forex_history_sample_weight,
+            )
+            bundle = service.prepare()
+            projection = self.projector.append_external(
+                bundle.examples,
+                source_id=str(bundle.provenance["source_id"]),
+                provenance=bundle.provenance,
+            )
+            service.write_knowledge(
+                bundle,
+                self.root / "forex_historical_knowledge.json",
+            )
+            return {
+                "status": "READY",
+                "rows_written": projection.rows_written,
+                "examples_available": len(bundle.examples),
+                "pairs": bundle.provenance["pairs"],
+                "source_sha256": bundle.provenance["source_sha256"],
+                "evidence_lane": "external_historical_replay",
+                "sample_weight": bundle.provenance["sample_weight"],
+                "paper_authority": False,
+            }
+        except Exception as exc:
+            return {
+                "status": "FAILED",
+                "reason": f"{type(exc).__name__}: {exc}",
+                "paper_authority": False,
+            }
+
     def _run_finrlx(self, started: float) -> dict:
         """Run optional external research without affecting core worker success."""
         markets: dict[str, dict] = {}
@@ -135,7 +202,25 @@ class TradingMLLearningWorker:
                 continue
             try:
                 status = self.finrlx.status(market_family=market_family)
-                if status.get("status") != "NO_VALIDATED_ARTIFACT":
+                current_dataset_hash = (
+                    self.projector.market_dataset_hash(market_family)  # type: ignore[arg-type]
+                    if hasattr(self.projector, "market_dataset_hash")
+                    else str(self.projector.manifest().get("dataset_hash") or "")
+                )
+                artifact_dataset_hash = str(
+                    (status.get("manifest") or {}).get("dataset_hash") or ""
+                )
+                artifact_is_current = (
+                    status.get("status") == "READY_SHADOW"
+                    and artifact_dataset_hash == current_dataset_hash
+                )
+                if artifact_is_current:
+                    markets[market_family] = status
+                    continue
+                if status.get("status") not in {
+                    "NO_VALIDATED_ARTIFACT",
+                    "READY_SHADOW",
+                }:
                     markets[market_family] = status
                     continue
                 per_market_budget = max(

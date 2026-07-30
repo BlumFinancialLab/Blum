@@ -43,7 +43,9 @@ COPY --from=frontend /workspace/frontend/out ./backend/app/static
 
 ENV BLUM_FINRLX_ENABLED=true \
     BLUM_FINRLX_RUNNER_COMMAND=/app/scripts/finrlx_runner.py \
-    BLUM_FINRLX_ARTIFACT_ROOT=/data/trading_ml/finrlx
+    BLUM_FINRLX_ARTIFACT_ROOT=/data/trading_ml/finrlx \
+    BLUM_FOREX_HISTORY_ENABLED=true \
+    BLUM_FOREX_HISTORY_SOURCE_PATH=/app/backend/app/data/forex/Forex_sample_dataset.csv
 
 RUN chmod +x /app/scripts/start.sh /app/scripts/finrlx_runner.py
 

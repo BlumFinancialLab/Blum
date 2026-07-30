@@ -74,6 +74,7 @@ def _train(payload: Mapping[str, Any]) -> dict[str, Any]:
     max_rows = max(1, min(int(request.get("max_rows") or 500), 20_000))
     minimum_samples = max(32, int(request.get("minimum_samples") or 64))
     rows = _load_feature_rows(feature_store_root, market_family, max_rows=max_rows)
+    dataset_hash = _market_dataset_hash(feature_store_root, market_family)
     if len(rows) < minimum_samples:
         return {
             "status": "INSUFFICIENT_EVIDENCE",
@@ -128,6 +129,7 @@ def _train(payload: Mapping[str, Any]) -> dict[str, Any]:
         "regressor_intercept": float(regressor.intercept_),
         "validation": validation,
         "sample_count": len(rows),
+        "dataset_hash": dataset_hash,
         "trained_at": datetime.now(UTC).isoformat(),
         "paper_only": True,
     }
@@ -151,6 +153,7 @@ def _train(payload: Mapping[str, Any]) -> dict[str, Any]:
         "artifact_path": artifact_path.name,
         "artifact_sha256": digest,
         "sample_count": len(rows),
+        "dataset_hash": dataset_hash,
         "paper_only": True,
         "validation": validation,
         "upstream_contract_source": contract.source,
@@ -284,6 +287,37 @@ def _select_feature_paths(
             break
     selected.reverse()
     return selected
+
+
+def _market_dataset_hash(root: Path, market_family: str) -> str:
+    manifest_path = root / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        partitions = [
+            {
+                "content_hash": partition["content_hash"],
+                "market_family": partition["market_family"],
+                "path": partition["path"],
+                "rows": partition["rows"],
+            }
+            for partition in manifest.get("partitions", [])
+            if isinstance(partition, dict)
+            and partition.get("market_family") == market_family
+        ]
+        if partitions:
+            payload = json.dumps(
+                partitions,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    except (OSError, KeyError, TypeError, json.JSONDecodeError):
+        pass
+    digest = hashlib.sha256()
+    for path in _select_feature_paths(root, market_family, max_rows=20_000):
+        digest.update(str(path.relative_to(root)).encode("utf-8"))
+        digest.update(hashlib.sha256(path.read_bytes()).digest())
+    return digest.hexdigest()
 
 
 def _fit_policy(

@@ -7,6 +7,7 @@ import json
 import logging
 from math import ceil
 import os
+from pathlib import Path
 import subprocess
 import time
 from uuid import uuid4
@@ -56,6 +57,7 @@ from app.services.dashboard_snapshots import DashboardSnapshotService
 from app.services.trading_ml.finrlx import FinRLXQuantEngine
 from app.services.trading_ml.finrlx_overlay import FinRLXDecisionOverlay
 from app.services.trading_ml.inference import TradingMLInferenceService, advice_payload
+from app.services.trading_ml.forex_history import ForexHistoricalKnowledgeService
 from app.core.config import get_settings
 
 
@@ -227,7 +229,11 @@ class BlumForexPositionManagerAgent:
 class BlumForexTraderCore:
     """Only authoritative analysis-to-paper-order orchestrator for Forex."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        historical_knowledge_path: str | os.PathLike[str] | None = None,
+    ) -> None:
         self.context = BlumForexMarketContextAgent()
         self.price_action = BlumForexPriceActionAgent()
         self.macro = BlumForexMacroAgent()
@@ -242,12 +248,47 @@ class BlumForexTraderCore:
         self.supervised_advisor = TradingMLInferenceService()
         self.quant_advisor = FinRLXQuantEngine()
         self.quant_overlay = FinRLXDecisionOverlay()
+        settings = get_settings()
+        self.historical_knowledge = ForexHistoricalKnowledgeService(
+            historical_knowledge_path
+            or Path(settings.trading_ml_artifact_root)
+            / "forex_historical_knowledge.json"
+        )
 
     def evaluate_input(self, market: AgentMarketInput, *, strategy: ForexStrategyEvidence) -> EvaluationOutcome:
         context = self.context.analyze(market)
         price_action = self.price_action.analyze(market)
         macro = self.macro.analyze(market)
         proposal = self.scalper.propose(market, context, price_action, macro, strategy)
+        historical = self.historical_knowledge.advise(
+            pair=market.pair,
+            closes=market.frames.get("1h").closes if market.frames.get("1h") else (),
+        )
+        if historical.status == "AVAILABLE":
+            historical_payload = _jsonable(asdict(historical))
+            adjustment = historical.confidence_adjustment
+            proposal = replace(
+                proposal,
+                confidence=max(0.0, min(1.0, proposal.confidence + adjustment)),
+                supporting_evidence=(
+                    (*proposal.supporting_evidence, historical.explanation[0])
+                    if adjustment > 0
+                    else proposal.supporting_evidence
+                ),
+                conflicting_evidence=(
+                    (*proposal.conflicting_evidence, historical.explanation[0])
+                    if adjustment < 0
+                    else proposal.conflicting_evidence
+                ),
+                confidence_components={
+                    **dict(proposal.confidence_components or {}),
+                    "historical_knowledge_adjustment": adjustment * 100.0,
+                },
+                knowledge_context={
+                    **dict(proposal.knowledge_context or {}),
+                    "historical_forex": historical_payload,
+                },
+            )
         objections = self.contrarian.challenge(market, proposal, context, macro, strategy)
         proposal = replace(
             proposal,

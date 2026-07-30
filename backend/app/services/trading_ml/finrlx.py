@@ -63,6 +63,7 @@ class FinRLXArtifactManifest:
     artifact_sha256: str
     sample_count: int
     paper_only: bool
+    dataset_hash: str | None = None
 
     def to_payload(self) -> dict[str, Any]:
         return asdict(self)
@@ -132,6 +133,11 @@ class FinRLXArtifactValidator:
                 artifact_sha256=str(raw["artifact_sha256"]).lower(),
                 sample_count=int(raw["sample_count"]),
                 paper_only=paper_only,
+                dataset_hash=(
+                    str(raw["dataset_hash"])
+                    if raw.get("dataset_hash")
+                    else None
+                ),
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise InvalidFinRLXArtifact(f"manifest contract is invalid: {exc}") from exc
@@ -157,6 +163,11 @@ class FinRLXArtifactValidator:
             raise InvalidFinRLXArtifact("paper-only policy is required")
         if manifest.sample_count < 1:
             raise InvalidFinRLXArtifact("sample count must be positive")
+        if manifest.dataset_hash is not None and (
+            len(manifest.dataset_hash) != 64
+            or any(character not in "0123456789abcdef" for character in manifest.dataset_hash)
+        ):
+            raise InvalidFinRLXArtifact("dataset hash is invalid")
 
         artifact = (path.parent / manifest.artifact_path).resolve()
         if not artifact.is_relative_to(self.root):

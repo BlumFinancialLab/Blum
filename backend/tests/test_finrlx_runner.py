@@ -145,6 +145,7 @@ def test_builtin_runner_trains_validated_policy_and_serves_shadow_inference(
     assert trained["status"] == "VALIDATED_SHADOW"
     assert trained["manifest"]["algorithm"] == "DETERMINISTIC"
     assert trained["manifest"]["sample_count"] == 120
+    assert trained["manifest"]["dataset_hash"]
     assert Path(trained["manifest_path"]).is_file()
     assert proposal.status == "SHADOW"
     assert proposal.action in {"LONG", "HOLD"}

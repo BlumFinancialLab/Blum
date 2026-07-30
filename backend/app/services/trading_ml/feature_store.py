@@ -126,6 +126,63 @@ class TradingMLFeatureStoreProjector:
             is_exhausted=dataset_slice.exhausted,
         )
 
+    def append_external(
+        self,
+        examples: tuple[TradingMLExample, ...],
+        *,
+        source_id: str,
+        provenance: dict,
+    ) -> ProjectionResult:
+        """Append an immutable external research dataset without changing DB cursors."""
+
+        if not source_id.strip():
+            raise ValueError("external source_id is required")
+        if any(example.market_family != "forex" for example in examples):
+            raise ValueError("external Forex projection accepts only forex examples")
+        source_sha256 = str(provenance.get("source_sha256") or "")
+        if not source_sha256:
+            raise ValueError("external source provenance requires source_sha256")
+        unique_examples, rejected_duplicates = _deduplicate_examples(examples)
+        with _manifest_update_lock(
+            self.root,
+            timeout_seconds=self._manifest_lock_timeout_seconds,
+        ):
+            manifest = self._load_manifest()
+            external_sources = manifest.setdefault("external_sources", {})
+            previous = external_sources.get(source_id)
+            if previous is not None:
+                if str(previous.get("source_sha256") or "") != source_sha256:
+                    raise ValueError(
+                        "external source content changed without a new source version"
+                    )
+                return ProjectionResult(
+                    rows_written=0,
+                    partitions_written=0,
+                    dataset_hash=str(manifest["dataset_hash"]),
+                    source_cursor=self._cursor_for(manifest, "forex"),
+                    rows_considered=len(examples),
+                    rows_rejected=rejected_duplicates,
+                    is_exhausted=True,
+                )
+            partitions = self._write_partitions(unique_examples, "forex")
+            committed_partitions = _merge_partitions(manifest["partitions"], partitions)
+            manifest["partitions"].extend(committed_partitions)
+            external_sources[source_id] = json.loads(json.dumps(provenance, default=str))
+            manifest["evidence_lane_counts"] = self._evidence_lane_counts(
+                manifest["partitions"]
+            )
+            manifest["dataset_hash"] = self._dataset_hash(manifest["partitions"])
+            self._write_manifest(manifest)
+        return ProjectionResult(
+            rows_written=sum(partition["rows"] for partition in committed_partitions),
+            partitions_written=len(committed_partitions),
+            dataset_hash=str(manifest["dataset_hash"]),
+            source_cursor=self._cursor_for(manifest, "forex"),
+            rows_considered=len(examples),
+            rows_rejected=rejected_duplicates,
+            is_exhausted=True,
+        )
+
     def scan(
         self,
         *,
@@ -155,6 +212,14 @@ class TradingMLFeatureStoreProjector:
         """Return a defensive manifest copy for status and tests."""
 
         return json.loads(json.dumps(self._load_manifest()))
+
+    def market_dataset_hash(self, market_family: MarketFamily) -> str:
+        manifest = self._load_manifest()
+        return self._dataset_hash(
+            partition
+            for partition in manifest["partitions"]
+            if partition.get("market_family") == market_family
+        )
 
     def _write_partitions(self, examples: tuple[TradingMLExample, ...], market_family: MarketFamily) -> list[dict]:
         partitions: list[dict] = []
@@ -204,6 +269,7 @@ class TradingMLFeatureStoreProjector:
                 "partitions": [],
                 "source_cursors": {},
                 "evidence_lane_counts": {},
+                "external_sources": {},
             }
         with path.open("r", encoding="utf-8") as handle:
             manifest = json.load(handle)
@@ -212,6 +278,7 @@ class TradingMLFeatureStoreProjector:
         manifest.setdefault("partitions", [])
         manifest.setdefault("source_cursors", {})
         manifest.setdefault("evidence_lane_counts", {})
+        manifest.setdefault("external_sources", {})
         return manifest
 
     def _write_manifest(self, manifest: dict) -> None:

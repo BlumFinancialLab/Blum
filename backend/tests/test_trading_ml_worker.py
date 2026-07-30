@@ -23,6 +23,7 @@ from app.services.trading_ml.feature_store import ProjectionResult, _row_from_ex
 from app.services.trading_ml.registry import TradingMLModelRegistry
 from app.services.trading_ml.training import SklearnTradingModelTrainer
 from app.services.trading_ml.worker import TradingMLLearningWorker
+from test_forex_historical_dataset import _write_dataset
 from test_trading_ml_training import examples
 
 
@@ -190,6 +191,22 @@ class FakeFinRLXEngine:
         }
 
 
+class ExistingFinRLXEngine(FakeFinRLXEngine):
+    def __init__(self, dataset_hash):
+        super().__init__()
+        self.dataset_hash = dataset_hash
+
+    def status(self, market_family="forex"):
+        return {
+            "status": "READY_SHADOW",
+            "paper_only": True,
+            "manifest": {
+                "market_family": market_family,
+                "dataset_hash": self.dataset_hash,
+            },
+        }
+
+
 def test_worker_runs_optional_finrlx_research_inside_existing_budget(db, tmp_path):
     instance = worker(tmp_path)
     finrlx = FakeFinRLXEngine()
@@ -204,6 +221,52 @@ def test_worker_runs_optional_finrlx_research_inside_existing_budget(db, tmp_pat
     assert set(result["finrlx"]["markets"]) == {"equity", "forex"}
     stored = db.query(DashboardSnapshot).filter_by(snapshot_type="trading_ml_status").first()
     assert stored.payload_json["finrlx"]["paper_only"] is True
+
+
+def test_worker_projects_external_forex_history_before_finrlx_training(
+    db,
+    tmp_path,
+):
+    source = tmp_path / "forex.csv"
+    _write_dataset(source)
+    instance = TradingMLLearningWorker(
+        artifact_root=tmp_path / "artifacts",
+        max_rows=500,
+        max_runtime_seconds=30,
+        forex_history_source=source,
+    )
+    finrlx = FakeFinRLXEngine()
+    instance.finrlx = finrlx
+
+    result = instance.run_once(db, "test")
+
+    assert result["forex_history"]["status"] == "READY"
+    assert result["forex_history"]["examples_available"] > 0
+    assert (tmp_path / "artifacts" / "forex_historical_knowledge.json").is_file()
+    assert finrlx.training_requests[0][0] == "forex"
+
+
+def test_worker_retrains_finrlx_only_when_feature_dataset_changed(tmp_path):
+    instance = TradingMLLearningWorker(
+        artifact_root=tmp_path,
+        max_rows=8,
+        max_runtime_seconds=30,
+    )
+    current_hash = instance.projector.market_dataset_hash("forex")
+    current = ExistingFinRLXEngine(current_hash)
+    instance.finrlx = current
+
+    unchanged = instance._run_finrlx(time.perf_counter())
+
+    assert unchanged["markets"]["forex"]["status"] == "READY_SHADOW"
+    assert current.training_requests == []
+
+    stale = ExistingFinRLXEngine("old-dataset")
+    instance.finrlx = stale
+    changed = instance._run_finrlx(time.perf_counter())
+
+    assert changed["markets"]["forex"]["status"] == "VALIDATED_SHADOW"
+    assert [market for market, _ in stale.training_requests] == ["forex", "equity"]
 
 
 def test_worker_initializes_finrlx_before_core_lanes_exhaust_budget(

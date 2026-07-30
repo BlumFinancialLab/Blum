@@ -2287,3 +2287,31 @@ The current model release requires Apple Silicon and MLX. A portable
 Transformers/GGUF release remains a separate validation target. Language-model
 reasoning scores do not demonstrate trading alpha, future profitability or
 suitability for unattended capital execution.
+
+# Historical Forex Knowledge Bootstrap
+
+BLUM imports the licensed Kaggle
+[Forex Trading Dataset with EMA, RSI & ATR (2025)](https://www.kaggle.com/datasets/jeleeladekunlefijabi/forex-trading-dataset-with-ema-rsi-and-atr)
+inside the background Trading ML worker. The Learning and Paper Trading pages
+never download or process the dataset.
+
+The source is treated as external research evidence:
+
+- source indicators and labels are ignored and recalculated from OHLC;
+- duplicate date-only observations are consolidated into daily bars, never
+  represented as intraday ticks;
+- every feature uses information available at or before the decision timestamp;
+- every label uses a later bar and includes a conservative estimated round-trip
+  cost;
+- examples use the `external_historical_replay` lane with `0.25` sample weight;
+- source URL, license, version, SHA-256, pair coverage, and transformation policy
+  are persisted in the feature-store manifest;
+- historical confidence influence is capped at +/-3 percentage points and
+  cannot bypass data, execution, risk, or no-edge vetoes;
+- FinRL-X consumes the examples as a paper-only challenger. Poor holdout results
+  remain shadow/frozen and cannot authorize paper trades.
+
+The bundled source is daily and covers only EUR/USD, GBP/USD, and USD/JPY. It
+improves historical regime and cross-pair context, but it is not evidence for
+one-minute scalping and does not prove future profitability. Intraday decisions
+still require fresh BLUM `1h/15m/5m/1m` market evidence and forward outcomes.
