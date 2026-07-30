@@ -404,6 +404,44 @@ def test_closed_trade_history_is_not_evicted_by_newer_skipped_candidates():
         }
 
 
+def test_expired_unfilled_order_is_terminal_evidence_not_candidate_or_closed_trade():
+    with setup_db() as db:
+        game = seed_game(db)
+        db.add(
+            LiveForwardPaperTrade(
+                trade_uid="paper-expired-unfilled",
+                duplicate_key="paper-expired-unfilled-key",
+                game_id=game.id,
+                ticker="XOM",
+                asset_type="Stock",
+                setup_type="intraday_breakout",
+                market="us_equity",
+                status="EXPIRED",
+                decision_timestamp=NOW - timedelta(hours=2),
+                closed_at=NOW - timedelta(hours=1),
+                entry_price=None,
+                exit_price=None,
+                net_pnl_eur=None,
+                outcome_label="ORDER_NOT_FILLED",
+                close_reason="ORDER_NOT_FILLED",
+                evidence_type="INTRADAY_PAPER_FORWARD",
+                trading_mode="intraday_paper",
+            )
+        )
+        db.commit()
+
+        payload = UnifiedPaperTradingProjectionService().build(db)
+        counts = payload["counts"]["by_market"]["equities"]
+
+        assert counts["total"] == 1
+        assert counts["candidates"] == 0
+        assert counts["closed"] == 0
+        assert counts["terminal_outcomes"] == 1
+        assert counts["no_fill_outcomes"] == 1
+        assert payload["metrics"]["by_market"]["equities"]["sample_size"] == 0
+        assert payload["recently_closed_pagination"]["total"] == 1
+
+
 def test_open_forex_position_affects_only_unrealized_metrics():
     with setup_db() as db:
         seed_game(db)

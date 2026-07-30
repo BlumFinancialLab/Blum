@@ -718,6 +718,7 @@ def test_paper_trading_summary_uses_selected_market_totals_without_global_leakag
     assert "marketCounts[selectedMarketKey]" in text
     assert "marketMetrics[selectedMarketKey]" in text
     assert "maxAvailableCount(counts.candidates, candidates.length)" in text
-    assert "maxAvailableCount(counts.closed, closedTrades.length)" in text
+    assert 'value={numberLike(counts.closed)}' in text
+    assert "counts.terminal_outcomes" in text
     assert "snapshot.candidate_count" not in text
     assert "snapshot.closed_count" not in text

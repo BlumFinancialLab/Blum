@@ -57,7 +57,7 @@ const PAPER_MARKET_TABS: Array<{ id: PaperMarketTab; label: string }> = [
 ];
 
 const PAPER_LIFECYCLE_TABS: Array<{ id: PaperLifecycleTab; label: string }> = [
-  { id: "closed", label: "Storico chiusi / P&L" },
+  { id: "closed", label: "Esiti completati / P&L" },
   { id: "open", label: "Posizioni aperte" },
   { id: "candidates", label: "Candidati / skipped" },
 ];
@@ -231,7 +231,13 @@ export default function PaperTradingPage() {
       <section className="terminal-command-grid">
         <MetricCard label="Candidates" value={numberLike(maxAvailableCount(counts.candidates, candidates.length))} subvalue={`${marketTab === "forex" ? "Forex" : "Azioni / ETF"} frozen or skipped`} icon={<Target size={15} />} tone={candidates.length ? "attention" : "neutral"} />
         <MetricCard label="Open" value={numberLike(counts.open ?? openPositions.length)} subvalue={`${marketTab === "forex" ? "Forex" : "Azioni / ETF"} paper positions`} icon={<Clock size={15} />} tone={openPositions.length ? "positive" : "neutral"} />
-        <MetricCard label="Closed" value={numberLike(maxAvailableCount(counts.closed, closedTrades.length))} subvalue={`${marketTab === "forex" ? "Forex" : "Azioni / ETF"} evaluated outcomes`} icon={<BookOpen size={15} />} tone={closedTrades.length ? "positive" : "neutral"} />
+        <MetricCard
+          label="Closed trades"
+          value={numberLike(counts.closed)}
+          subvalue={`${numberLike(counts.terminal_outcomes)} completed outcomes, ${numberLike(counts.no_fill_outcomes)} without fill`}
+          icon={<BookOpen size={15} />}
+          tone={Number(counts.closed) ? "positive" : "neutral"}
+        />
         <MetricCard label="No trade" value={numberLike(counts.decisions_rejected)} subvalue="Rejected without P/L" icon={<ShieldAlert size={15} />} tone={Number(counts.decisions_rejected) ? "attention" : "info"} />
         <MetricCard label="Realized P/L" value={formatCurrency(metrics.realized_pnl)} subvalue={`Unrealized ${formatCurrency(metrics.unrealized_pnl)}`} icon={<TrendingUp size={15} />} tone={moneyTone(metrics.realized_pnl)} />
         <MetricCard label="Win / Avg R" value={`${formatPercent01(metrics.win_rate)} / ${formatR(metrics.average_r)}`} subvalue={`Benchmark excess ${formatPercent01(metrics.benchmark_excess)}`} icon={<TrendingDown size={15} />} tone={moneyTone(metrics.benchmark_excess)} />
@@ -308,13 +314,13 @@ export default function PaperTradingPage() {
 
       <DecisionSection
         title={lifecycleTab === "closed"
-          ? `${marketTab === "forex" ? "Forex" : "Azioni / ETF"} - Storico trade chiusi`
+          ? `${marketTab === "forex" ? "Forex" : "Azioni / ETF"} - Esiti completati`
           : lifecycleTab === "open"
             ? "Posizioni aperte"
             : `${marketTab === "forex" ? "Forex" : "Azioni / ETF"} - Candidati / skipped`}
         value={`${lifecycleRows.length} ${lifecycleTab}`}
         subtitle={lifecycleTab === "closed"
-          ? "Esiti chiusi con prezzi di entrata/uscita, P/L, R e benchmark. Gli skipped non compaiono in questa vista."
+          ? "Trade chiusi e ordini terminali non eseguiti. Solo i trade con fill e P/L entrano nelle metriche di performance."
           : lifecycleTab === "open"
             ? "Posizioni paper-forward aperte con P/L non realizzato, stop e target."
             : "Decisioni non ancora aperte o scartate dai filtri di actionability."}
@@ -325,7 +331,7 @@ export default function PaperTradingPage() {
       />
 
       <section className="grid-2" style={{ marginTop: 12 }}>
-        <BloombergPanel title={lifecycleTab === "closed" ? "Storico P/L" : "Trade Journal"} value={`${lifecycleRows.length} rows`} subtitle="Il journal segue il filtro selezionato. Il replay resta lazy e viene caricato solo aprendo una riga.">
+        <BloombergPanel title={lifecycleTab === "closed" ? "Esiti e P/L" : "Trade Journal"} value={`${lifecycleRows.length} rows`} subtitle="Il journal segue il filtro selezionato. Gli ordini non eseguiti restano evidenza, ma non vengono contati come trade chiusi.">
           {lifecycleRows.length ? <TradeJournal rows={lifecycleRows.slice(0, 50)} onReplay={openReplay} selectedId={selectedTrade?.trade_id} /> : <ReadinessStateCard state={readiness} compact />}
         </BloombergPanel>
 

@@ -608,8 +608,15 @@ class UnifiedPaperTradingProjectionService:
         }
 
     def _summarize(self, rows: list[dict]) -> dict:
-        closed = [row for row in rows if row["status"] in TERMINAL_STATUSES and row["net_pnl"] is not None]
+        terminal = [row for row in rows if row["status"] in TERMINAL_STATUSES]
+        closed = [row for row in terminal if row["net_pnl"] is not None]
+        no_fill_outcomes = [row for row in terminal if row["net_pnl"] is None]
         opened = [row for row in rows if row["status"] in OPEN_STATUSES]
+        candidates = [
+            row
+            for row in rows
+            if row["status"] not in TERMINAL_STATUSES | OPEN_STATUSES
+        ]
         rejected = [row for row in rows if row.get("source_status") in {"REJECTED", "BLOCKED", "NO_TRADE"}]
         pnl = [float(row["net_pnl"]) for row in closed]
         r_values = [float(row["r_multiple"]) for row in closed if row["r_multiple"] is not None]
@@ -621,9 +628,11 @@ class UnifiedPaperTradingProjectionService:
         return {
             "counts": {
                 "total": len(rows),
-                "candidates": len(rows) - len(opened) - len(closed),
+                "candidates": len(candidates),
                 "open": len(opened),
                 "closed": len(closed),
+                "terminal_outcomes": len(terminal),
+                "no_fill_outcomes": len(no_fill_outcomes),
                 "wins": len(wins),
                 "losses": len(losses),
                 "decisions_rejected": len(rejected),
