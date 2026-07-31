@@ -1,7 +1,7 @@
 # BLUM Hugging Face Champion–Challenger Design
 
-**Date:** 2026-07-31  
-**Status:** Approved  
+**Date:** 2026-07-31
+**Status:** Approved
 **Owner:** Italianhype / BLUM
 
 ## Objective
