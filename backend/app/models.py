@@ -2398,6 +2398,15 @@ class LiveForwardPaperTrade(Base):
     sector: Mapped[str | None] = mapped_column(String(120), index=True)
     industry: Mapped[str | None] = mapped_column(String(160))
     setup_type: Mapped[str] = mapped_column(String(100), index=True)
+    side: Mapped[str | None] = mapped_column(String(8), index=True)
+    accounting_status: Mapped[str] = mapped_column(
+        String(64),
+        default="VALID",
+        server_default="PENDING_SIDE_VERIFICATION",
+        index=True,
+    )
+    accounting_version: Mapped[str | None] = mapped_column(String(64), index=True)
+    accounting_recomputed_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
     status: Mapped[str] = mapped_column(String(60), default="CANDIDATE", index=True)
     close_reason: Mapped[str | None] = mapped_column(String(80), index=True)
     decision_timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)

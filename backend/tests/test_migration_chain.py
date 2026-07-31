@@ -81,8 +81,18 @@ def test_full_migration_chain_reaches_head_on_sqlite(tmp_path):
     }
 
     assert required_tables.issubset(tables)
+    paper_trade_columns = {
+        column["name"]
+        for column in inspect(engine).get_columns("live_forward_paper_trades")
+    }
+    assert {
+        "side",
+        "accounting_status",
+        "accounting_version",
+        "accounting_recomputed_at",
+    }.issubset(paper_trade_columns)
     with engine.connect() as connection:
-        assert connection.execute(text("select version_num from alembic_version")).scalar_one() == "0040_trading_ml_champion"
+        assert connection.execute(text("select version_num from alembic_version")).scalar_one() == "0041_pf_direction"
 
     downgrade = subprocess.run(
         [sys.executable, "-m", "alembic", "downgrade", "base"],

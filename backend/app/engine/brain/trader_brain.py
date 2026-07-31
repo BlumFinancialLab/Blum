@@ -49,6 +49,10 @@ from app.services.brain_learning_proof import BrainLearningProofService
 from app.services.research_planner import AutonomousResearchPlanner
 from app.services.trading_intelligence_lab import paper_forward_actionability_summary
 from app.services.dashboard_snapshots import DashboardSnapshotService
+from app.services.paper_forward_direction import (
+    INVALID_PENDING_RECOMPUTATION,
+    paper_trade_evidence_is_eligible,
+)
 
 
 TRADER_BRAIN_VERSION = ENGINE_VERSION
@@ -269,8 +273,14 @@ class TraderBrainService:
         excluded_evidence_types = {
             "PAPER_FORWARD_INTRADAY_EXPERIMENTAL",
             "PAPER_FORWARD_INVALID_ENTRY_GEOMETRY",
+            INVALID_PENDING_RECOMPUTATION,
         }
-        eligible_paper_rows = [row for row in paper_rows if row.evidence_type not in excluded_evidence_types]
+        eligible_paper_rows = [
+            row
+            for row in paper_rows
+            if row.evidence_type not in excluded_evidence_types
+            and paper_trade_evidence_is_eligible(row)
+        ]
         intraday_rows = [row for row in eligible_paper_rows if row.evidence_type == "PAPER_FORWARD_INTRADAY"]
         standard_paper_rows = [row for row in eligible_paper_rows if row.evidence_type != "PAPER_FORWARD_INTRADAY"]
         lesson_rows = dedupe_lessons(
@@ -1855,6 +1865,7 @@ def paper_forward_trade_is_open(row: LiveForwardPaperTrade) -> bool:
 
 
 def paper_forward_alpha_summary(rows: list[LiveForwardPaperTrade], game: LiveForwardPaperGame | None) -> dict:
+    rows = [row for row in rows if paper_trade_evidence_is_eligible(row)]
     closed = [row for row in rows if paper_forward_trade_is_closed(row)]
     open_rows = [row for row in rows if paper_forward_trade_is_open(row)]
     pnl_values = [safe_float(row.net_pnl_eur, None) for row in closed if row.net_pnl_eur is not None]

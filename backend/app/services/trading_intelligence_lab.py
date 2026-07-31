@@ -34,6 +34,22 @@ from app.models import (
 from app.services.copy_readiness_evidence import append_trade_evidence_event, copy_readiness_projections
 from app.services.dashboard_snapshots import DashboardSnapshotService
 from app.services.learning_loop import active_weight_context, learning_mode_metadata
+from app.services.paper_forward_direction import (
+    ACCOUNTING_VALID,
+    ACCOUNTING_VERSION,
+    CASH_BENCHMARK,
+    INVALID_PENDING_RECOMPUTATION,
+    DirectionalTradePlanError,
+    directional_excursions,
+    exit_reason,
+    is_forex_identity,
+    normalize_side,
+    paper_trade_evidence_is_eligible,
+    recover_trade_side,
+    signed_return,
+    trade_metrics,
+    validate_trade_plan,
+)
 from app.services.trade_transparency import (
     TRANSPARENCY_POLICY,
     TradeLedgerService,
@@ -585,12 +601,44 @@ class LiveForwardPaperTradingService:
         elif not actionable:
             block_reason = diagnosis.rejection_reason
 
+        asset_payload = candidate.get("asset") if isinstance(candidate.get("asset"), dict) else {}
+        is_forex = is_forex_identity(
+            ticker=ticker,
+            market=asset_payload.get("market"),
+            asset_type=asset_payload.get("asset_type"),
+        )
+        side = recover_trade_side(candidate)
+        if side is None and not is_forex:
+            side = "LONG"
         risk_amount = game.current_capital * settings.live_trading_game_max_risk_per_trade / 100
-        stop = safe_float(plan.get("invalidation_level")) or (price * 0.97 if price else None)
-        risk_per_share = abs(price - stop) if price and stop else price * 0.02 if price else 1
-        size = risk_amount / max(0.01, risk_per_share)
-        target_1 = safe_float(plan.get("target_1")) or (price * 1.04 if price else None)
-        target_2 = safe_float(plan.get("target_2")) or (price * 1.08 if price else None)
+        stop = safe_float(
+            plan.get("invalidation_level") or plan.get("stop_price") or plan.get("stop_loss")
+        ) or (None if is_forex else price * 0.97 if price else None)
+        target_1 = safe_float(plan.get("target_1")) or (None if is_forex else price * 1.04 if price else None)
+        target_2 = safe_float(plan.get("target_2")) or (None if is_forex else price * 1.08 if price else None)
+        geometry = None
+        plan_error = ""
+        if is_forex and (side is None or price <= 0 or not stop or not target_1):
+            plan_error = "missing_valid_forex_trade_plan"
+        elif side and price > 0 and stop and target_1:
+            try:
+                geometry = validate_trade_plan(
+                    side,
+                    entry=price,
+                    stop=stop,
+                    targets=[target_1, target_2],
+                )
+            except DirectionalTradePlanError as exc:
+                plan_error = exc.reason
+        elif side is None:
+            plan_error = "missing_trade_side"
+        if plan_error:
+            status = "SKIPPED"
+            block_reason = plan_error
+        risk_per_share = safe_float((geometry or {}).get("risk_distance"))
+        reward_per_share = safe_float(((geometry or {}).get("reward_distances") or [None])[0])
+        size = risk_amount / max(0.000001, risk_per_share) if risk_per_share > 0 else 0.0
+        benchmark_ticker = CASH_BENCHMARK if is_forex and str(game.benchmark_ticker).upper() == "SPY" else game.benchmark_ticker
         trade_game = ensure_live_trade_game(db)
         ledger_trade = None
         if status == "OPEN":
@@ -605,7 +653,7 @@ class LiveForwardPaperTradingService:
                 confidence_at_entry=candidate.get("confidence"),
                 actionability_state_at_entry=candidate.get("actionability"),
                 market_regime_at_entry=(candidate.get("market_regime") or {}).get("regime_primary"),
-                benchmark_ticker=game.benchmark_ticker,
+                benchmark_ticker=benchmark_ticker,
                 timeframe="daily",
                 decision_state=candidate.get("actionability") or "active_setup",
                 entry_date=datetime.utcnow().date(),
@@ -629,6 +677,7 @@ class LiveForwardPaperTradingService:
                 outcome_label="open",
                 payload={
                     "candidate_snapshot": compact_candidate(candidate),
+                    "side": side,
                     "feedback_loop": feedback,
                     "no_future_data_policy": "No exit outcome is evaluated until later market data exists.",
                 },
@@ -646,6 +695,9 @@ class LiveForwardPaperTradingService:
             sector=(candidate.get("asset") or {}).get("sector"),
             industry=(candidate.get("asset") or {}).get("industry"),
             setup_type=setup_type,
+            side=side,
+            accounting_status=ACCOUNTING_VALID if not plan_error else INVALID_PENDING_RECOMPUTATION,
+            accounting_version=ACCOUNTING_VERSION if not plan_error else None,
             status=status,
             decision_timestamp=now,
             decision_date=now.date(),
@@ -655,11 +707,15 @@ class LiveForwardPaperTradingService:
             learning_memory_used=feedback["learning_memory_used"],
             strategy_memory_used=feedback["strategy_memory_used"],
             research_priority_used=feedback["research_priority_used"],
-            frozen_decision_payload=freeze_decision_payload({**candidate, "actionability_diagnosis": diagnosis.to_dict()}, feedback, now),
+            frozen_decision_payload=freeze_decision_payload(
+                {**candidate, "side": side, "actionability_diagnosis": diagnosis.to_dict()},
+                feedback,
+                now,
+            ),
             actionability_state=candidate.get("actionability"),
             confidence=candidate.get("confidence"),
             sniper_score=candidate.get("sniper_score"),
-            benchmark_ticker=game.benchmark_ticker,
+            benchmark_ticker=benchmark_ticker,
             entry_trigger=entry_trigger,
             confirmation_condition=plan.get("confirmation_condition") or "Candidate met BLUM actionability threshold at decision timestamp.",
             entry_price=price,
@@ -674,9 +730,12 @@ class LiveForwardPaperTradingService:
             notional_value=round(size * price, 4) if price else 0.0,
             risk_amount=round(risk_amount, 4),
             risk_percent=settings.live_trading_game_max_risk_per_trade,
-            expected_risk=round(risk_per_share * size, 4) if price else None,
-            expected_reward=round((target_1 - price) * size, 4) if price and target_1 else None,
-            expected_r_multiple=round(((target_1 - price) / max(0.01, risk_per_share)), 4) if price and target_1 else None,
+            expected_risk=round(risk_per_share * size, 4) if risk_per_share > 0 else None,
+            expected_reward=round(reward_per_share * size, 4) if reward_per_share > 0 else None,
+            expected_r_multiple=round(reward_per_share / risk_per_share, 4)
+            if reward_per_share > 0 and risk_per_share > 0
+            else None,
+            outcome_label=plan_error or ("open" if status == "OPEN" else None),
             duplicate_key=duplicate_key,
             expires_at=now + timedelta(days=30),
         )
@@ -753,12 +812,33 @@ class LiveForwardPaperTradingService:
     def refresh_open_trade_mark_to_market(self, db: Session, game: LiveForwardPaperGame, paper_trade: LiveForwardPaperTrade, latest_date: date, latest_price: float) -> None:
         entry = safe_float(paper_trade.entry_price)
         size = safe_float(paper_trade.position_size)
-        pnl_per_share = latest_price - entry
+        if not paper_trade_evidence_is_eligible(paper_trade):
+            paper_trade.unrealized_pnl = 0.0
+            return
+        metrics = trade_metrics(
+            side=paper_trade.side,
+            entry_price=entry,
+            exit_price=latest_price,
+            stop_price=safe_float(paper_trade.stop_loss or paper_trade.invalidation_level),
+            quantity=size,
+            costs=0.0,
+            risk_amount=safe_float(paper_trade.risk_amount) or None,
+        )
+        pnl_per_share = metrics.price_change
         unrealized = pnl_per_share * size
         paper_trade.current_price = latest_price
         paper_trade.unrealized_pnl = round(unrealized, 4)
-        paper_trade.max_favorable_excursion = round(max(safe_float(paper_trade.max_favorable_excursion), pnl_per_share), 4)
-        paper_trade.max_adverse_excursion = round(min(safe_float(paper_trade.max_adverse_excursion), pnl_per_share), 4)
+        mfe, mae = directional_excursions(
+            side=paper_trade.side,
+            entry_price=entry,
+            high_price=latest_price,
+            low_price=latest_price,
+            current_mfe=safe_float(paper_trade.max_favorable_excursion),
+            current_mae=safe_float(paper_trade.max_adverse_excursion),
+            percent=False,
+        )
+        paper_trade.max_favorable_excursion = mfe
+        paper_trade.max_adverse_excursion = mae
         paper_trade.updated_at = datetime.utcnow()
         position = live_position_for_paper_trade(db, game, paper_trade)
         if position:
@@ -767,16 +847,33 @@ class LiveForwardPaperTradingService:
 
     def close_trade(self, db: Session, game: LiveForwardPaperGame, paper_trade: LiveForwardPaperTrade, latest_date: date, latest_price: float, close_reason: str) -> dict:
         now = datetime.utcnow()
+        if not paper_trade_evidence_is_eligible(paper_trade):
+            paper_trade.accounting_status = INVALID_PENDING_RECOMPUTATION
+            paper_trade.outcome_label = "EVIDENCE_QUARANTINED"
+            return serialize_paper_forward_trade(paper_trade, compact=True)
         entry = safe_float(paper_trade.entry_price)
         size = safe_float(paper_trade.position_size)
-        pnl_per_share = latest_price - entry
         accounting = (paper_trade.execution_costs or {}).get("accounting") or {}
         exit_fx_rate = max(0.000001, safe_float(accounting.get("exit_fx_rate"), 1.0))
-        gross = pnl_per_share * size / exit_fx_rate
-        net = gross - safe_float(accounting.get("explicit_costs"))
-        risk = max(0.01, safe_float(paper_trade.risk_amount))
-        benchmark_return = period_return(db, game.benchmark_ticker, paper_trade.decision_date, latest_date)
-        asset_return = ((latest_price / entry) - 1) * 100 if entry else None
+        metrics = trade_metrics(
+            side=paper_trade.side,
+            entry_price=entry,
+            exit_price=latest_price,
+            stop_price=safe_float(paper_trade.stop_loss or paper_trade.invalidation_level),
+            quantity=size,
+            costs=safe_float(accounting.get("explicit_costs")),
+            conversion_rate=exit_fx_rate,
+            risk_amount=safe_float(paper_trade.risk_amount) or None,
+        )
+        pnl_per_share = metrics.price_change / exit_fx_rate
+        gross = metrics.gross_pnl
+        net = metrics.net_pnl
+        benchmark_return = (
+            0.0
+            if str(paper_trade.benchmark_ticker or "").upper() in {CASH_BENCHMARK, "NO_TRADE"}
+            else period_return(db, paper_trade.benchmark_ticker, paper_trade.decision_date, latest_date)
+        )
+        asset_return = metrics.return_fraction * 100
         status = "EXPIRED" if close_reason == "TIME_EXIT" else "INVALIDATED" if close_reason == "INVALIDATION_HIT" else "CLOSED"
         paper_trade.status = status
         paper_trade.close_reason = close_reason
@@ -787,7 +884,7 @@ class LiveForwardPaperTradingService:
         paper_trade.net_pnl_eur = round(net, 4)
         paper_trade.pnl_per_share = round(pnl_per_share, 4)
         paper_trade.pnl_percent = round(asset_return, 4) if asset_return is not None else None
-        paper_trade.r_multiple = round(net / risk, 4)
+        paper_trade.r_multiple = round(metrics.r_multiple, 4) if metrics.r_multiple is not None else None
         paper_trade.benchmark_return_same_period = benchmark_return
         paper_trade.excess_return_vs_benchmark = round(asset_return - benchmark_return, 4) if asset_return is not None and benchmark_return is not None else None
         paper_trade.outcome_label = outcome_label_for(close_reason, net)
@@ -835,7 +932,11 @@ class LiveForwardPaperTradingService:
         lessons: list[dict] = []
         for item in closed:
             paper_trade = db.get(LiveForwardPaperTrade, item.get("trade_id"))
-            if not paper_trade or not paper_trade.ledger_trade_id:
+            if (
+                not paper_trade
+                or not paper_trade.ledger_trade_id
+                or not paper_trade_evidence_is_eligible(paper_trade)
+            ):
                 continue
             if db.scalar(select(TradeLearningEvidence.id).where(TradeLearningEvidence.trade_id == paper_trade.ledger_trade_id, TradeLearningEvidence.lesson_type == "paper_forward_outcome").limit(1)):
                 continue
@@ -870,6 +971,8 @@ class LiveForwardPaperTradingService:
         return lessons
 
     def update_memory_from_trade(self, db: Session, paper_trade: LiveForwardPaperTrade, lesson_type: str) -> None:
+        if not paper_trade_evidence_is_eligible(paper_trade):
+            return
         signal_name = f"paper_forward:{paper_trade.setup_type}"
         signal = db.scalar(select(SignalPerformance).where(SignalPerformance.signal_name == signal_name, SignalPerformance.timeframe == "daily", SignalPerformance.market_regime == "live_forward").limit(1))
         if signal is None:
@@ -1630,6 +1733,10 @@ def serialize_live_position(row: LiveForwardPaperPosition) -> dict:
         "trade_id": row.trade_id,
         "ticker": row.ticker,
         "setup_type": row.setup_type,
+        "side": row.side,
+        "accounting_status": row.accounting_status,
+        "accounting_version": row.accounting_version,
+        "accounting_recomputed_at": iso(row.accounting_recomputed_at),
         "status": row.status,
         "decision_timestamp": iso(row.decision_timestamp),
         "entry_price": row.entry_price,
@@ -1768,14 +1875,16 @@ def period_return(db: Session, ticker: str | None, start_date: date | None, end_
 
 
 def close_reason_for(row: LiveForwardPaperTrade, latest_price: float) -> str | None:
-    if row.stop_loss and latest_price <= row.stop_loss:
-        return "STOP_HIT"
-    if row.invalidation_level and latest_price <= row.invalidation_level:
-        return "INVALIDATION_HIT"
-    if row.target_2 and latest_price >= row.target_2:
-        return "TARGET_2_HIT"
-    if row.target_1 and latest_price >= row.target_1:
-        return "TARGET_1_HIT"
+    reason = exit_reason(
+        row.side,
+        latest_price,
+        stop=row.stop_loss,
+        invalidation=row.invalidation_level if row.stop_loss is None else None,
+        target_1=row.target_1,
+        target_2=row.target_2,
+    )
+    if reason:
+        return reason
     if row.expires_at and datetime.utcnow() >= row.expires_at:
         return "TIME_EXIT"
     return None

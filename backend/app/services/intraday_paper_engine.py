@@ -45,6 +45,19 @@ from app.services.forex_intraday_accounting import (
 from app.services.market_desks import MarketDeskRegistry
 from app.services.promoted_strategy_registry import BlumPromotedStrategyRegistry, normalize_market
 from app.services.paper_execution_lifecycle import PaperOrderLifecycleService
+from app.services.paper_forward_direction import (
+    ACCOUNTING_VALID,
+    ACCOUNTING_VERSION,
+    LONG,
+    SHORT,
+    directional_excursions,
+    exit_reason,
+    normalize_side,
+    paper_trade_evidence_is_eligible,
+    signed_price_change,
+    signed_return,
+    trade_metrics,
+)
 from app.services.realistic_execution import ExecutionMarketBar, ExecutionOrderRequest
 from app.services.trading_intelligence_lab import ensure_live_trade_game
 from app.services.trading_ml.finrlx import FinRLXQuantEngine
@@ -474,6 +487,7 @@ class BlumIntradayPaperEngine:
         liquidity_basis = "otc_quote_capacity" if is_forex else "reported_volume"
         quote_capacity_units = max(quantity * 20.0, quantity) if is_forex else None
         risk_per_share = max(0.0001, observed_entry - float(decision.stop_price or observed_entry))
+        trade_side = LONG
         frozen = {
             "evidence_type": trade_evidence_type,
             "trading_mode": INTRADAY_MODE,
@@ -485,6 +499,7 @@ class BlumIntradayPaperEngine:
                 "executable_strategy": decision.evidence.get("executable_strategy") or {},
             },
             "decision_timestamp": decision.decision_timestamp.isoformat(),
+            "direction": trade_side,
             "observed_entry_price": observed_entry,
             "paper_entry_fill": None,
             "stop_price": decision.stop_price,
@@ -519,6 +534,9 @@ class BlumIntradayPaperEngine:
             asset_type=asset.asset_type,
             sector=asset.sector,
             setup_type=decision.setup_type,
+            side=trade_side,
+            accounting_status=ACCOUNTING_VALID,
+            accounting_version=ACCOUNTING_VERSION,
             status="ORDER_SUBMITTED",
             decision_timestamp=decision.decision_timestamp,
             decision_date=decision.decision_timestamp.date(),
@@ -573,11 +591,20 @@ class BlumIntradayPaperEngine:
                     exit_price=float(decision.target_price or observed_entry),
                     quantity_units=quantity,
                     account_fx_rate=account_fx_rate,
+                    direction=trade_side,
                 )
                 if is_forex and account_fx_rate
                 else quantity * max(0.0, float(decision.target_price or observed_entry) - observed_entry)
             ),
-            expected_r_multiple=max(0.0, float(decision.target_price or observed_entry) - observed_entry) / risk_per_share,
+            expected_r_multiple=max(
+                0.0,
+                signed_price_change(
+                    trade_side,
+                    observed_entry,
+                    float(decision.target_price or observed_entry),
+                ),
+            )
+            / risk_per_share,
             current_price=observed_entry,
             last_managed_bar_at=decision.decision_timestamp,
             duplicate_key=duplicate_key,
@@ -631,7 +658,7 @@ class BlumIntradayPaperEngine:
         request = ExecutionOrderRequest(
             order_key=f"execution:{duplicate_key}",
             ticker=trade.ticker,
-            side="BUY",
+            side="SELL_SHORT" if trade.side == SHORT else "BUY",
             order_type="LIMIT",
             decision_timestamp=decision.decision_timestamp,
             theoretical_price=observed_entry,
@@ -722,7 +749,10 @@ class BlumIntradayPaperEngine:
         account_fx_rate = float(order.fx_rate or metadata.get("account_fx_rate") or 1.0)
         quote_notional = float(trade.entry_price or 0.0) * float(trade.position_size or 0.0)
         trade.notional_value = quote_notional / account_fx_rate if is_forex else quote_notional
-        risk_per_share = max(0.0001, float(trade.entry_price or 0.0) - float(trade.stop_loss or trade.entry_price or 0.0))
+        risk_per_share = abs(
+            float(trade.entry_price or 0.0)
+            - float(trade.stop_loss or trade.entry_price or 0.0)
+        )
         quote_risk = risk_per_share * float(trade.position_size or 0.0)
         trade.risk_amount = quote_risk / account_fx_rate if is_forex else quote_risk
         trade.expected_risk = trade.risk_amount
@@ -824,33 +854,72 @@ class BlumIntradayPaperEngine:
                     break
                 executable_strategy = ((trade.frozen_decision_payload or {}).get("strategy") or {}).get("executable_strategy") or {}
                 trailing_multiple = float(executable_strategy.get("trailing_atr_multiple") or 1.2)
-                trade.trailing_stop = max(
-                    float(trade.trailing_stop or 0.0),
-                    float(bar.close) - max(0.0001, float(bar.high) - float(bar.low)) * trailing_multiple,
-                )
+                trailing_distance = max(0.0001, float(bar.high) - float(bar.low)) * trailing_multiple
+                if normalize_side(trade.side) == SHORT:
+                    candidate_trailing = float(bar.close) + trailing_distance
+                    trade.trailing_stop = min(
+                        float(trade.trailing_stop or candidate_trailing),
+                        candidate_trailing,
+                    )
+                else:
+                    trade.trailing_stop = max(
+                        float(trade.trailing_stop or 0.0),
+                        float(bar.close) - trailing_distance,
+                    )
                 if self._is_forex_trade(trade):
                     trade.unrealized_pnl = forex_account_pnl(
                         entry_price=float(trade.entry_price or bar.close),
                         exit_price=float(bar.close),
                         quantity_units=float(trade.position_size or 0.0),
                         account_fx_rate=float((trade.intraday_metadata or {}).get("account_fx_rate") or 1.0),
+                        direction=trade.side or LONG,
                     )
                 else:
-                    trade.unrealized_pnl = (float(bar.close) - float(trade.entry_price or bar.close)) * float(trade.position_size or 0.0)
+                    trade.unrealized_pnl = signed_price_change(
+                        trade.side,
+                        float(trade.entry_price or bar.close),
+                        float(bar.close),
+                    ) * float(trade.position_size or 0.0)
                 self.paper.append_event(db, trade.id, "INTRADAY_TRADE_UPDATED", "Position marked using a later one-minute bar.", {"bar_timestamp": bar.bar_timestamp.isoformat()}, float(bar.close))
         return {"trades_updated": updated, "trades_closed": closed}
 
     def _exit_for_bar(self, trade: LiveForwardPaperTrade, bar: ReplayMarketBar) -> tuple[str | None, float | None]:
         low = float(bar.low if bar.low is not None else bar.close)
         high = float(bar.high if bar.high is not None else bar.close)
-        if trade.stop_loss and low <= float(trade.stop_loss):
-            return "STOP_HIT", min(float(trade.stop_loss), float(bar.open or bar.close))
-        if trade.invalidation_level and low <= float(trade.invalidation_level):
-            return "INVALIDATION_HIT", min(float(trade.invalidation_level), float(bar.open or bar.close))
-        if trade.target_1 and high >= float(trade.target_1):
+        side = normalize_side(trade.side)
+        stop_probe = high if side == SHORT else low
+        target_probe = low if side == SHORT else high
+        reason = exit_reason(
+            side,
+            stop_probe,
+            stop=trade.stop_loss,
+            invalidation=trade.invalidation_level if trade.stop_loss is None else None,
+        )
+        if reason:
+            stop_level = trade.stop_loss if reason == "STOP_HIT" else trade.invalidation_level
+            gap_price = float(bar.open or bar.close)
+            executed = max(float(stop_level), gap_price) if side == SHORT else min(float(stop_level), gap_price)
+            return reason, executed
+        reason = exit_reason(
+            side,
+            target_probe,
+            target_1=trade.target_1,
+        )
+        if reason:
             return "TARGET_HIT", float(trade.target_1)
-        if trade.trailing_stop and low <= float(trade.trailing_stop) and float(trade.trailing_stop) > float(trade.entry_price or 0.0):
-            return "TRAILING_STOP", float(trade.trailing_stop)
+        if trade.trailing_stop:
+            trailing_hit = (
+                high >= float(trade.trailing_stop)
+                if side == SHORT
+                else low <= float(trade.trailing_stop)
+            )
+            favorable_trailing = (
+                float(trade.trailing_stop) < float(trade.entry_price or 0.0)
+                if side == SHORT
+                else float(trade.trailing_stop) > float(trade.entry_price or 0.0)
+            )
+            if trailing_hit and favorable_trailing:
+                return "TRAILING_STOP", float(trade.trailing_stop)
         opened_at = trade.opened_at or trade.decision_timestamp
         holding = (bar.bar_timestamp - opened_at).total_seconds() / 60
         if bar.bar_timestamp.date() > opened_at.date() and not self.allow_overnight:
@@ -866,7 +935,10 @@ class BlumIntradayPaperEngine:
     def _close_trade(self, db: Session, *, game: LiveForwardPaperGame, trade: LiveForwardPaperTrade, bar: ReplayMarketBar, raw_exit: float, reason: str) -> None:
         costs = trade.execution_costs or {}
         one_way_bps = float(costs.get("one_way_bps") or 0.0)
-        exit_fill = float(raw_exit) * (1 - one_way_bps / 10_000)
+        side = normalize_side(trade.side) or LONG
+        exit_fill = float(raw_exit) * (
+            1 + one_way_bps / 10_000 if side == SHORT else 1 - one_way_bps / 10_000
+        )
         quantity = float(trade.position_size or 0.0)
         is_forex = self._is_forex_trade(trade)
         account_fx_rate = float((trade.intraday_metadata or {}).get("account_fx_rate") or 1.0)
@@ -877,16 +949,18 @@ class BlumIntradayPaperEngine:
                 exit_price=float(raw_exit),
                 quantity_units=quantity,
                 account_fx_rate=account_fx_rate,
+                direction=side,
             )
             net = forex_account_pnl(
                 entry_price=float(trade.entry_price or 0.0),
                 exit_price=exit_fill,
                 quantity_units=quantity,
                 account_fx_rate=account_fx_rate,
+                direction=side,
             )
         else:
-            gross = (float(raw_exit) - observed_entry) * quantity
-            net = (exit_fill - float(trade.entry_price or 0.0)) * quantity
+            gross = signed_price_change(side, observed_entry, float(raw_exit)) * quantity
+            net = signed_price_change(side, float(trade.entry_price or 0.0), exit_fill) * quantity
         total_cost = max(0.0, gross - net)
         initial_risk = max(0.0001, float(trade.expected_risk or trade.risk_amount or 0.0001))
         trade.status = "CLOSED"
@@ -896,9 +970,12 @@ class BlumIntradayPaperEngine:
         trade.closed_at = bar.bar_timestamp
         trade.gross_pnl_eur = round(gross, 6)
         trade.net_pnl_eur = round(net, 6)
-        unit_pnl = exit_fill - float(trade.entry_price or 0.0)
+        unit_pnl = signed_price_change(side, float(trade.entry_price or 0.0), exit_fill)
         trade.pnl_per_share = round(unit_pnl / account_fx_rate if is_forex else unit_pnl, 8)
-        trade.pnl_percent = round((exit_fill / float(trade.entry_price or 1.0) - 1) * 100, 6)
+        trade.pnl_percent = round(
+            signed_return(side, float(trade.entry_price or 1.0), exit_fill) * 100,
+            6,
+        )
         trade.r_multiple = round(net / initial_risk, 6)
         trade.costs_paid = round(total_cost, 6)
         conversion = account_fx_rate if is_forex else 1.0
@@ -951,6 +1028,11 @@ class BlumIntradayPaperEngine:
         return str(trade.asset_type or "").strip().lower() in {"forex", "fx", "currency"}
 
     def _update_benchmark_outcome(self, db: Session, trade: LiveForwardPaperTrade, exit_timestamp: datetime) -> None:
+        if self._is_forex_trade(trade) and str(trade.benchmark_ticker or "").upper() in {"", "SPY", "CASH", "NO_TRADE"}:
+            trade.benchmark_ticker = "CASH"
+            trade.benchmark_return_same_period = 0.0
+            trade.excess_return_vs_benchmark = round(float(trade.pnl_percent or 0.0), 6)
+            return
         benchmark = db.scalar(select(Asset).where(func.upper(Asset.ticker) == str(trade.benchmark_ticker or "").upper()).limit(1))
         if benchmark is None:
             return
@@ -979,8 +1061,17 @@ class BlumIntradayPaperEngine:
             return
         high = float(bar.high if bar.high is not None else bar.close)
         low = float(bar.low if bar.low is not None else bar.close)
-        trade.max_favorable_excursion = max(float(trade.max_favorable_excursion or 0.0), (high / entry - 1) * 100)
-        trade.max_adverse_excursion = min(float(trade.max_adverse_excursion or 0.0), (low / entry - 1) * 100)
+        mfe, mae = directional_excursions(
+            side=trade.side,
+            entry_price=entry,
+            high_price=high,
+            low_price=low,
+            current_mfe=float(trade.max_favorable_excursion or 0.0),
+            current_mae=float(trade.max_adverse_excursion or 0.0),
+            percent=True,
+        )
+        trade.max_favorable_excursion = mfe
+        trade.max_adverse_excursion = mae
 
     @staticmethod
     def _count_rejection(run: IntradayPaperRun, reason: str) -> None:
@@ -1034,6 +1125,12 @@ class IntradayPaperLearningService:
     def apply_closed_trade(self, db: Session, trade: LiveForwardPaperTrade) -> dict:
         if trade.status not in TERMINAL_STATUSES or trade.closed_at is None:
             return {"status": "not_closed", "trade_id": trade.id}
+        if not paper_trade_evidence_is_eligible(trade):
+            return {
+                "status": "quarantined",
+                "trade_id": trade.id,
+                "reason": "directional_accounting_not_verified",
+            }
         identity = f"intraday_trade:{trade.id}"
         existing = db.scalar(select(TradeLearningEvidence).where(TradeLearningEvidence.action_taken == identity).limit(1))
         if existing:

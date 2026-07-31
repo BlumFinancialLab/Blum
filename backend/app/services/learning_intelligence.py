@@ -6,7 +6,7 @@ import hashlib
 import json
 from statistics import mean, median, pstdev
 
-from sqlalchemy import desc, func, or_, select
+from sqlalchemy import and_, desc, func, not_, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -24,6 +24,7 @@ from app.models import (
     TradingGameTrade,
 )
 from app.services.trade_transparency import TradeLedgerService, TradingGameRealityCheckService, clamp, safe_float
+from app.services.paper_forward_direction import TRUSTED_ACCOUNTING_STATUSES
 from app.services.trading_intelligence_lab import (
     HistoricalLiveComparisonService,
     LAB_POLICY,
@@ -120,10 +121,28 @@ class BlumTradingPowerScoreService:
             return None
 
         closed_statuses = ("CLOSED", "EXITED", "EXPIRED", "INVALIDATED")
+        forex_identity = or_(
+            LiveForwardPaperTrade.ticker.like("%=X"),
+            func.lower(func.coalesce(LiveForwardPaperTrade.asset_type, "")).in_(
+                ("forex", "fx", "currency", "currency_pair", "forex_pair")
+            ),
+            func.lower(func.coalesce(LiveForwardPaperTrade.market, "")).in_(
+                ("forex", "fx", "currency")
+            ),
+        )
+        eligible_directional_accounting = or_(
+            not_(forex_identity),
+            and_(
+                LiveForwardPaperTrade.accounting_status.in_(TRUSTED_ACCOUNTING_STATUSES),
+                LiveForwardPaperTrade.side.in_(("LONG", "SHORT")),
+            ),
+        )
+        eligible_closed_filter = and_(
+            LiveForwardPaperTrade.status.in_(closed_statuses),
+            eligible_directional_accounting,
+        )
         last_closed_at = db.scalar(
-            select(func.max(LiveForwardPaperTrade.closed_at)).where(
-                LiveForwardPaperTrade.status.in_(closed_statuses)
-            )
+            select(func.max(LiveForwardPaperTrade.closed_at)).where(eligible_closed_filter)
         )
         return {
             "learning_run_pk": productive_run.id,
@@ -135,7 +154,7 @@ class BlumTradingPowerScoreService:
             "paper_forward_closed_count": int(
                 db.scalar(
                     select(func.count(LiveForwardPaperTrade.id)).where(
-                        LiveForwardPaperTrade.status.in_(closed_statuses)
+                        eligible_closed_filter
                     )
                 )
                 or 0

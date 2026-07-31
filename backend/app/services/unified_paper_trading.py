@@ -17,6 +17,12 @@ from app.models import (
     LiveForwardPaperTradeEvent,
 )
 from app.services.dashboard_snapshots import DashboardSnapshotService
+from app.services.paper_forward_direction import (
+    INVALID_PENDING_RECOMPUTATION,
+    normalize_side,
+    paper_trade_evidence_is_eligible,
+    recover_trade_side,
+)
 
 
 SNAPSHOT_TYPE = "unified_paper_trading_summary"
@@ -403,7 +409,7 @@ class UnifiedPaperTradingProjectionService:
 
     def _paper_row(self, trade: LiveForwardPaperTrade) -> dict:
         payload = trade.frozen_decision_payload or {}
-        direction = payload.get("direction") or payload.get("action") or "LONG"
+        direction = normalize_side(trade.side) or recover_trade_side(payload)
         trading_lane = (
             "intraday"
             if trade.intraday_run_id is not None
@@ -420,6 +426,12 @@ class UnifiedPaperTradingProjectionService:
             )
             else trading_lane
         )
+        evidence_eligible = paper_trade_evidence_is_eligible(trade)
+        projected_status = (
+            str(trade.status or "CANDIDATE").upper()
+            if evidence_eligible or market_group != "forex"
+            else INVALID_PENDING_RECOMPUTATION
+        )
         timestamp = trade.closed_at or trade.opened_at or trade.decision_timestamp or trade.created_at
         return {
             "trade_id": f"paper:{trade.id}",
@@ -432,9 +444,9 @@ class UnifiedPaperTradingProjectionService:
             "asset_name": trade.asset_name or trade.ticker,
             "asset_type": trade.asset_type or "public_asset",
             "setup_type": trade.setup_type,
-            "status": str(trade.status or "CANDIDATE").upper(),
+            "status": projected_status,
             "source_status": trade.status,
-            "direction": str(direction).upper(),
+            "direction": direction,
             "decision_timestamp": _iso(trade.decision_timestamp),
             "opened_at": _iso(trade.opened_at),
             "closed_at": _iso(trade.closed_at),
@@ -447,14 +459,14 @@ class UnifiedPaperTradingProjectionService:
             "position_size": _float(trade.position_size),
             "notional_value": _float(trade.notional_value),
             "risk_amount": _float(trade.risk_amount),
-            "gross_pnl": _float(trade.gross_pnl_eur),
-            "net_pnl": _float(trade.net_pnl_eur),
-            "gross_pnl_eur": _float(trade.gross_pnl_eur),
-            "net_pnl_eur": _float(trade.net_pnl_eur),
-            "unrealized_pnl": _float(trade.unrealized_pnl) if trade.status in OPEN_STATUSES else None,
-            "pnl_percent": _float(trade.pnl_percent),
-            "pnl_per_share": _float(trade.pnl_per_share),
-            "r_multiple": _float(trade.r_multiple),
+            "gross_pnl": _float(trade.gross_pnl_eur) if evidence_eligible else None,
+            "net_pnl": _float(trade.net_pnl_eur) if evidence_eligible else None,
+            "gross_pnl_eur": _float(trade.gross_pnl_eur) if evidence_eligible else None,
+            "net_pnl_eur": _float(trade.net_pnl_eur) if evidence_eligible else None,
+            "unrealized_pnl": _float(trade.unrealized_pnl) if evidence_eligible and trade.status in OPEN_STATUSES else None,
+            "pnl_percent": _float(trade.pnl_percent) if evidence_eligible else None,
+            "pnl_per_share": _float(trade.pnl_per_share) if evidence_eligible else None,
+            "r_multiple": _float(trade.r_multiple) if evidence_eligible else None,
             "benchmark_ticker": trade.benchmark_ticker,
             "benchmark_return": _float(trade.benchmark_return_same_period),
             "benchmark_excess": _float(trade.excess_return_vs_benchmark),
@@ -466,6 +478,8 @@ class UnifiedPaperTradingProjectionService:
             "confidence": _float(trade.confidence),
             "sniper_score": _float(trade.sniper_score),
             "evidence_type": trade.evidence_type,
+            "accounting_status": trade.accounting_status,
+            "accounting_version": trade.accounting_version,
             "costs": trade.execution_costs or {
                 "spread": _float(trade.spread_cost),
                 "slippage": _float(trade.slippage_cost),

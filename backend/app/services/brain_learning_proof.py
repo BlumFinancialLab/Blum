@@ -21,6 +21,7 @@ from app.services.institutional_pilot import (
     PilotReadinessContext,
     evaluate_pilot_readiness,
 )
+from app.services.paper_forward_direction import paper_trade_evidence_is_eligible
 from app.services.promoted_strategy_registry import BlumPromotedStrategyRegistry
 
 
@@ -142,6 +143,7 @@ class BrainLearningProofService:
             )
             .limit(PAPER_TRADE_LIMIT)
         ).all()
+        closed_rows = [row for row in closed_rows if paper_trade_evidence_is_eligible(row)]
         open_rows = db.scalars(
             select(LiveForwardPaperTrade)
             .where(LiveForwardPaperTrade.game_id == game.id)
@@ -152,6 +154,7 @@ class BrainLearningProofService:
             .order_by(desc(LiveForwardPaperTrade.decision_timestamp))
             .limit(PAPER_TRADE_LIMIT)
         ).all()
+        open_rows = [row for row in open_rows if paper_trade_evidence_is_eligible(row)]
         closed = sorted(
             closed_rows,
             key=lambda row: row.closed_at or row.updated_at or row.decision_timestamp,

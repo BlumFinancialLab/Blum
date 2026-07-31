@@ -39,6 +39,7 @@ from app.services.copy_readiness_metrics import (
     evaluate_decay,
     wilson_interval,
 )
+from app.services.paper_forward_direction import paper_trade_evidence_is_eligible
 
 
 TERMINAL_FORWARD_STATUSES = frozenset({"CLOSED", "EXPIRED", "INVALIDATED"})
@@ -246,7 +247,14 @@ class StrategyEvidenceProjector:
         costs = _number(row.costs_paid)
         gross = _number(row.gross_pnl_eur)
         net = _number(row.net_pnl_eur)
-        terminal = str(row.status or "").upper() in TERMINAL_FORWARD_STATUSES and row.closed_at is not None
+        eligible = paper_trade_evidence_is_eligible(row)
+        if not eligible:
+            warnings = [*warnings, "directional_accounting_not_verified"]
+        terminal = (
+            eligible
+            and str(row.status or "").upper() in TERMINAL_FORWARD_STATUSES
+            and row.closed_at is not None
+        )
         return _EvidenceRow(
             source_type="live_forward_paper_trade",
             source_id=row.id,
