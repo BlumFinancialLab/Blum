@@ -1,0 +1,2 @@
+# Merge this line into the Space's existing requirements.txt.
+huggingface-hub>=1.16.1,<2

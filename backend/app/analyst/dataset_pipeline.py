@@ -13,6 +13,7 @@ from app.analyst.release_dataset import build_release_dataset
 from app.core.config import get_settings
 from app.models import BlumDatasetExport
 from app.services.blum_financial_model import export_training_jsonl, training_manifest
+from app.analyst.hf_training_runtime import BlumHFTrainingService
 
 
 class BlumAnalystDatasetPipeline:
@@ -29,13 +30,15 @@ class BlumAnalystDatasetPipeline:
         settings = get_settings()
         manifest = training_manifest()
         manifest["target_repository"] = settings.blum_analyst_repository
+        hf_training = BlumHFTrainingService().configuration_status()
         return {
             "status": "ready",
             "contract": self.contract(),
             "training_manifest": manifest,
-            "automatic_training_enabled": False,
-            "model_repository": settings.blum_analyst_repository,
-            "policy": "Dataset export is allowed; automatic model training and inference dependencies are not enabled in Runtime.",
+            "automatic_training_enabled": bool(settings.hf_training_enabled and settings.hf_training_auto_launch),
+            "model_repository": settings.hf_training_champion_repository,
+            "hf_training": hf_training,
+            "policy": "The Space prepares validated snapshots. Fine-tuning and evaluation run only in isolated Hugging Face Jobs; production promotion is manual.",
         }
 
     def export(self, db: Session, *, limit: int = 1000, min_quality: float = 60.0, export_name: str | None = None) -> dict:

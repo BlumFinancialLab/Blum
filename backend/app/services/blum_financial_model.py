@@ -377,10 +377,10 @@ def training_manifest() -> dict:
     settings = get_settings()
     return {
         "project": "Blum Analyst",
-        "target_repository": settings.blum_model_repository,
+        "target_repository": settings.hf_training_champion_repository,
         "objective": "Train future models to reason better about markets, not to predict stock prices.",
         "supported_base_models": {
-            "qwen": ["Qwen/Qwen2.5-0.5B-Instruct", "Qwen/Qwen2.5-1.5B-Instruct", "Qwen/Qwen2.5-7B-Instruct"],
+            "qwen": ["Qwen/Qwen3-4B", settings.hf_training_champion_repository],
             "llama": ["meta-llama/Llama-3.2-1B-Instruct", "meta-llama/Llama-3.1-8B-Instruct"],
             "mistral": ["mistralai/Mistral-7B-Instruct-v0.3"],
         },
@@ -403,11 +403,21 @@ def training_manifest() -> dict:
                 "explainability_quality",
             ],
         },
+        "hf_champion_challenger": {
+            "enabled": settings.hf_training_enabled,
+            "auto_launch": settings.hf_training_auto_launch,
+            "dataset_repository": settings.hf_training_dataset_repository,
+            "champion_repository": settings.hf_training_champion_repository,
+            "challenger_repository": settings.hf_training_challenger_repository,
+            "mlx_repository": settings.hf_training_mlx_repository,
+        },
         "governance": [
-            "No training is launched automatically from the Space.",
-            "No trading action is produced.",
-            "Low-quality or insufficient-evidence theses remain excluded from export unless explicitly requested.",
-            "The proprietary asset is Blum reasoning memory, not raw market data.",
+            "The Space never fine-tunes a model inside the web process.",
+            "External Hugging Face Jobs may launch only after provenance, quality, outcome-maturity, lineage and cooldown gates pass.",
+            "A challenger never writes directly to the champion repository.",
+            "Production promotion and rollback are explicit authenticated operations.",
+            "No trading action is produced by the training pipeline.",
+            "The proprietary asset is BLUM reasoning memory, not raw market data.",
         ],
     }
 

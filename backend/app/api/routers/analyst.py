@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Header
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.analyst.dataset_pipeline import BlumAnalystDatasetPipeline
+from app.analyst.hf_training_runtime import BlumHFTrainingService
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.engine.contracts import PROJECT_FEATURE_SET
@@ -87,3 +88,85 @@ def architecture_contracts() -> dict:
         "analyst": BlumAnalystDatasetPipeline().contract(),
         "policy": "Engine owns truth, Analyst learns reasoning, Runtime observes and renders.",
     }
+
+@router.get("/analyst/hf-training/status")
+@router.get("/api/analyst/hf-training/status")
+def hf_training_status(db: Session = Depends(get_db)) -> dict:
+    return BlumHFTrainingService().status(db)
+
+
+@router.post("/analyst/hf-training/snapshot")
+@router.post("/api/analyst/hf-training/snapshot")
+def hf_training_snapshot(
+    publish: bool = Query(default=False),
+    db: Session = Depends(get_db),
+) -> dict:
+    service = BlumHFTrainingService()
+    try:
+        if publish:
+            return service.publish_snapshot(db)
+        snapshot = service.build_local_snapshot(db)
+        return {"status": "dry_run", "revision": snapshot.revision, "manifest": snapshot.manifest}
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/analyst/hf-training/launch")
+@router.post("/api/analyst/hf-training/launch")
+def hf_training_launch(db: Session = Depends(get_db)) -> dict:
+    try:
+        return BlumHFTrainingService().launch(db)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/analyst/hf-training/sync")
+@router.post("/api/analyst/hf-training/sync")
+def hf_training_sync(
+    job_id: int | None = Query(default=None, ge=1),
+    db: Session = Depends(get_db),
+) -> dict:
+    try:
+        return BlumHFTrainingService().sync(db, job_id=job_id)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/analyst/hf-training/promote/{job_id}")
+@router.post("/api/analyst/hf-training/promote/{job_id}")
+def hf_training_promote(
+    job_id: int,
+    admin_key: str = Header(default="", alias="X-BLUM-Admin-Key"),
+    db: Session = Depends(get_db),
+) -> dict:
+    try:
+        return BlumHFTrainingService().promote(db, job_id=job_id, supplied_admin_key=admin_key)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/analyst/hf-training/rollback/{job_id}")
+@router.post("/api/analyst/hf-training/rollback/{job_id}")
+def hf_training_rollback(
+    job_id: int,
+    backup_tag: str = Query(min_length=1),
+    admin_key: str = Header(default="", alias="X-BLUM-Admin-Key"),
+    db: Session = Depends(get_db),
+) -> dict:
+    try:
+        return BlumHFTrainingService().rollback(
+            db,
+            job_id=job_id,
+            backup_tag=backup_tag,
+            supplied_admin_key=admin_key,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
