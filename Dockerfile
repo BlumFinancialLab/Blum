@@ -5,7 +5,7 @@ RUN npm install
 COPY frontend ./
 RUN npm run build
 
-FROM python:3.11-bookworm
+FROM python:3.12-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -45,7 +45,12 @@ ENV BLUM_FINRLX_ENABLED=true \
     BLUM_FINRLX_RUNNER_COMMAND=/app/scripts/finrlx_runner.py \
     BLUM_FINRLX_ARTIFACT_ROOT=/data/trading_ml/finrlx \
     BLUM_FOREX_HISTORY_ENABLED=true \
-    BLUM_FOREX_HISTORY_SOURCE_PATH=/app/backend/app/data/forex/Forex_sample_dataset.csv
+    BLUM_FOREX_HISTORY_SOURCE_PATH=/app/backend/app/data/forex/Forex_sample_dataset.csv \
+    BLUM_NAUTILUS_ENABLED=true \
+    BLUM_NAUTILUS_MODE=shadow \
+    BLUM_NAUTILUS_ASSET_CLASSES=equity,etf,forex \
+    BLUM_NAUTILUS_CRYPTO_ENABLED=false \
+    BLUM_NAUTILUS_CATALOG_PATH=/data/blum/nautilus/catalog
 
 RUN chmod +x /app/scripts/start.sh /app/scripts/finrlx_runner.py
 

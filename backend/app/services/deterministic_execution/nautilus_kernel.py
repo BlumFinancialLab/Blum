@@ -220,7 +220,10 @@ class NautilusExecutionKernel:
         strategies = []
         for spec in request.instruments:
             intents = tuple(item for item in request.execution_intents if item.instrument_id == spec.instrument_id)
-            strategy = _FrozenIntentStrategy(spec, intents)
+            timeframes = tuple(
+                sorted({item.timeframe for item in events_by_instrument.get(spec.instrument_id, ())})
+            )
+            strategy = _FrozenIntentStrategy(spec, intents, timeframes)
             engine.add_strategy(strategy)
             strategies.append(strategy)
         return engine, strategies, venues
@@ -285,10 +288,16 @@ def _strategy_base():
 
 
 class _FrozenIntentStrategy(_strategy_base()):
-    def __init__(self, spec: InstrumentSpec, intents: tuple[ExecutionIntent, ...]) -> None:
+    def __init__(
+        self,
+        spec: InstrumentSpec,
+        intents: tuple[ExecutionIntent, ...],
+        timeframes: tuple[str, ...],
+    ) -> None:
         super().__init__()
         self.spec = spec
         self.intents = tuple(sorted(intents, key=lambda item: item.decision_timestamp))
+        self.timeframes = timeframes
         self.submitted: set[str] = set()
         self.captured_events: list[object] = []
         self.decision_by_order: dict[str, str] = {}
@@ -296,8 +305,7 @@ class _FrozenIntentStrategy(_strategy_base()):
     def on_start(self) -> None:
         from nautilus_trader.model.data import BarType
 
-        timeframes = {"1m"}
-        for timeframe in timeframes:
+        for timeframe in self.timeframes:
             self.subscribe_bars(BarType.from_str(_bar_type(self.spec.instrument_id, timeframe)))
 
     def on_bar(self, bar) -> None:

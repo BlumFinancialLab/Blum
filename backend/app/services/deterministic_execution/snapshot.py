@@ -3,6 +3,7 @@ from __future__ import annotations
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.models import (
     BackgroundJobState,
     DeterministicExecutionRun,
@@ -21,6 +22,7 @@ class DeterministicExecutionSnapshotService:
     """Compact read model for execution-kernel status and promotion evidence."""
 
     def build(self, db: Session) -> dict:
+        settings = get_settings()
         health = kernel_health(mode="shadow")
         state = db.scalar(select(ExecutionKernelState).where(ExecutionKernelState.state_key == "primary").limit(1))
         latest_run = db.scalar(select(DeterministicExecutionRun).order_by(desc(DeterministicExecutionRun.created_at)).limit(1))
@@ -74,7 +76,7 @@ class DeterministicExecutionSnapshotService:
                 "matched": parity_match,
                 "agreement_rate": parity_match / parity_total if parity_total else 0.0,
                 "violations": violations,
-                "required_samples": 100,
+                "required_samples": settings.blum_nautilus_min_parity_samples,
             },
             "coverage": {
                 "asset_classes": list(state.asset_classes_json or []) if state else [],

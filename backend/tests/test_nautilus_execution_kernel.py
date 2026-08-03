@@ -28,7 +28,7 @@ def _instrument() -> InstrumentSpec:
     )
 
 
-def _bars() -> tuple[MarketEvent, ...]:
+def _bars(timeframe: str = "1m") -> tuple[MarketEvent, ...]:
     values = ((100, 101, 99, 100.5), (100.5, 103, 100, 102), (102, 104, 101, 103))
     return tuple(
         MarketEvent(
@@ -40,19 +40,20 @@ def _bars() -> tuple[MarketEvent, ...]:
             low=l,
             close=c,
             volume=10_000,
+            timeframe=timeframe,
             acquired_at=NOW + timedelta(minutes=index),
         )
         for index, (o, h, l, c) in enumerate(values)
     )
 
 
-def _request(intent: ExecutionIntent) -> KernelRunRequest:
+def _request(intent: ExecutionIntent, bars: tuple[MarketEvent, ...] | None = None) -> KernelRunRequest:
     return KernelRunRequest(
         run_id="run-1",
         environment="backtest",
         starting_balances={"USD": 10_000},
         instruments=(_instrument(),),
-        market_events=_bars(),
+        market_events=bars or _bars(),
         execution_intents=(intent,),
         runtime_now=NOW + timedelta(minutes=2),
     )
@@ -103,3 +104,33 @@ def test_runtime_clock_rejects_future_intent():
     result = NautilusExecutionKernel().run_replay(_request(intent))
     assert result.status == "INVALID"
     assert dict(result.diagnostics)["reason"] == "decision_timestamp_after_runtime_clock"
+
+
+def test_daily_timeframe_is_subscribed_from_frozen_market_events():
+    intent = ExecutionIntent("daily", "AAPL.BLUMSIM", "BUY", "MARKET", 1, NOW, 100.5)
+
+    result = NautilusExecutionKernel().run_replay(_request(intent, _bars("1d")))
+
+    assert result.status == "COMPLETED"
+    assert any(event.event_type == "OrderFilled" for event in result.order_events)
+
+
+def test_bracket_exit_closes_position_at_frozen_target():
+    intent = ExecutionIntent(
+        "bracket",
+        "AAPL.BLUMSIM",
+        "BUY",
+        "MARKET",
+        1,
+        NOW,
+        100.5,
+        stop_price=99.0,
+        target_price=102.0,
+    )
+
+    result = NautilusExecutionKernel().run_replay(_request(intent))
+
+    fills = [event for event in result.order_events if event.event_type == "OrderFilled"]
+    assert result.status == "COMPLETED"
+    assert len(fills) == 2
+    assert any(event.event_type == "PositionClosed" for event in result.position_events)

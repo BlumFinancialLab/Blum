@@ -4,6 +4,9 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+
 os.environ["DATABASE_URL"] = "sqlite+pysqlite:////tmp/blum-hf-runtime-test.db"
 os.environ["BLUM_HF_TRAINING_ENABLED"] = "true"
 os.environ["BLUM_HF_TRAINING_MINIMUM_EXAMPLES"] = "1"
@@ -13,7 +16,7 @@ os.environ["BLUM_HF_TRAINING_MINIMUM_QUALITY"] = "70"
 os.environ["BLUM_HF_TRAINING_MAX_EXAMPLES"] = "100"
 
 from app.analyst.hf_training_runtime import BlumHFTrainingService
-from app.core.database import Base, SessionLocal, engine
+from app.core.database import Base
 from app.models import (
     BlumKnowledgeRecord,
     BlumModelTrainingJob,
@@ -53,13 +56,16 @@ class FakeApi:
         )
 
 
+test_engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+
 def reset_database() -> None:
-    Base.metadata.drop_all(engine)
-    Base.metadata.create_all(engine)
+    Base.metadata.drop_all(test_engine)
+    Base.metadata.create_all(test_engine)
 
 
 def seed_one_matured_example() -> None:
-    with SessionLocal() as db:
+    with Session(test_engine) as db:
         for index in range(1, 4):
             record = BlumKnowledgeRecord(
                 ticker=f"BLUM{index}",
@@ -114,7 +120,7 @@ def test_runtime_launch_publishes_snapshot_and_queues_external_job_without_persi
     api = FakeApi()
     service = BlumHFTrainingService(api=api, token="hf-super-secret")
 
-    with SessionLocal() as db:
+    with Session(test_engine) as db:
         result = service.launch(db)
         job = db.query(BlumModelTrainingJob).one()
 

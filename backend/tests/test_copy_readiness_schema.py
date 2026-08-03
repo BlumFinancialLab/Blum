@@ -37,7 +37,7 @@ def _upgrade_copy_readiness_from_predecessor(tmp_path, monkeypatch):
 
     config = _alembic_config(database_url)
     command.stamp(config, "0031_intraday_paper")
-    command.upgrade(config, "head")
+    command.upgrade(config, "0032_copy_readiness_evidence")
     return config, database_url
 
 
@@ -267,7 +267,7 @@ def test_copy_readiness_migration_is_append_only_and_round_trips_on_sqlite(tmp_p
         assert not any(name.startswith("prevent_copy_readiness_") for name in trigger_names)
     engine.dispose()
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "0032_copy_readiness_evidence")
     engine = create_engine(database_url, future=True)
     with engine.connect() as connection:
         inspector = inspect(connection)

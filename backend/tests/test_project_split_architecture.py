@@ -52,7 +52,7 @@ def test_analyst_contract_targets_future_model_without_training():
     with setup_db() as db:
         payload = BlumAnalystDatasetPipeline().status(db)
 
-    assert payload["model_repository"] == "Italianhype/Blum-Analyst"
+    assert payload["model_repository"] == "Italianhype/Blum-Finance-4B"
     assert payload["automatic_training_enabled"] is False
     assert payload["contract"]["source_of_truth"] is False
     assert "sft_jsonl" in payload["contract"]["supported_training_modes"]

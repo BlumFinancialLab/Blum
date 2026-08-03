@@ -173,5 +173,5 @@ def test_trading_ml_settings_have_evidence_bound_defaults():
     assert settings.trading_ml_artifact_root == "/data/trading_ml"
 
 
-def test_migration_head_is_trading_ml():
-    assert migration_head() == "0041_pf_direction"
+def test_migration_head_includes_deterministic_execution_core():
+    assert migration_head() == "0042_det_execution"
