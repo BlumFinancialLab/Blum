@@ -446,6 +446,16 @@ class Settings(BaseSettings):
     self_improvement_require_benchmark_check: bool = Field(default=True, alias="SELF_IMPROVEMENT_REQUIRE_BENCHMARK_CHECK")
     self_improvement_require_live_confirmation: bool = Field(default=False, alias="SELF_IMPROVEMENT_REQUIRE_LIVE_CONFIRMATION")
     self_improvement_rollback_enabled: bool = Field(default=True, alias="SELF_IMPROVEMENT_ROLLBACK_ENABLED")
+    blum_nautilus_enabled: bool = Field(default=True, alias="BLUM_NAUTILUS_ENABLED")
+    blum_nautilus_mode: str = Field(default="shadow", alias="BLUM_NAUTILUS_MODE")
+    blum_nautilus_asset_classes: str = Field(default="equity,etf,forex", alias="BLUM_NAUTILUS_ASSET_CLASSES")
+    blum_nautilus_crypto_enabled: bool = Field(default=False, alias="BLUM_NAUTILUS_CRYPTO_ENABLED")
+    blum_nautilus_authoritative_auto_promote: bool = Field(default=True, alias="BLUM_NAUTILUS_AUTHORITATIVE_AUTO_PROMOTE")
+    blum_nautilus_min_parity_samples: int = Field(default=100, alias="BLUM_NAUTILUS_MIN_PARITY_SAMPLES")
+    blum_nautilus_max_job_seconds: int = Field(default=120, alias="BLUM_NAUTILUS_MAX_JOB_SECONDS")
+    blum_nautilus_max_items_per_job: int = Field(default=5000, alias="BLUM_NAUTILUS_MAX_ITEMS_PER_JOB")
+    blum_nautilus_catalog_path: str = Field(default="/data/blum/nautilus/catalog", alias="BLUM_NAUTILUS_CATALOG_PATH")
+    blum_nautilus_fallback_enabled: bool = Field(default=True, alias="BLUM_NAUTILUS_FALLBACK_ENABLED")
 
     class Config:
         env_file = ".env"
