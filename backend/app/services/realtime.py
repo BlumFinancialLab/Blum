@@ -36,6 +36,7 @@ from app.services.trading_ml.worker import TradingMLLearningWorker
 from app.services.alpha_strategy_factory import AlphaStrategyFactory
 from app.services.worker_runtime import runtime_worker_coordinator
 from app.services.adaptive_replay_training import BlumAdaptiveTrainingController, refresh_strategy_factory_state
+from app.services.deterministic_execution.worker import DeterministicExecutionWorker
 from app.signals.engine import SignalEngine
 
 
@@ -81,6 +82,14 @@ def start_realtime_services() -> None:
     _add_interval_job(run_market_refresh, minutes=settings.market_refresh_minutes, job_id="market_refresh", delay_seconds=360, jitter_seconds=45)
     if settings.live_trading_game_enabled:
         _add_interval_job(run_live_forward_paper_trading_job, minutes=settings.market_refresh_minutes, job_id="live_forward_paper_trading", delay_seconds=390, jitter_seconds=45)
+    if settings.blum_nautilus_enabled:
+        _add_interval_job(
+            run_deterministic_execution_job,
+            minutes=10,
+            job_id="deterministic_execution_core",
+            delay_seconds=450,
+            jitter_seconds=20,
+        )
     if settings.intraday_paper_enabled:
         _add_interval_job(run_intraday_paper_trading_job, minutes=settings.intraday_paper_minutes, job_id="intraday_paper_trading", delay_seconds=420, jitter_seconds=15)
         _add_interval_job(
@@ -465,6 +474,17 @@ def run_hf_training_supervisor_job() -> None:
 
 def run_live_forward_paper_trading_job() -> None:
     _run_job("live_forward_paper_trading", lambda db: advance_live_forward_paper_trading(db))
+
+
+def run_deterministic_execution_job() -> None:
+    _run_job(
+        "deterministic_execution_core",
+        lambda db: DeterministicExecutionWorker().run(
+            db,
+            max_items=settings.blum_nautilus_max_items_per_job,
+            max_seconds=settings.blum_nautilus_max_job_seconds,
+        ),
+    )
 
 
 def advance_live_forward_paper_trading(db, service: LiveForwardPaperTradingService | None = None) -> dict:
