@@ -45,6 +45,7 @@ RUNTIME_MODULES = [
     "meta_cognition",
     "snapshot_producer",
     "execution_kernel",
+    "decision_council",
 ]
 
 RUNTIME_MODULE_EVENT_SOURCES: dict[str, tuple[str, ...]] = {
@@ -68,6 +69,7 @@ RUNTIME_MODULE_EVENT_SOURCES: dict[str, tuple[str, ...]] = {
     "meta_cognition": ("meta_cognition", "hyperbolic_replay_training", "brain_evidence_projector"),
     "snapshot_producer": ("snapshot_producer", "startup_snapshot_warmup"),
     "execution_kernel": ("deterministic_execution_core",),
+    "decision_council": ("evidence_decision_council",),
 }
 
 CRITICAL_SNAPSHOT_TYPES = [
@@ -101,6 +103,7 @@ CRITICAL_SNAPSHOT_TYPES = [
     "trading_game_ledger_snapshot",
     "equity_curve_snapshot",
     "deterministic_execution_summary",
+    "decision_council_summary",
 ]
 
 
@@ -356,6 +359,10 @@ class SnapshotProducerService:
             from app.services.deterministic_execution.snapshot import DeterministicExecutionSnapshotService
 
             return DeterministicExecutionSnapshotService().build(db)
+        if snapshot_type == "decision_council_summary":
+            from app.services.decision_council import DecisionCouncilSnapshotService
+
+            return DecisionCouncilSnapshotService().build(db)
         if snapshot_type == "forex_trader_summary":
             from app.services.forex_trader import ForexTraderSnapshotService
             return ForexTraderSnapshotService().read(db)

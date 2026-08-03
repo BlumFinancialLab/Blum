@@ -59,6 +59,13 @@ WORKER_DEFINITIONS: dict[str, WorkerDefinition] = {
         settings.blum_nautilus_max_job_seconds,
         settings.blum_nautilus_max_items_per_job,
     ),
+    "evidence_decision_council": WorkerDefinition(
+        "evidence_decision_council",
+        "decision_council",
+        "10m",
+        120,
+        settings.decision_council_max_items,
+    ),
     "blum_professional_learning_cycle": WorkerDefinition("blum_professional_learning_cycle", "professional_learning", "configured", settings.blum_autonomous_max_seconds_per_job, settings.professional_learning_batch_size),
     "hyperbolic_replay_training": WorkerDefinition("hyperbolic_replay_training", "replay_training", "configured", min(120, settings.replay_max_seconds_per_cycle), settings.replay_max_trades_per_cycle),
     "trading_ml_learning": WorkerDefinition("trading_ml_learning", "trading_ml", "15m", settings.trading_ml_max_runtime_seconds, settings.trading_ml_max_rows_per_slice),

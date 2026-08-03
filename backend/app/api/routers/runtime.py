@@ -97,3 +97,17 @@ def execution_kernel_snapshot(db: Session = Depends(get_db)) -> dict:
     from app.services.deterministic_execution.snapshot import DeterministicExecutionSnapshotService
 
     return DeterministicExecutionSnapshotService().latest(db)
+
+
+@router.get("/api/engine/decision-council")
+def decision_council_snapshot(db: Session = Depends(get_db)) -> dict:
+    from app.services.decision_council import DecisionCouncilSnapshotService
+
+    return DecisionCouncilSnapshotService().latest(db)
+
+
+@router.get("/api/engine/decision-council/runs/{run_id}")
+def decision_council_run(run_id: int, db: Session = Depends(get_db)) -> dict:
+    from app.services.decision_council import DecisionCouncilSnapshotService
+
+    return DecisionCouncilSnapshotService().run_detail(db, run_id)

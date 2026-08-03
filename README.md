@@ -2328,3 +2328,32 @@ BLUM uses NautilusTrader 1.230.0 as an optional Rust-native deterministic execut
 - Crypto, broker adapters and real-money execution are explicitly excluded.
 
 Configuration uses `BLUM_NAUTILUS_*` environment variables. If the optional native wheel cannot load, BLUM starts normally and reports the kernel as unavailable. NautilusTrader is distributed under LGPL-3.0; BLUM uses its project name only for dependency attribution and calls this component the BLUM Deterministic Execution Core.
+
+# Evidence-Bound Decision Council
+
+BLUM now subjects stored intelligence to a persistent multi-agent decision
+council before treating it as an actionable conclusion. Independent technical,
+fundamental, sentiment, narrative and regime votes are weighted by their stored
+reliability, challenged by bull and bear researchers, reviewed by aggressive,
+neutral and conservative risk personas, and resolved by a portfolio manager.
+
+The design was informed by the public
+[TradingAgents](https://github.com/TauricResearch/TradingAgents) architecture,
+but is implemented natively against BLUM contracts. It adds no mandatory LLM
+provider or LangGraph dependency. The council only consumes point-in-time BLUM
+evidence and cannot fetch data during deliberation.
+
+- every turn, evidence reference, checkpoint and verdict is persisted;
+- missing invalidation, reward/risk, independent evidence or consensus forces
+  `WAIT`;
+- mature outcomes create benchmark-relative reflections;
+- outcome memory affects later confidence only after a minimum sample gate;
+- processing runs in a bounded autonomous worker;
+- dashboard/API reads use the asynchronous `decision_council_summary` snapshot;
+- detailed replay is read-only and bounded.
+
+Use `GET /api/engine/decision-council` for the compact snapshot and
+`GET /api/engine/decision-council/runs/{run_id}` for an audit replay. This layer
+improves decision discipline and traceability; it does not prove alpha, promise
+profit, or bypass execution and portfolio risk controls. See
+`EVIDENCE_DECISION_COUNCIL_REPORT.md` for the architecture and limitations.

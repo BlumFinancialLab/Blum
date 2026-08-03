@@ -456,6 +456,11 @@ class Settings(BaseSettings):
     blum_nautilus_max_items_per_job: int = Field(default=5000, alias="BLUM_NAUTILUS_MAX_ITEMS_PER_JOB")
     blum_nautilus_catalog_path: str = Field(default="/data/blum/nautilus/catalog", alias="BLUM_NAUTILUS_CATALOG_PATH")
     blum_nautilus_fallback_enabled: bool = Field(default=True, alias="BLUM_NAUTILUS_FALLBACK_ENABLED")
+    decision_council_enabled: bool = Field(default=True, alias="BLUM_DECISION_COUNCIL_ENABLED")
+    decision_council_minutes: int = Field(default=10, alias="BLUM_DECISION_COUNCIL_MINUTES")
+    decision_council_max_items: int = Field(default=25, alias="BLUM_DECISION_COUNCIL_MAX_ITEMS")
+    decision_council_min_evidence_sources: int = Field(default=2, alias="BLUM_DECISION_COUNCIL_MIN_EVIDENCE_SOURCES")
+    decision_council_min_memory_samples: int = Field(default=5, alias="BLUM_DECISION_COUNCIL_MIN_MEMORY_SAMPLES")
 
     class Config:
         env_file = ".env"

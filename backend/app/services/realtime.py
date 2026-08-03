@@ -37,6 +37,7 @@ from app.services.alpha_strategy_factory import AlphaStrategyFactory
 from app.services.worker_runtime import runtime_worker_coordinator
 from app.services.adaptive_replay_training import BlumAdaptiveTrainingController, refresh_strategy_factory_state
 from app.services.deterministic_execution.worker import DeterministicExecutionWorker
+from app.services.decision_council import DecisionCouncilWorker, EvidenceBoundDecisionCouncil
 from app.signals.engine import SignalEngine
 
 
@@ -76,6 +77,14 @@ def start_realtime_services() -> None:
     _add_interval_job(run_runtime_snapshot_watchdog, minutes=5, job_id="runtime_snapshot_watchdog", delay_seconds=45, jitter_seconds=10)
     _add_interval_job(run_snapshot_refresh_job, minutes=10, job_id="snapshot_producer", delay_seconds=105, jitter_seconds=20)
     _add_interval_job(run_brain_evidence_projection_job, minutes=10, job_id="brain_evidence_projector", delay_seconds=195, jitter_seconds=20)
+    if settings.decision_council_enabled:
+        _add_interval_job(
+            run_evidence_decision_council_job,
+            minutes=settings.decision_council_minutes,
+            job_id="evidence_decision_council",
+            delay_seconds=225,
+            jitter_seconds=20,
+        )
     if settings.enable_autonomous_engine:
         _add_interval_job(run_autonomous_engine_job, minutes=settings.autonomous_cycle_minutes, job_id="autonomous_research_engine", delay_seconds=180, jitter_seconds=45)
     _add_interval_job(run_news_refresh, minutes=settings.news_refresh_minutes, job_id="news_refresh", delay_seconds=240, jitter_seconds=30)
@@ -483,6 +492,23 @@ def run_deterministic_execution_job() -> None:
             db,
             max_items=settings.blum_nautilus_max_items_per_job,
             max_seconds=settings.blum_nautilus_max_job_seconds,
+        ),
+    )
+
+
+def run_evidence_decision_council_job() -> None:
+    _run_job(
+        "evidence_decision_council",
+        lambda db: DecisionCouncilWorker(
+            EvidenceBoundDecisionCouncil(
+                min_evidence_sources=settings.decision_council_min_evidence_sources,
+                min_memory_samples=settings.decision_council_min_memory_samples,
+            )
+        ).run(
+            db,
+            max_items=settings.decision_council_max_items,
+            max_seconds=min(120, settings.blum_autonomous_max_seconds_per_job),
+            manage_state=False,
         ),
     )
 

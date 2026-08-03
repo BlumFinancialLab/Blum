@@ -4693,3 +4693,105 @@ class TradingMLPrediction(Base):
     realized_outcome_json: Mapped[dict] = mapped_column(JsonType, default=dict)
     evaluated_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class AgentCouncilRun(Base):
+    __tablename__ = "agent_council_runs"
+    __table_args__ = (
+        UniqueConstraint("run_uid", name="uq_agent_council_run_uid"),
+        Index("ix_agent_council_runs_status_created", "status", "created_at"),
+        Index("ix_agent_council_runs_ticker_asof", "ticker", "as_of"),
+        Index("ix_agent_council_runs_record_status", "knowledge_record_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_uid: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    knowledge_record_id: Mapped[int] = mapped_column(
+        ForeignKey("blum_knowledge_records.id", ondelete="CASCADE"), index=True
+    )
+    ticker: Mapped[str] = mapped_column(String(32), index=True)
+    sector: Mapped[str] = mapped_column(String(120), default="Unknown", index=True)
+    market_regime: Mapped[str] = mapped_column(String(120), default="Unknown", index=True)
+    as_of: Mapped[datetime] = mapped_column(DateTime, index=True)
+    status: Mapped[str] = mapped_column(String(40), default="RUNNING", index=True)
+    current_stage: Mapped[str] = mapped_column(String(60), default="analyst", index=True)
+    stage_cursor: Mapped[int] = mapped_column(Integer, default=0)
+    base_confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    final_confidence: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    final_action: Mapped[str] = mapped_column(String(32), default="WAIT", index=True)
+    disagreement_score: Mapped[float] = mapped_column(Float, default=100.0)
+    evidence_quality: Mapped[float] = mapped_column(Float, default=0.0)
+    memory_adjustment: Mapped[float] = mapped_column(Float, default=0.0)
+    source_snapshot_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    checkpoint_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    final_decision_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    warnings_json: Mapped[list] = mapped_column(JsonType, default=list)
+    error_message: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+
+    knowledge_record = relationship("BlumKnowledgeRecord")
+
+
+class AgentCouncilTurn(Base):
+    __tablename__ = "agent_council_turns"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id", "stage", "agent_name", "round_number", name="uq_agent_council_turn"
+        ),
+        Index("ix_agent_council_turns_run_sequence", "run_id", "turn_sequence"),
+        Index("ix_agent_council_turns_agent_created", "agent_name", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("agent_council_runs.id", ondelete="CASCADE"), index=True
+    )
+    stage: Mapped[str] = mapped_column(String(60), index=True)
+    agent_name: Mapped[str] = mapped_column(String(100), index=True)
+    round_number: Mapped[int] = mapped_column(Integer, default=1)
+    turn_sequence: Mapped[int] = mapped_column(Integer)
+    stance: Mapped[str] = mapped_column(String(32), default="neutral", index=True)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    reliability_weight: Mapped[float] = mapped_column(Float, default=0.5)
+    argument: Mapped[str] = mapped_column(Text, default="")
+    supporting_evidence_json: Mapped[list] = mapped_column(JsonType, default=list)
+    contradicting_evidence_json: Mapped[list] = mapped_column(JsonType, default=list)
+    evidence_refs_json: Mapped[list] = mapped_column(JsonType, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    run = relationship("AgentCouncilRun")
+
+
+class AgentCouncilReflection(Base):
+    __tablename__ = "agent_council_reflections"
+    __table_args__ = (
+        UniqueConstraint("run_id", "outcome_id", name="uq_agent_council_reflection_outcome"),
+        Index("ix_agent_council_reflections_ticker_created", "ticker", "created_at"),
+        Index("ix_agent_council_reflections_result", "direction_correct", "excess_return"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("agent_council_runs.id", ondelete="CASCADE"), index=True
+    )
+    outcome_id: Mapped[int] = mapped_column(
+        ForeignKey("blum_thesis_outcomes.id", ondelete="CASCADE"), index=True
+    )
+    ticker: Mapped[str] = mapped_column(String(32), index=True)
+    sector: Mapped[str] = mapped_column(String(120), default="Unknown", index=True)
+    market_regime: Mapped[str] = mapped_column(String(120), default="Unknown", index=True)
+    horizon_days: Mapped[int] = mapped_column(Integer, index=True)
+    expected_action: Mapped[str] = mapped_column(String(32), index=True)
+    realized_return: Mapped[float | None] = mapped_column(Float)
+    benchmark_return: Mapped[float | None] = mapped_column(Float)
+    excess_return: Mapped[float | None] = mapped_column(Float, index=True)
+    direction_correct: Mapped[bool | None] = mapped_column(Boolean, index=True)
+    actionability_was_helpful: Mapped[bool | None] = mapped_column(Boolean, index=True)
+    lesson: Mapped[str] = mapped_column(Text, default="")
+    evidence_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    run = relationship("AgentCouncilRun")
+    outcome = relationship("BlumThesisOutcome")
