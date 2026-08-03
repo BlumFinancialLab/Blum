@@ -3813,6 +3813,94 @@ class ReplayDataCoverage(Base):
     asset = relationship("Asset")
 
 
+class DeterministicExecutionRun(Base):
+    __tablename__ = "deterministic_execution_runs"
+    __table_args__ = (
+        UniqueConstraint("reproducibility_fingerprint", name="uq_deterministic_execution_fingerprint"),
+        Index("ix_deterministic_execution_runs_status_created", "status", "created_at"),
+        Index("ix_deterministic_execution_runs_source", "source_object_type", "source_object_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_uid: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    environment: Mapped[str] = mapped_column(String(40), index=True)
+    kernel_name: Mapped[str] = mapped_column(String(80), default="nautilus_trader", index=True)
+    kernel_version: Mapped[str | None] = mapped_column(String(40))
+    status: Mapped[str] = mapped_column(String(40), index=True)
+    source_object_type: Mapped[str | None] = mapped_column(String(80), index=True)
+    source_object_id: Mapped[str | None] = mapped_column(String(120), index=True)
+    reproducibility_fingerprint: Mapped[str] = mapped_column(String(128), nullable=False)
+    order_event_count: Mapped[int] = mapped_column(Integer, default=0)
+    position_event_count: Mapped[int] = mapped_column(Integer, default=0)
+    costs_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    diagnostics_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+
+
+class DeterministicExecutionEvent(Base):
+    __tablename__ = "deterministic_execution_events"
+    __table_args__ = (
+        UniqueConstraint("event_uid", name="uq_deterministic_execution_event_uid"),
+        Index("ix_deterministic_execution_events_run_timestamp", "run_id", "event_timestamp"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("deterministic_execution_runs.id", ondelete="CASCADE"), index=True)
+    event_uid: Mapped[str] = mapped_column(String(128), index=True)
+    event_type: Mapped[str] = mapped_column(String(80), index=True)
+    entity_type: Mapped[str] = mapped_column(String(40), index=True)
+    entity_id: Mapped[str] = mapped_column(String(160), default="", index=True)
+    decision_id: Mapped[str | None] = mapped_column(String(160), index=True)
+    event_timestamp: Mapped[datetime] = mapped_column(DateTime, index=True)
+    payload_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class ExecutionParityComparison(Base):
+    __tablename__ = "execution_parity_comparisons"
+    __table_args__ = (
+        Index("ix_execution_parity_status_created", "status", "created_at"),
+        Index("ix_execution_parity_source", "source_object_type", "source_object_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("deterministic_execution_runs.id", ondelete="CASCADE"), index=True)
+    source_object_type: Mapped[str | None] = mapped_column(String(80), index=True)
+    source_object_id: Mapped[str | None] = mapped_column(String(120), index=True)
+    asset_class: Mapped[str | None] = mapped_column(String(40), index=True)
+    regime: Mapped[str | None] = mapped_column(String(80), index=True)
+    status: Mapped[str] = mapped_column(String(40), index=True)
+    state_agreement: Mapped[bool | None] = mapped_column(Boolean, index=True)
+    quantity_difference: Mapped[float | None] = mapped_column(Float)
+    fill_price_difference: Mapped[float | None] = mapped_column(Float)
+    cost_difference: Mapped[float | None] = mapped_column(Float)
+    pnl_difference: Mapped[float | None] = mapped_column(Float)
+    reasons_json: Mapped[list] = mapped_column(JsonType, default=list)
+    evidence_json: Mapped[dict] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class ExecutionKernelState(Base):
+    __tablename__ = "execution_kernel_state"
+    __table_args__ = (Index("ix_execution_kernel_state_mode_updated", "mode", "updated_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    state_key: Mapped[str] = mapped_column(String(80), unique=True, default="primary", index=True)
+    mode: Mapped[str] = mapped_column(String(40), default="SHADOW", index=True)
+    previous_mode: Mapped[str | None] = mapped_column(String(40))
+    sample_size: Mapped[int] = mapped_column(Integer, default=0)
+    matched_samples: Mapped[int] = mapped_column(Integer, default=0)
+    state_agreement_rate: Mapped[float] = mapped_column(Float, default=0.0)
+    asset_classes_json: Mapped[list] = mapped_column(JsonType, default=list)
+    regimes_json: Mapped[list] = mapped_column(JsonType, default=list)
+    promoted_at: Mapped[datetime | None] = mapped_column(DateTime)
+    quarantined_at: Mapped[datetime | None] = mapped_column(DateTime)
+    rollback_reason: Mapped[str] = mapped_column(Text, default="")
+    warnings_json: Mapped[list] = mapped_column(JsonType, default=list)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
 class HyperbolicReplayRun(Base):
     __tablename__ = "hyperbolic_replay_runs"
     __table_args__ = (Index("ix_hyperbolic_replay_runs_status_started", "status", "started_at"),)

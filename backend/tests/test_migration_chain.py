@@ -78,6 +78,10 @@ def test_full_migration_chain_reaches_head_on_sqlite(tmp_path):
         "trading_ml_model_versions",
         "trading_ml_training_runs",
         "trading_ml_predictions",
+        "deterministic_execution_runs",
+        "deterministic_execution_events",
+        "execution_parity_comparisons",
+        "execution_kernel_state",
     }
 
     assert required_tables.issubset(tables)
@@ -92,7 +96,7 @@ def test_full_migration_chain_reaches_head_on_sqlite(tmp_path):
         "accounting_recomputed_at",
     }.issubset(paper_trade_columns)
     with engine.connect() as connection:
-        assert connection.execute(text("select version_num from alembic_version")).scalar_one() == "0041_pf_direction"
+        assert connection.execute(text("select version_num from alembic_version")).scalar_one() == "0042_det_execution"
 
     downgrade = subprocess.run(
         [sys.executable, "-m", "alembic", "downgrade", "base"],
