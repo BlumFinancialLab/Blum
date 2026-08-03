@@ -140,6 +140,7 @@ class NautilusMarketDataProjector:
             volume=float(row.volume or 0.0),
             source=row.provider,
             acquired_at=row.acquired_at,
+            timeframe=row.timeframe,
         )
 
     @staticmethod

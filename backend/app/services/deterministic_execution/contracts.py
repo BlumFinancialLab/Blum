@@ -51,6 +51,7 @@ class MarketEvent:
     ask: float | None = None
     source: str = "blum"
     acquired_at: datetime | None = None
+    timeframe: str = "1m"
 
     def __post_init__(self) -> None:
         if self.event_type not in {"bar", "quote", "trade"}:
@@ -59,6 +60,8 @@ class MarketEvent:
             raise ValueError("market prices must be positive")
         if self.low > self.high:
             raise ValueError("market low cannot exceed high")
+        if self.low > min(self.open, self.close) or self.high < max(self.open, self.close):
+            raise ValueError("market OHLC geometry is invalid")
         if self.volume < 0:
             raise ValueError("market volume cannot be negative")
 
