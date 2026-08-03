@@ -149,8 +149,7 @@ def test_mature_outcome_creates_reflection_used_by_later_same_ticker_decision():
     _vote(db, first, "regime_engine", "bullish", 70)
     db.commit()
     first_result = EvidenceBoundDecisionCouncil(min_memory_samples=1).run_for_record(db, first.id, as_of=NOW)
-    db.add(
-        BlumThesisOutcome(
+    outcome = BlumThesisOutcome(
             knowledge_record_id=first.id,
             ticker="AAPL",
             horizon_days=5,
@@ -159,8 +158,10 @@ def test_mature_outcome_creates_reflection_used_by_later_same_ticker_decision():
             outcome="correct",
             success=True,
             outcome_payload={"benchmark_return": 1.0},
+            created_at=NOW + timedelta(days=1),
+            updated_at=NOW + timedelta(days=1),
         )
-    )
+    db.add(outcome)
     db.commit()
 
     reflected = EvidenceBoundDecisionCouncil(min_memory_samples=1).reflect_mature_outcomes(db)
@@ -181,6 +182,32 @@ def test_mature_outcome_creates_reflection_used_by_later_same_ticker_decision():
     assert first_result["memory_used"]["sample_size"] == 0
     assert second_result["memory_used"]["sample_size"] == 1
     assert second_result["memory_adjustment"] > 0
+
+
+def test_outcome_known_before_council_clock_cannot_create_reflection():
+    db = _db()
+    record = _record(db, suffix="known-outcome")
+    _vote(db, record, "technical_engine", "bullish", 70)
+    _vote(db, record, "regime_engine", "bullish", 70)
+    db.add(
+        BlumThesisOutcome(
+            knowledge_record_id=record.id,
+            ticker="AAPL",
+            horizon_days=5,
+            realized_return=4.0,
+            outcome="correct",
+            success=True,
+            created_at=NOW - timedelta(days=1),
+            updated_at=NOW - timedelta(days=1),
+        )
+    )
+    db.commit()
+    EvidenceBoundDecisionCouncil().run_for_record(db, record.id, as_of=NOW)
+
+    result = EvidenceBoundDecisionCouncil().reflect_mature_outcomes(db)
+
+    assert result["created"] == 0
+    assert db.scalar(select(func.count(AgentCouncilReflection.id))) == 0
 
 
 def test_council_rejects_knowledge_created_after_decision_clock():

@@ -2347,6 +2347,8 @@ evidence and cannot fetch data during deliberation.
 - missing invalidation, reward/risk, independent evidence or consensus forces
   `WAIT`;
 - mature outcomes create benchmark-relative reflections;
+- historical outcomes known before a verdict cannot enter its reflection or
+  confidence memory;
 - outcome memory affects later confidence only after a minimum sample gate;
 - processing runs in a bounded autonomous worker;
 - dashboard/API reads use the asynchronous `decision_council_summary` snapshot;

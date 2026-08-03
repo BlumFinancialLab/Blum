@@ -35,7 +35,9 @@ minimum sample of same-ticker reflections can adjust later confidence.
 
 ## Runtime
 
-- `DecisionCouncilWorker` processes bounded slices with a persistent cursor.
+- `DecisionCouncilWorker` prioritizes the newest unprocessed records that have
+  at least two independent engine votes, in bounded slices with a persistent
+  cursor.
 - The worker is isolated in the `decision_council` queue and runs every ten
   minutes by default.
 - `decision_council_summary` is generated asynchronously and read by GET.
@@ -46,6 +48,8 @@ minimum sample of same-ticker reflections can adjust later confidence.
 ## Safety
 
 - no future knowledge may enter a decision clock;
+- outcomes already known before the council clock are ineligible for reflection
+  or memory adjustment;
 - no hidden model-weight change occurs;
 - no source-code self-modification occurs;
 - no action is emitted without stored risk controls;

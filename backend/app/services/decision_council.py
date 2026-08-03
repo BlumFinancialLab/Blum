@@ -5,7 +5,7 @@ import hashlib
 import time
 from typing import Any
 
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -218,7 +218,11 @@ class EvidenceBoundDecisionCouncil:
                 (AgentCouncilReflection.run_id == AgentCouncilRun.id)
                 & (AgentCouncilReflection.outcome_id == BlumThesisOutcome.id),
             )
-            .where(AgentCouncilRun.status == "COMPLETED", AgentCouncilReflection.id.is_(None))
+            .where(
+                AgentCouncilRun.status == "COMPLETED",
+                AgentCouncilReflection.id.is_(None),
+                BlumThesisOutcome.updated_at > AgentCouncilRun.as_of,
+            )
             .order_by(BlumThesisOutcome.id)
             .limit(max(1, limit))
         ).all()
@@ -353,7 +357,13 @@ class EvidenceBoundDecisionCouncil:
         rows = list(
             db.scalars(
                 select(AgentCouncilReflection)
-                .where(AgentCouncilReflection.ticker == record.ticker, AgentCouncilReflection.created_at <= as_of)
+                .join(AgentCouncilRun, AgentCouncilRun.id == AgentCouncilReflection.run_id)
+                .join(BlumThesisOutcome, BlumThesisOutcome.id == AgentCouncilReflection.outcome_id)
+                .where(
+                    AgentCouncilReflection.ticker == record.ticker,
+                    AgentCouncilReflection.created_at <= as_of,
+                    BlumThesisOutcome.updated_at > AgentCouncilRun.as_of,
+                )
                 .order_by(desc(AgentCouncilReflection.created_at))
                 .limit(100)
             )
@@ -485,7 +495,42 @@ class DecisionCouncilWorker:
         last_id = cursor
         errors: list[dict] = []
         try:
-            rows = list(db.scalars(select(BlumKnowledgeRecord).where(BlumKnowledgeRecord.id > cursor, BlumKnowledgeRecord.created_at <= clock).order_by(BlumKnowledgeRecord.id).limit(budget_items)))
+            vote_stats = (
+                select(
+                    EngineVote.thesis_id.label("record_id"),
+                    func.max(EngineVote.created_at).label("latest_vote_at"),
+                    func.count(func.distinct(EngineVote.engine_name)).label("engine_count"),
+                )
+                .where(EngineVote.created_at <= clock)
+                .group_by(EngineVote.thesis_id)
+                .subquery()
+            )
+            run_stats = (
+                select(
+                    AgentCouncilRun.knowledge_record_id.label("record_id"),
+                    func.max(AgentCouncilRun.as_of).label("latest_run_as_of"),
+                )
+                .where(AgentCouncilRun.status == "COMPLETED")
+                .group_by(AgentCouncilRun.knowledge_record_id)
+                .subquery()
+            )
+            rows = list(
+                db.scalars(
+                    select(BlumKnowledgeRecord)
+                    .join(vote_stats, vote_stats.c.record_id == BlumKnowledgeRecord.id)
+                    .outerjoin(run_stats, run_stats.c.record_id == BlumKnowledgeRecord.id)
+                    .where(
+                        BlumKnowledgeRecord.created_at <= clock,
+                        vote_stats.c.engine_count >= self.council.min_evidence_sources,
+                        or_(
+                            run_stats.c.latest_run_as_of.is_(None),
+                            vote_stats.c.latest_vote_at > run_stats.c.latest_run_as_of,
+                        ),
+                    )
+                    .order_by(desc(BlumKnowledgeRecord.created_at), desc(BlumKnowledgeRecord.id))
+                    .limit(budget_items)
+                )
+            )
             for record in rows:
                 if time.perf_counter() - started >= budget_seconds:
                     break
@@ -522,8 +567,15 @@ class DecisionCouncilSnapshotService:
         failed = int(db.scalar(select(func.count(AgentCouncilRun.id)).where(AgentCouncilRun.status == "FAILED")) or 0)
         actions = {str(action): int(count) for action, count in db.execute(select(AgentCouncilRun.final_action, func.count(AgentCouncilRun.id)).where(AgentCouncilRun.status == "COMPLETED").group_by(AgentCouncilRun.final_action)).all()}
         latest = db.scalar(select(AgentCouncilRun).order_by(desc(AgentCouncilRun.created_at)).limit(1))
-        reflections = int(db.scalar(select(func.count(AgentCouncilReflection.id))) or 0)
-        helpful = int(db.scalar(select(func.count(AgentCouncilReflection.id)).where(AgentCouncilReflection.actionability_was_helpful.is_(True))) or 0)
+        valid_reflections = (
+            select(AgentCouncilReflection.id, AgentCouncilReflection.actionability_was_helpful)
+            .join(AgentCouncilRun, AgentCouncilRun.id == AgentCouncilReflection.run_id)
+            .join(BlumThesisOutcome, BlumThesisOutcome.id == AgentCouncilReflection.outcome_id)
+            .where(BlumThesisOutcome.updated_at > AgentCouncilRun.as_of)
+            .subquery()
+        )
+        reflections = int(db.scalar(select(func.count(valid_reflections.c.id))) or 0)
+        helpful = int(db.scalar(select(func.count(valid_reflections.c.id)).where(valid_reflections.c.actionability_was_helpful.is_(True))) or 0)
         mean_disagreement = db.scalar(select(func.avg(AgentCouncilRun.disagreement_score)).where(AgentCouncilRun.status == "COMPLETED"))
         return {
             "status": "ready",
@@ -557,7 +609,9 @@ class DecisionCouncilSnapshotService:
         reflection_rows = list(
             db.scalars(
                 select(AgentCouncilReflection)
+                .join(BlumThesisOutcome, BlumThesisOutcome.id == AgentCouncilReflection.outcome_id)
                 .where(AgentCouncilReflection.run_id == run_id)
+                .where(BlumThesisOutcome.updated_at > run.as_of)
                 .order_by(AgentCouncilReflection.created_at)
                 .limit(50)
             )
