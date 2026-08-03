@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
@@ -81,6 +82,18 @@ def test_local_snapshot_publisher_is_atomic_and_idempotent(tmp_path) -> None:
     assert second["status"] == "already_published"
     assert Path(first["archive_path"]).is_file()
     assert json.loads(Path(first["manifest_path"]).read_text())["snapshot_hash"] == snapshot.snapshot_hash
+
+
+def test_local_snapshot_publisher_serializes_concurrent_identical_writes(tmp_path) -> None:
+    snapshot = build_snapshot([candidate(outcome=matured_outcome())], SnapshotPolicy())
+    publisher = LocalSnapshotPublisher(tmp_path)
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        results = list(executor.map(lambda _: publisher.publish(snapshot), range(4)))
+
+    assert {result["status"] for result in results} <= {"published", "already_published"}
+    assert sum(result["status"] == "published" for result in results) == 1
+    assert all(Path(result["archive_path"]).is_file() for result in results)
 
 
 def test_supervisor_persists_continual_snapshot_without_hub_token(tmp_path) -> None:

@@ -11,6 +11,7 @@ import tarfile
 import tempfile
 from typing import Any, Mapping
 
+from filelock import FileLock
 from huggingface_hub import CommitOperationAdd, HfApi
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
@@ -52,6 +53,11 @@ class LocalSnapshotPublisher:
 
     def publish(self, snapshot: SnapshotArtifact) -> dict[str, Any]:
         self.root.mkdir(parents=True, exist_ok=True)
+        lock = FileLock(str(self.root / ".snapshot-publisher.lock"), timeout=120)
+        with lock:
+            return self._publish_locked(snapshot)
+
+    def _publish_locked(self, snapshot: SnapshotArtifact) -> dict[str, Any]:
         destination = self.root / snapshot.revision
         manifest_path = destination / "manifest.json"
         archive_path = self.root / f"{snapshot.revision}.tar.gz"
