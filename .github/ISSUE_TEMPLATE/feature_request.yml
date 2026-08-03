@@ -1,0 +1,26 @@
+name: Evidence-driven proposal
+description: Propose a change that improves BLUM's decision intelligence.
+title: "[Proposal]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Measured problem
+      description: What limitation is observable today?
+    validations:
+      required: true
+  - type: textarea
+    id: decision_quality
+    attributes:
+      label: Decision-quality impact
+      description: How should this improve selection, risk, learning or validation?
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation plan
+      description: Define tests, benchmarks, sample thresholds and rollback.
+    validations:
+      required: true

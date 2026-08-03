@@ -12,6 +12,29 @@ pinned: false
 
 # BLUM v2.0 Project Split
 
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+[![Hugging Face Space](https://img.shields.io/badge/Hugging%20Face-Space-yellow)](https://huggingface.co/spaces/Italianhype/Blum)
+[![BLUM Finance Model](https://img.shields.io/badge/Model-BLUM%20Finance-orange)](https://huggingface.co/Italianhype/Blum)
+
+## Open-Source Project
+
+[`BlumFinancialLab/Blum`](https://github.com/BlumFinancialLab/Blum) is the
+canonical public source repository. The application code is licensed under
+[Apache-2.0](LICENSE); contributions follow [CONTRIBUTING.md](CONTRIBUTING.md),
+[GOVERNANCE.md](GOVERNANCE.md) and [SECURITY.md](SECURITY.md).
+
+The public surfaces have distinct responsibilities:
+
+- **GitHub**: source code, issues, pull requests and engineering history.
+- **Hugging Face Space**: public, paper-only deployment of the Runtime.
+- **Hugging Face Models**: downloadable BLUM Finance model artifacts.
+- **Hugging Face Datasets**: versioned reasoning and opt-in community-memory
+  datasets with their own dataset cards and provenance constraints.
+
+BLUM sends no usage telemetry by default. Community evidence is contributed
+only through an explicit, redacted workflow and is quarantined before review;
+downloads never modify active model weights automatically.
+
 ## BLUM v2.1 Clean Core Release
 
 BLUM v2.1 tightens the v2.0 split around the four product surfaces that matter to the trader brain:
@@ -1977,7 +2000,11 @@ Development standards are tracked in [`ENGINEERING_STANDARDS.md`](ENGINEERING_ST
 
 ## Contributing
 
-Contributions should preserve the project philosophy: transparent evidence, modular models, explainable scoring, no fabricated data and no investment recommendations.
+Contributions should preserve the project philosophy: transparent evidence,
+modular models, explainable scoring, no fabricated data and no investment
+recommendations. See [CONTRIBUTING.md](CONTRIBUTING.md) for the development and
+data-contribution workflow, [GOVERNANCE.md](GOVERNANCE.md) for change control and
+[SECURITY.md](SECURITY.md) for private vulnerability reporting.
 ## Autonomous Forex Alpha Trader
 
 BLUM includes a paper-only Forex decision core for selective scalping and short
