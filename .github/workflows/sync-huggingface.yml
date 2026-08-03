@@ -57,9 +57,11 @@ jobs:
             --github-is-ancestor "$github_is_ancestor" \
             --hf-is-ancestor "$hf_is_ancestor")"
 
-          echo "github_sha=$github_sha" >> "$GITHUB_OUTPUT"
-          echo "hf_sha=$hf_sha" >> "$GITHUB_OUTPUT"
-          echo "action=$action" >> "$GITHUB_OUTPUT"
+          {
+            echo "github_sha=$github_sha"
+            echo "hf_sha=$hf_sha"
+            echo "action=$action"
+          } >> "$GITHUB_OUTPUT"
 
           {
             echo "## Hugging Face synchronization"
