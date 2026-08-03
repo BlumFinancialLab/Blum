@@ -95,16 +95,40 @@ def hf_training_status(db: Session = Depends(get_db)) -> dict:
     return BlumHFTrainingService().status(db)
 
 
+@router.get("/analyst/hf-training/local-snapshot")
+@router.get("/api/analyst/hf-training/local-snapshot")
+def hf_training_local_snapshot() -> dict:
+    return BlumHFTrainingService().local_snapshot_status()
+
+
+@router.get("/analyst/hf-training/local-snapshot/archive")
+@router.get("/api/analyst/hf-training/local-snapshot/archive")
+def hf_training_local_snapshot_archive() -> FileResponse:
+    archive = BlumHFTrainingService().local_snapshot_archive()
+    if archive is None:
+        raise HTTPException(status_code=404, detail="No local continual-learning snapshot is ready.")
+    return FileResponse(
+        archive,
+        media_type="application/gzip",
+        filename=archive.name,
+    )
+
+
 @router.post("/analyst/hf-training/snapshot")
 @router.post("/api/analyst/hf-training/snapshot")
 def hf_training_snapshot(
     publish: bool = Query(default=False),
+    persist_local: bool = Query(default=False),
     db: Session = Depends(get_db),
 ) -> dict:
     service = BlumHFTrainingService()
     try:
+        if publish and persist_local:
+            raise ValueError("publish and persist_local are mutually exclusive")
         if publish:
             return service.publish_snapshot(db)
+        if persist_local:
+            return service.persist_local_snapshot(db)
         snapshot = service.build_local_snapshot(db)
         return {"status": "dry_run", "revision": snapshot.revision, "manifest": snapshot.manifest}
     except (RuntimeError, ValueError) as exc:

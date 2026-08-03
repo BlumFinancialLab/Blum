@@ -182,8 +182,13 @@ def build_snapshot(
         rejection_reasons["duplicate_lineage"] = rejection_reasons.get("duplicate_lineage", 0) + 1
 
     grouped: dict[str, list[dict[str, Any]]] = {"train": [], "validation": [], "test": []}
-    for lineage, row in sorted(accepted_by_lineage.items(), key=lambda item: item[0]):
-        split = _split_for_lineage(lineage, policy)
+    temporal_rows = sorted(
+        accepted_by_lineage.items(),
+        key=lambda item: (str(item[1].get("created_at") or ""), item[0]),
+    )
+    for index, (lineage, row) in enumerate(temporal_rows):
+        split = _temporal_split_for_index(index, len(temporal_rows), policy)
+        learning_context = _learning_context(row["outcomes"])
         record = {
             "schema_version": policy.schema_version,
             "lineage_key": lineage,
@@ -193,10 +198,11 @@ def build_snapshot(
             "task_type": row["task_type"],
             "input": row["input"],
             "output": row["output"],
-            "messages": row["messages"],
+            "messages": _with_outcome_reflection(row["messages"], learning_context),
             "preference": row["preference"],
             "quality": row["quality"],
             "outcomes": row["outcomes"],
+            "learning_context": learning_context,
             "provenance": row["provenance"],
         }
         grouped[split].append(record)
@@ -243,6 +249,14 @@ def build_snapshot(
         "input_rows": total_input,
         "rejection_reasons": dict(sorted(rejection_reasons.items())),
         "split_counts": split_counts,
+        "split_strategy": "grouped_temporal_holdout",
+        "split_periods": {
+            name: {
+                "start": min((str(row.get("created_at") or "") for row in rows), default=None),
+                "end": max((str(row.get("created_at") or "") for row in rows), default=None),
+            }
+            for name, rows in frozen_records.items()
+        },
         "lineage_leakage": False,
         "temporal_leakage": False,
         "files": {
@@ -336,6 +350,75 @@ def _has_matured_outcome(outcomes: Sequence[Any]) -> bool:
     return False
 
 
+def _learning_context(outcomes: Sequence[Any]) -> dict[str, Any] | None:
+    matured = [dict(item) for item in outcomes if isinstance(item, Mapping) and _outcome_is_mature(item)]
+    if not matured:
+        return None
+    latest = max(matured, key=lambda item: str(item.get("updated_at") or ""))
+    success = latest.get("success")
+    label = str(latest.get("outcome") or latest.get("status") or "").strip().lower()
+    if success is True or label in {"correct", "win", "target_hit", "confirmed", "outperformed"}:
+        assessment = "confirmed"
+        confidence_direction = "increase"
+    elif success is False or label in {"incorrect", "loss", "stopped_out", "invalidated", "underperformed"}:
+        assessment = "contradicted"
+        confidence_direction = "decrease"
+    else:
+        assessment = "mixed"
+        confidence_direction = "hold"
+    horizon = latest.get("horizon_days")
+    lesson = (
+        f"The stored {horizon}-day outcome {assessment} this thesis. "
+        "Treat it as one observation and update confidence only after similar independent outcomes."
+    )
+    return {
+        "context_type": "validated_post_outcome_evidence",
+        "outcome_assessment": assessment,
+        "confidence_direction": confidence_direction,
+        "lesson": lesson,
+        "sample_warning": "A single matured thesis is evidence, not a general trading rule.",
+        "outcomes": matured,
+    }
+
+
+def _with_outcome_reflection(
+    messages: Sequence[Any],
+    learning_context: Mapping[str, Any] | None,
+) -> list[Any]:
+    original = [dict(item) if isinstance(item, Mapping) else item for item in messages]
+    if not learning_context:
+        return original
+    observed = {
+        "context_type": learning_context["context_type"],
+        "instruction": (
+            "Audit the preceding thesis using only this subsequently observed outcome. "
+            "Do not rewrite the historical decision with hindsight."
+        ),
+        "outcomes": learning_context["outcomes"],
+    }
+    reflection = {
+        key: learning_context[key]
+        for key in (
+            "outcome_assessment",
+            "confidence_direction",
+            "lesson",
+            "sample_warning",
+        )
+    }
+    return [
+        *original,
+        {"role": "user", "content": _canonical_json(observed)},
+        {"role": "assistant", "content": _canonical_json(reflection)},
+    ]
+
+
+def _outcome_is_mature(outcome: Mapping[str, Any]) -> bool:
+    if outcome.get("realized_return") is not None:
+        return True
+    label = str(outcome.get("outcome") or outcome.get("status") or "").strip().lower()
+    return bool(label and label not in {"pending", "inconclusive", "unresolved", "not_matured"})
+
+
 def _candidate_rank(row: Mapping[str, Any]) -> tuple[float, str, str]:
     return (
         _safe_float(row.get("quality"), default=0.0),
@@ -344,11 +427,22 @@ def _candidate_rank(row: Mapping[str, Any]) -> tuple[float, str, str]:
     )
 
 
-def _split_for_lineage(lineage: str, policy: SnapshotPolicy) -> str:
-    bucket = int(hashlib.sha256(lineage.encode("utf-8")).hexdigest()[:8], 16) % 100
-    if bucket < policy.train_percent:
+def _temporal_split_for_index(index: int, total: int, policy: SnapshotPolicy) -> str:
+    if total <= 1:
         return "train"
-    if bucket < policy.train_percent + policy.validation_percent:
+    if total == 2:
+        return "train" if index == 0 else "test"
+    train_end = max(1, min(total - 2, int(total * policy.train_percent / 100)))
+    validation_end = max(
+        train_end + 1,
+        min(
+            total - 1,
+            int(total * (policy.train_percent + policy.validation_percent) / 100),
+        ),
+    )
+    if index < train_end:
+        return "train"
+    if index < validation_end:
         return "validation"
     return "test"
 

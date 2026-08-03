@@ -6,6 +6,9 @@ import hmac
 import json
 import os
 from pathlib import Path
+import shutil
+import tarfile
+import tempfile
 from typing import Any, Mapping
 
 from huggingface_hub import CommitOperationAdd, HfApi
@@ -39,6 +42,61 @@ from app.models import (
 
 
 FAILED_REMOTE_STAGES = {"ERROR", "CANCELED", "DELETED"}
+
+
+class LocalSnapshotPublisher:
+    """Persist immutable training snapshots without requiring Hub credentials."""
+
+    def __init__(self, root: str | Path) -> None:
+        self.root = Path(root).expanduser().resolve()
+
+    def publish(self, snapshot: SnapshotArtifact) -> dict[str, Any]:
+        self.root.mkdir(parents=True, exist_ok=True)
+        destination = self.root / snapshot.revision
+        manifest_path = destination / "manifest.json"
+        archive_path = self.root / f"{snapshot.revision}.tar.gz"
+        if manifest_path.is_file():
+            try:
+                existing = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                existing = {}
+            if existing.get("snapshot_hash") == snapshot.snapshot_hash and archive_path.is_file():
+                return self._result("already_published", snapshot, manifest_path, archive_path)
+
+        temporary_root = Path(tempfile.mkdtemp(prefix=f".{snapshot.revision}-", dir=self.root))
+        temporary_archive = self.root / f".{snapshot.revision}.tar.gz.tmp"
+        try:
+            for relative, content in snapshot.files.items():
+                target = temporary_root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(content)
+            if destination.exists():
+                shutil.rmtree(destination)
+            os.replace(temporary_root, destination)
+            with tarfile.open(temporary_archive, "w:gz") as archive:
+                archive.add(destination, arcname=snapshot.revision)
+            os.replace(temporary_archive, archive_path)
+        finally:
+            if temporary_root.exists():
+                shutil.rmtree(temporary_root, ignore_errors=True)
+            temporary_archive.unlink(missing_ok=True)
+        return self._result("published", snapshot, manifest_path, archive_path)
+
+    @staticmethod
+    def _result(
+        status: str,
+        snapshot: SnapshotArtifact,
+        manifest_path: Path,
+        archive_path: Path,
+    ) -> dict[str, Any]:
+        return {
+            "status": status,
+            "revision": snapshot.revision,
+            "snapshot_hash": snapshot.snapshot_hash,
+            "accepted_rows": int(snapshot.manifest["accepted_rows"]),
+            "manifest_path": str(manifest_path),
+            "archive_path": str(archive_path),
+        }
 
 
 class HubDatasetPublisher:
@@ -135,6 +193,8 @@ class BlumHFTrainingService:
             "enabled": self.settings.hf_training_enabled,
             "auto_launch": self.settings.hf_training_auto_launch,
             "scheduler_enabled": self.settings.hf_training_scheduler_enabled,
+            "continual_snapshot_enabled": self.settings.hf_dataset_snapshot_enabled,
+            "continual_snapshot": self.local_snapshot_status(),
             "token_configured": bool(self.token),
             "repositories": {
                 "dataset": self.settings.hf_training_dataset_repository,
@@ -261,6 +321,60 @@ class BlumHFTrainingService:
             parent_model_repository=self.settings.hf_training_champion_repository,
             parent_model_revision=champion_revision,
         )
+
+    def persist_local_snapshot(self, db: Session) -> dict[str, Any]:
+        if not self.settings.hf_dataset_snapshot_enabled:
+            return {"status": "disabled", "reason": "continual_snapshot_disabled"}
+        snapshot = self.build_local_snapshot(db)
+        if int(snapshot.manifest.get("accepted_rows") or 0) <= 0:
+            return {
+                "status": "blocked",
+                "reason": "no_approved_matured_examples",
+                "manifest": snapshot.manifest,
+            }
+        return LocalSnapshotPublisher(self.settings.hf_dataset_snapshot_dir).publish(snapshot)
+
+    def local_snapshot_status(self) -> dict[str, Any]:
+        root = Path(self.settings.hf_dataset_snapshot_dir).expanduser().resolve()
+        if not root.is_dir():
+            return {"status": "missing", "reason": "no_local_snapshot"}
+        manifests = sorted(
+            root.glob("snapshot-*/manifest.json"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        if not manifests:
+            return {"status": "missing", "reason": "no_local_snapshot"}
+        manifest_path = manifests[0].resolve()
+        if root not in manifest_path.parents:
+            return {"status": "invalid", "reason": "snapshot_path_outside_root"}
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            return {"status": "invalid", "reason": f"{type(exc).__name__}: {exc}"}
+        revision = str(manifest.get("revision") or manifest_path.parent.name)
+        archive_path = (root / f"{revision}.tar.gz").resolve()
+        return {
+            "status": "ready" if archive_path.is_file() else "incomplete",
+            "revision": revision,
+            "snapshot_hash": manifest.get("snapshot_hash"),
+            "accepted_rows": manifest.get("accepted_rows"),
+            "split_counts": manifest.get("split_counts") or {},
+            "snapshot_as_of": manifest.get("snapshot_as_of"),
+            "manifest_path": str(manifest_path),
+            "archive_path": str(archive_path) if archive_path.is_file() else None,
+        }
+
+    def local_snapshot_archive(self) -> Path | None:
+        status = self.local_snapshot_status()
+        path = status.get("archive_path")
+        if status.get("status") != "ready" or not path:
+            return None
+        root = Path(self.settings.hf_dataset_snapshot_dir).expanduser().resolve()
+        archive = Path(str(path)).resolve()
+        if root not in archive.parents or not archive.is_file():
+            return None
+        return archive
 
     def publish_snapshot(self, db: Session) -> dict[str, Any]:
         self._require_enabled_and_token()
@@ -490,13 +604,23 @@ class BlumHFTrainingService:
         return {"status": job.status, "job": serialize_training_job(job)}
 
     def supervise(self, db: Session) -> dict[str, Any]:
+        try:
+            local_snapshot = self.persist_local_snapshot(db)
+        except Exception as exc:
+            local_snapshot = {"status": "failed", "reason": f"{type(exc).__name__}: {exc}"}
         if not self.settings.hf_training_enabled or not self.token:
-            return {"status": "disabled", "token_configured": bool(self.token)}
+            training = {"status": "disabled", "token_configured": bool(self.token)}
+            status = "snapshot_ready" if local_snapshot.get("status") in {"published", "already_published"} else "degraded"
+            return {"status": status, "local_snapshot": local_snapshot, "training": training}
         synced = self.sync(db)
         launch = None
         if self.settings.hf_training_auto_launch:
             launch = self.launch(db)
-        return {"status": "ok", "sync": synced, "launch": launch}
+        return {
+            "status": "ok",
+            "local_snapshot": local_snapshot,
+            "training": {"status": "enabled", "sync": synced, "launch": launch},
+        }
 
     def _sync_job(self, db: Session, job: BlumModelTrainingJob) -> dict[str, Any]:
         config = dict(job.training_config or {})

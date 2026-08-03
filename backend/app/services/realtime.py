@@ -121,12 +121,12 @@ def start_realtime_services() -> None:
     _add_interval_job(run_macro_refresh, minutes=settings.macro_refresh_minutes, job_id="macro_refresh", delay_seconds=720, jitter_seconds=45)
     _add_interval_job(run_fundamentals_refresh, minutes=settings.fundamentals_refresh_minutes, job_id="fundamentals_refresh", delay_seconds=840, jitter_seconds=45)
     _add_interval_job(run_ipo_refresh, minutes=settings.ipo_refresh_minutes, job_id="ipo_refresh", delay_seconds=960, jitter_seconds=45)
-    if settings.hf_training_scheduler_enabled:
+    if settings.hf_training_scheduler_enabled or settings.hf_dataset_snapshot_enabled:
         _add_interval_job(
             run_hf_training_supervisor_job,
             minutes=settings.hf_training_supervisor_minutes,
             job_id="blum_hf_training_supervisor",
-            delay_seconds=1260,
+            delay_seconds=300,
             jitter_seconds=60,
         )
     if settings.enable_learning_loop:

@@ -2283,6 +2283,33 @@ can enter an immutable future training snapshot; each incremental cycle creates
 a versioned challenger and promotes it only after the same held-out gates.
 Training never runs inside an inference request or on a frontend page.
 
+### Outcome-aware continual model learning
+
+The Space now persists an immutable local Analyst snapshot even when Hugging
+Face training credentials or GPU jobs are unavailable. Every snapshot preserves
+the original point-in-time thesis and, only when an outcome is mature, appends a
+separate post-outcome critique. This ordering prevents future outcomes from
+leaking into the original decision while teaching the next challenger why a
+thesis held or failed.
+
+The default supervisor checks for new mature evidence hourly and performs its
+first check five minutes after startup. Identical evidence is content-addressed,
+so unchanged snapshots are reused instead of rewritten.
+
+Snapshot creation is background-first and can also be requested explicitly with
+`POST /api/analyst/hf-training/snapshot?persist_local=true`. Read-only status and
+archive endpoints are available at
+`GET /api/analyst/hf-training/local-snapshot` and
+`GET /api/analyst/hf-training/local-snapshot/archive`. No GET request trains,
+publishes, or recalculates a model.
+
+Downloaded installations can use `BlumFinanceMemoryStore` as an auditable local
+memory. Only mature, source-verified, high-quality records observable before the
+new request timestamp are retrieved, and they are explicitly labeled historical
+analogies. `blum-memory-add` imports a validated contribution bundle. Community
+submission remains opt-in through a pull request to quarantine; untrusted input
+cannot directly modify shared memory or released weights.
+
 The current model release requires Apple Silicon and MLX. A portable
 Transformers/GGUF release remains a separate validation target. Language-model
 reasoning scores do not demonstrate trading alpha, future profitability or

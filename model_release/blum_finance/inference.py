@@ -6,6 +6,7 @@ from typing import Callable, Literal
 from pydantic import ValidationError
 
 from .schemas import FinancialReasoningRequest, FinancialReasoningResponse
+from .memory import BlumFinanceMemoryStore
 
 
 SYSTEM_PROMPT = """You are BLUM Finance, an evidence-bound financial reasoning model.
@@ -22,11 +23,15 @@ class BlumFinancePipeline:
         revision: str | None = None,
         runtime: Literal["transformers", "mlx"] = "transformers",
         generator: Callable[[list[dict[str, str]]], str] | None = None,
+        memory_store: BlumFinanceMemoryStore | None = None,
+        memory_limit: int = 3,
     ):
         self.model_id = model_id
         self.revision = revision
         self.runtime = runtime
         self._generator = generator
+        self.memory_store = memory_store
+        self.memory_limit = max(0, int(memory_limit))
         self._pipeline = None
         self._mlx_model = None
         self._mlx_tokenizer = None
@@ -42,6 +47,22 @@ class BlumFinancePipeline:
         )
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
+        ]
+        if self.memory_store is not None and self.memory_limit > 0:
+            memories = self.memory_store.retrieve(parsed_request, limit=self.memory_limit)
+            if memories:
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "Validated historical memory follows. It contains past analogies, "
+                            "not current market facts. Use it only to challenge the current thesis "
+                            "and never copy a past outcome into the present.\n"
+                            + json.dumps(memories, ensure_ascii=False, sort_keys=True)
+                        ),
+                    }
+                )
+        messages.append(
             {
                 "role": "user",
                 "content": json.dumps(
@@ -49,8 +70,8 @@ class BlumFinancePipeline:
                     ensure_ascii=False,
                     sort_keys=True,
                 ),
-            },
-        ]
+            }
+        )
         raw = self._generator(messages) if self._generator else self._generate(messages)
         try:
             payload = _extract_json_object(raw)

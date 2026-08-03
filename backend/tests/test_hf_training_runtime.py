@@ -119,6 +119,13 @@ def test_runtime_launch_publishes_snapshot_and_queues_external_job_without_persi
     seed_one_matured_example()
     api = FakeApi()
     service = BlumHFTrainingService(api=api, token="hf-super-secret")
+    # The full suite may populate the cached Settings object before this module's
+    # environment overrides are collected. Keep this integration test explicit.
+    service.settings.hf_training_enabled = True
+    service.settings.hf_training_minimum_examples = 1
+    service.settings.hf_training_minimum_matured_ratio = 1.0
+    service.settings.hf_training_minimum_days_between_runs = 0
+    service.settings.hf_training_minimum_quality = 70
 
     with Session(test_engine) as db:
         result = service.launch(db)

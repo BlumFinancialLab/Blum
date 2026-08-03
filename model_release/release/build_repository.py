@@ -154,8 +154,16 @@ def assemble_repository(
         shutil.rmtree(staging_dir)
     shutil.copytree(merged_model_dir, staging_dir)
     render_model_card(manifest, output=staging_dir / "README.md")
-    license_source = Path(__file__).resolve().parents[1] / "model_card" / "LICENSE"
+    release_root = Path(__file__).resolve().parents[1]
+    license_source = release_root / "model_card" / "LICENSE"
     shutil.copy2(license_source, staging_dir / "LICENSE")
+    shutil.copy2(release_root / "pyproject.toml", staging_dir / "pyproject.toml")
+    shutil.copy2(release_root / "CONTRIBUTING.md", staging_dir / "CONTRIBUTING.md")
+    shutil.copytree(
+        release_root / "blum_finance",
+        staging_dir / "blum_finance",
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+    )
     (staging_dir / "release_manifest.json").write_text(
         manifest.model_dump_json(indent=2) + "\n",
         encoding="utf-8",

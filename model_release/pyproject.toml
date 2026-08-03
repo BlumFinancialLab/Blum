@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "blum-finance"
-version = "0.1.0"
+version = "0.2.0"
 description = "Structured local inference and opt-in contribution tools for BLUM Finance."
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
@@ -34,6 +34,7 @@ test = [
 
 [project.scripts]
 blum-contribute = "blum_finance.contributions:main"
+blum-memory-add = "blum_finance.memory:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["blum_finance"]

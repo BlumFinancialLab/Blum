@@ -54,6 +54,8 @@ def test_analyst_contract_targets_future_model_without_training():
 
     assert payload["model_repository"] == "Italianhype/Blum-Finance-4B"
     assert payload["automatic_training_enabled"] is False
+    assert payload["automatic_dataset_snapshots_enabled"] is True
+    assert payload["community_memory_policy"] == "opt_in_pull_request_quarantine"
     assert payload["contract"]["source_of_truth"] is False
     assert "sft_jsonl" in payload["contract"]["supported_training_modes"]
 

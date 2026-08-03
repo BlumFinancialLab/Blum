@@ -7,6 +7,7 @@ import pytest
 from model_release.release.build_repository import (
     MissingEvaluationEvidence,
     ReleaseManifest,
+    assemble_repository,
     render_model_card,
 )
 from model_release.release.publish import CandidateNotPromoted, validate_publication
@@ -174,3 +175,22 @@ def test_model_card_explains_governed_incremental_learning(tmp_path) -> None:
     assert "explicit opt-in" in text
     assert "versioned challenger" in text
     assert "never trains inside an inference request" in text
+
+
+def test_release_repository_contains_installable_memory_and_contribution_tools(tmp_path) -> None:
+    merged = tmp_path / "merged"
+    merged.mkdir()
+    (merged / "config.json").write_text("{}", encoding="utf-8")
+    (merged / "tokenizer_config.json").write_text("{}", encoding="utf-8")
+    (merged / "model.safetensors").write_bytes(b"weights")
+
+    staging = assemble_repository(
+        merged_model_dir=merged,
+        staging_dir=tmp_path / "staging",
+        manifest=manifest(),
+    )
+
+    assert (staging / "pyproject.toml").is_file()
+    assert (staging / "CONTRIBUTING.md").is_file()
+    assert (staging / "blum_finance" / "memory.py").is_file()
+    assert (staging / "blum_finance" / "contributions.py").is_file()

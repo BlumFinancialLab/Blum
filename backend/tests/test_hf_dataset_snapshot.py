@@ -69,3 +69,23 @@ def test_duplicate_lineage_content_is_deduplicated() -> None:
     snapshot = build_snapshot(rows, SnapshotPolicy(minimum_quality=70.0, require_matured_outcome=True))
     assert snapshot.manifest["accepted_rows"] == 2
     assert snapshot.manifest["rejection_reasons"]["duplicate_lineage"] == 1
+
+
+def test_snapshot_uses_true_temporal_holdout_not_hash_partitioning() -> None:
+    rows = [example(index, f"lineage-{index}") for index in range(1, 29)]
+
+    snapshot = build_snapshot(
+        rows,
+        SnapshotPolicy(minimum_quality=70.0, require_matured_outcome=True),
+    )
+
+    timestamps = {
+        split: [record["created_at"] for record in records]
+        for split, records in snapshot.records.items()
+    }
+    assert timestamps["train"]
+    assert timestamps["validation"]
+    assert timestamps["test"]
+    assert max(timestamps["train"]) <= min(timestamps["validation"])
+    assert max(timestamps["validation"]) <= min(timestamps["test"])
+    assert snapshot.manifest["split_strategy"] == "grouped_temporal_holdout"

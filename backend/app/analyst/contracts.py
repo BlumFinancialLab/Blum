@@ -17,6 +17,8 @@ class AnalystDatasetContract:
     output_schema: dict[str, Any]
     supported_training_modes: list[str] = field(default_factory=list)
     automatic_training_enabled: bool = False
+    automatic_dataset_snapshots_enabled: bool = True
+    community_memory_policy: str = "opt_in_pull_request_quarantine"
     source_of_truth: bool = False
     policy: str = ""
 
@@ -47,6 +49,8 @@ def analyst_dataset_contract(repository: str = BLUM_ANALYST_REPOSITORY) -> Analy
         },
         supported_training_modes=["sft_jsonl", "preference_pairs", "dpo_pairs", "reasoning_traces"],
         automatic_training_enabled=False,
+        automatic_dataset_snapshots_enabled=True,
+        community_memory_policy="opt_in_pull_request_quarantine",
         source_of_truth=False,
         policy="BLUM Analyst is a reasoning assistant. BLUM Engine validates all outputs before use.",
     )

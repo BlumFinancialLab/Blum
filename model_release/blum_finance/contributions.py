@@ -4,6 +4,7 @@ import argparse
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import hashlib
+import hmac
 import json
 from pathlib import Path
 import re
@@ -33,6 +34,14 @@ class ContributionBundleResult:
     content_hash: str
     uploaded: bool
     repository: str
+    submission_url: str | None = None
+
+
+@dataclass(frozen=True)
+class ContributionValidation:
+    accepted: bool
+    blockers: tuple[str, ...]
+    status: str
 
 
 def build_contribution_bundle(
@@ -42,6 +51,7 @@ def build_contribution_bundle(
     consent: bool = False,
     push: bool = False,
     repository: str = TARGET_REPOSITORY,
+    api: Any | None = None,
 ) -> ContributionBundleResult:
     if not consent:
         raise ConsentRequired(
@@ -56,7 +66,7 @@ def build_contribution_bundle(
     )
     content_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     bundle = {
-        "schema_version": "blum-finance-contribution-v1",
+        "schema_version": "blum-finance-contribution-v2",
         "content_hash": content_hash,
         "created_at": datetime.now(UTC).isoformat(),
         "target_repository": repository,
@@ -69,28 +79,83 @@ def build_contribution_bundle(
         "quarantine_status": "pending_validation",
         "payload": sanitized,
     }
+    validation = validate_contribution_bundle(bundle)
+    bundle["quarantine_status"] = validation.status
+    bundle["validation_blockers"] = list(validation.blockers)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
         json.dumps(bundle, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     uploaded = False
+    submission_url = None
     if push:
-        from huggingface_hub import HfApi
+        if api is None:
+            from huggingface_hub import HfApi
 
-        HfApi().upload_file(
+            api = HfApi()
+
+        result = api.upload_file(
             path_or_fileobj=str(output),
             path_in_repo=f"quarantine/{content_hash}.json",
             repo_id=repository,
             repo_type="dataset",
             commit_message=f"contrib: add quarantined example {content_hash[:12]}",
+            create_pr=True,
         )
         uploaded = True
+        submission_url = str(
+            getattr(result, "pr_url", None)
+            or getattr(result, "commit_url", None)
+            or result
+        )
     return ContributionBundleResult(
         path=output,
         content_hash=content_hash,
         uploaded=uploaded,
         repository=repository,
+        submission_url=submission_url,
+    )
+
+
+def validate_contribution_bundle(bundle: dict[str, Any]) -> ContributionValidation:
+    blockers: list[str] = []
+    payload = bundle.get("payload")
+    if not isinstance(payload, dict):
+        return ContributionValidation(False, ("payload_missing",), "rejected")
+    expected_hash = hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    if not hmac.compare_digest(str(bundle.get("content_hash") or ""), expected_hash):
+        blockers.append("content_hash_mismatch")
+    if (bundle.get("consent") or {}).get("explicit") is not True:
+        blockers.append("explicit_consent_missing")
+    request = payload.get("request")
+    response = payload.get("response")
+    outcome = payload.get("outcome")
+    quality = payload.get("quality")
+    if not isinstance(request, dict) or not request.get("evidence") or not request.get("as_of"):
+        blockers.append("point_in_time_request_missing")
+    if not isinstance(response, dict) or not response.get("thesis"):
+        blockers.append("model_response_missing")
+    if not isinstance(outcome, dict) or not outcome.get("observed_at"):
+        blockers.append("mature_outcome_missing")
+    else:
+        try:
+            decision_at = _parse_datetime((request or {}).get("as_of"))
+            observed_at = _parse_datetime(outcome.get("observed_at"))
+            if observed_at <= decision_at:
+                blockers.append("outcome_chronology_invalid")
+        except (TypeError, ValueError):
+            blockers.append("outcome_timestamp_invalid")
+        if str(outcome.get("status") or "").lower() in {"", "pending", "unresolved", "inconclusive"}:
+            blockers.append("mature_outcome_missing")
+    if not isinstance(quality, dict) or quality.get("source_verified") is not True:
+        blockers.append("source_provenance_unverified")
+    return ContributionValidation(
+        accepted=not blockers,
+        blockers=tuple(dict.fromkeys(blockers)),
+        status="eligible_for_curation" if not blockers else "pending_validation",
     )
 
 
@@ -128,6 +193,13 @@ def _replace(redactions: set[str], label: str, replacement: str) -> str:
     return replacement
 
 
+def _parse_datetime(value: Any) -> datetime:
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Create an explicit, redacted BLUM Finance contribution bundle."
@@ -153,6 +225,7 @@ def main() -> None:
                 "content_hash": result.content_hash,
                 "uploaded": result.uploaded,
                 "repository": result.repository,
+                "submission_url": result.submission_url,
             },
             indent=2,
             sort_keys=True,

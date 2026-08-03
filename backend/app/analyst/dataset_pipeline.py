@@ -36,6 +36,8 @@ class BlumAnalystDatasetPipeline:
             "contract": self.contract(),
             "training_manifest": manifest,
             "automatic_training_enabled": bool(settings.hf_training_enabled and settings.hf_training_auto_launch),
+            "automatic_dataset_snapshots_enabled": settings.hf_dataset_snapshot_enabled,
+            "community_memory_policy": "opt_in_pull_request_quarantine",
             "model_repository": settings.hf_training_champion_repository,
             "hf_training": hf_training,
             "policy": "The Space prepares validated snapshots. Fine-tuning and evaluation run only in isolated Hugging Face Jobs; production promotion is manual.",

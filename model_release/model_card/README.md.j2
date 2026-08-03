@@ -163,6 +163,25 @@ and cannot replace the active model.
 BLUM never trains inside an inference request or lets anonymous input mutate
 released weights.
 
+### Use validated memory locally
+
+Install the package shipped with this repository, create a contribution bundle
+only after the thesis outcome is known, then import the validated bundle:
+
+```bash
+blum-contribute example.json --output contribution.json --consent
+blum-memory-add contribution.json
+```
+
+Pass `BlumFinanceMemoryStore("~/.blum-finance/memory.jsonl")` to
+`BlumFinancePipeline` to retrieve mature point-in-time analogies during local
+inference. Retrieval never exposes an outcome that occurred after the new
+request timestamp and never presents historical memory as current market fact.
+
+To contribute upstream, add `--push`. This opens a pull request to the quarantine
+dataset. There is no background upload, installation tracking or automatic
+mutation of released weights. See `CONTRIBUTING.md` for the evidence contract.
+
 ## Lineage
 
 - Base revision: `{{ release.base_revision }}`
