@@ -1,0 +1,24 @@
+# Default ownership
+* @BlumFinancialLab
+
+# Financial source of truth
+/backend/app/engine/ @BlumFinancialLab
+/backend/app/services/ @BlumFinancialLab
+/backend/app/models.py @BlumFinancialLab
+
+# Runtime and product delivery
+/backend/app/api/ @BlumFinancialLab
+/backend/app/runtime/ @BlumFinancialLab
+/frontend/ @BlumFinancialLab
+/Dockerfile @BlumFinancialLab
+
+# Models, datasets and release governance
+/model_release/ @BlumFinancialLab
+/scripts/ @BlumFinancialLab
+/backend/app/data/ @BlumFinancialLab
+
+# Public operations and documentation
+/.github/ @BlumFinancialLab
+/docs/ @BlumFinancialLab
+/README.md @BlumFinancialLab
+/SECURITY.md @BlumFinancialLab

@@ -3,6 +3,21 @@ description: Propose a change that improves BLUM's decision intelligence.
 title: "[Proposal]: "
 labels: [enhancement]
 body:
+  - type: dropdown
+    id: objective
+    attributes:
+      label: Primary improvement
+      options:
+        - Evidence integrity
+        - Opportunity selection
+        - Entry or exit quality
+        - Risk or capital control
+        - Benchmark validation
+        - Learning quality
+        - Runtime reliability
+        - Explainability
+    validations:
+      required: true
   - type: textarea
     id: problem
     attributes:
@@ -24,3 +39,21 @@ body:
       description: Define tests, benchmarks, sample thresholds and rollback.
     validations:
       required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Simpler alternatives considered
+      description: Explain why existing modules or a smaller change cannot solve the measured problem.
+    validations:
+      required: true
+  - type: checkboxes
+    id: guardrails
+    attributes:
+      label: Guardrails
+      options:
+        - label: The proposal does not depend on fabricated or future data.
+          required: true
+        - label: The proposal has an auditable rollback path.
+          required: true
+        - label: The proposal does not claim guaranteed profit or unsupported alpha.
+          required: true

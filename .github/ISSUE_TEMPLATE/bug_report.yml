@@ -6,6 +6,29 @@ body:
   - type: markdown
     attributes:
       value: Do not include credentials, personal data or proprietary datasets.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Brain
+        - Training Ground
+        - Paper Trading
+        - Alpha
+        - Engine or worker
+        - Runtime or API
+        - Model or dataset pipeline
+        - Documentation
+    validations:
+      required: true
+  - type: input
+    id: revision
+    attributes:
+      label: Revision
+      description: Git commit, image revision or Space revision where the defect occurs.
+      placeholder: cde27894fd012cf5645ea00a41acf509263ec7d6
+    validations:
+      required: true
   - type: textarea
     id: observed
     attributes:
@@ -31,3 +54,14 @@ body:
     attributes:
       label: Evidence and impact
       description: Explain data integrity, financial logic or runtime impact.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched existing issues and discussions.
+          required: true
+        - label: I removed credentials, personal data and restricted market data.
+          required: true
