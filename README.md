@@ -2315,3 +2315,16 @@ The bundled source is daily and covers only EUR/USD, GBP/USD, and USD/JPY. It
 improves historical regime and cross-pair context, but it is not evidence for
 one-minute scalping and does not prove future profitability. Intraday decisions
 still require fresh BLUM `1h/15m/5m/1m` market evidence and forward outcomes.
+# BLUM Deterministic Execution Core
+
+BLUM uses NautilusTrader 1.230.0 as an optional Rust-native deterministic execution kernel for equity, ETF and fiat-Forex research. BLUM remains the source of decisions, risk policy and learning evidence; Nautilus supplies event ordering, order-state transitions, simulated matching and portfolio accounting.
+
+- Frozen BLUM decisions are replayed by an independent bounded background worker.
+- Point-in-time bars are incrementally projected into a Nautilus Parquet catalog. Future or not-yet-acquired observations are rejected.
+- Existing paper execution remains authoritative while the new kernel runs in `SHADOW` mode.
+- Promotion is reversible and limited to paper execution. It requires at least 100 terminal comparisons, equity/Forex and regime coverage, and at least 99% state agreement.
+- Divergence, duplicate fills, accounting failures or look-ahead evidence force rollback to shadow.
+- `GET /api/runtime/execution-kernel` reads the latest compact snapshot and never runs execution or recalculation.
+- Crypto, broker adapters and real-money execution are explicitly excluded.
+
+Configuration uses `BLUM_NAUTILUS_*` environment variables. If the optional native wheel cannot load, BLUM starts normally and reports the kernel as unavailable. NautilusTrader is distributed under LGPL-3.0; BLUM uses its project name only for dependency attribution and calls this component the BLUM Deterministic Execution Core.

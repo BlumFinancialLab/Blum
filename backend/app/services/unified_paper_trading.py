@@ -212,6 +212,12 @@ class UnifiedPaperTradingProjectionService:
         visible_candidates = self._balanced_visible_rows(candidate_rows, limit)
         visible_open = self._balanced_visible_rows(open_rows, limit)
         visible_closed = self._balanced_visible_rows(closed_rows, limit)
+        execution_snapshot = self.snapshots.latest(db, "deterministic_execution_summary")
+        execution_kernel = (
+            execution_snapshot.get("payload")
+            if execution_snapshot.get("status") in {"ready", "stale"}
+            else {"status": "INITIALIZING", "mode": "SHADOW", "blockers": ["snapshot_not_produced"]}
+        )
         return {
             "status": "READY" if aggregate["counts"]["total"] else "NO_DECISIONS",
             "generated_at": datetime.utcnow().isoformat(),
@@ -257,6 +263,7 @@ class UnifiedPaperTradingProjectionService:
             },
             "warnings": warnings,
             "evidence_policy": "Observed source records only; open and rejected decisions never contribute realized P/L.",
+            "execution_kernel": execution_kernel,
             "computation_duration_ms": round((perf_counter() - started) * 1000, 3),
         }
 

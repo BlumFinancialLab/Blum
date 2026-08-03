@@ -90,3 +90,10 @@ def learning_intelligence_summary(db: Session = Depends(get_db)) -> dict:
 @router.get("/api/dashboard-snapshots/{snapshot_type}")
 def dashboard_snapshot(snapshot_type: str, db: Session = Depends(get_db)) -> dict:
     return DashboardSnapshotService().latest(db, snapshot_type=snapshot_type)
+
+
+@router.get("/api/runtime/execution-kernel")
+def execution_kernel_snapshot(db: Session = Depends(get_db)) -> dict:
+    from app.services.deterministic_execution.snapshot import DeterministicExecutionSnapshotService
+
+    return DeterministicExecutionSnapshotService().latest(db)
