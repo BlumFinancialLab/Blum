@@ -98,7 +98,22 @@ class TraderBrainService:
         readiness = lightweight_trading_readiness(latest_metric, latest_power, latest_lesson)
         alpha = lightweight_alpha_status(benchmarks, latest_power, latest_metric)
         decision_quality = decision_quality_score(latest_decision, latest_metric)
-        evidence_quality = evidence_quality_score(readiness, alpha, benchmarks)
+        unified_paper = DashboardSnapshotService().latest(db, "unified_paper_trading_summary")
+        unified_payload = unified_paper.get("payload") or {}
+        unified_counts = (unified_payload.get("counts") or {}).get("aggregate") or {}
+        unified_metrics = (unified_payload.get("metrics") or {}).get("aggregate") or {}
+        forward_closed_trades = int(safe_float(unified_counts.get("closed"), 0.0) or 0)
+        forward_expectancy = safe_float(
+            unified_metrics.get("expectancy_r", unified_metrics.get("average_r")),
+            None,
+        )
+        evidence_quality = evidence_quality_score(
+            readiness,
+            alpha,
+            benchmarks,
+            forward_closed_trades=forward_closed_trades,
+            forward_expectancy=forward_expectancy,
+        )
         calibration = safe_float(getattr(latest_power, "statistical_confidence_score", None), None)
         learning_velocity = safe_float(getattr(latest_power, "learning_velocity_score", None), None)
         knowledge_quality = knowledge_quality_score(db)
@@ -108,8 +123,6 @@ class TraderBrainService:
         explainability = explainability_score(db)
         market_coverage = market_coverage_score(db)
         portfolio_intelligence = safe_float(getattr(latest_power, "regime_robustness_score", None), None)
-        unified_paper = DashboardSnapshotService().latest(db, "unified_paper_trading_summary")
-        unified_payload = unified_paper.get("payload") or {}
         components = {
             "decision_quality": decision_quality,
             "evidence_quality": evidence_quality,
@@ -126,6 +139,14 @@ class TraderBrainService:
         brain_score = safe_float(getattr(latest_power, "score", None), None)
         if brain_score is None:
             brain_score = weighted_average(components)
+        truth = truth_lines(brain_score, learning, alpha, benchmarks)
+        if forward_closed_trades == 0:
+            truth.insert(1, "No closed forward trades are available; activity is not evidence of trading skill.")
+        elif forward_expectancy is not None and forward_expectancy <= 0:
+            truth.insert(
+                1,
+                f"Forward expectancy is {forward_expectancy:.3f}R; negative-edge strategies must remain quarantined.",
+            )
         return {
             "status": "ready" if brain_score is not None else "insufficient_evidence",
             "version": TRADER_BRAIN_VERSION,
@@ -156,7 +177,7 @@ class TraderBrainService:
             "next_planned_experiment": focus_payload(focus),
             "learning_chart": learning_chart(db),
             **proof,
-            "truth": truth_lines(brain_score, learning, alpha, benchmarks),
+            "truth": truth[:6],
             "component_scores": components,
             "readiness": {
                 "trading_game": readiness.get("status"),
@@ -480,12 +501,28 @@ def decision_quality_score(decision: DecisionSuperiorityScore | None, metric: Tr
     return average_present(values)
 
 
-def evidence_quality_score(readiness: dict, alpha: dict, benchmarks: list[LearningBenchmarkComparison]) -> float | None:
+def evidence_quality_score(
+    readiness: dict,
+    alpha: dict,
+    benchmarks: list[LearningBenchmarkComparison],
+    *,
+    forward_closed_trades: int = 0,
+    forward_expectancy: float | None = None,
+) -> float | None:
     grade = str(alpha.get("evidence_grade") or readiness.get("evidence_grade") or "insufficient").lower()
     grade_score = {"strong": 82.0, "medium": 62.0, "low": 42.0, "weak": 34.0, "insufficient": 20.0}.get(grade, 35.0)
     benchmark_score = min(100.0, len(benchmarks) * 18.0)
-    trade_score = min(100.0, safe_float(alpha.get("trade_count"), 0.0) / 5.0)
-    return round((grade_score * 0.45) + (benchmark_score * 0.25) + (trade_score * 0.30), 2)
+    forward_trade_score = min(100.0, max(0, int(forward_closed_trades)) / 30.0 * 100.0)
+    score = (grade_score * 0.35) + (benchmark_score * 0.25) + (forward_trade_score * 0.40)
+    if forward_closed_trades <= 0:
+        score = min(score, 25.0)
+    if not benchmarks:
+        score = min(score, 45.0)
+    if forward_expectancy is None:
+        score = min(score, 50.0)
+    elif forward_expectancy <= 0:
+        score -= 30.0
+    return round(max(0.0, min(100.0, score)), 2)
 
 
 def knowledge_quality_score(db: Session) -> float | None:

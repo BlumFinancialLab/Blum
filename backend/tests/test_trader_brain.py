@@ -24,6 +24,7 @@ from app.models import (
 )
 from app.services.trader_brain import TRADER_BRAIN_FEATURE_SET, TRADER_BRAIN_VERSION, TraderBrainService
 from app.services.brain_learning_proof import BrainLearningProofService, PAPER_TRADE_LIMIT, _first_present_number
+from app.engine.brain.trader_brain import evidence_quality_score
 
 
 def setup_db() -> Session:
@@ -35,6 +36,37 @@ def setup_db() -> Session:
 def test_pilot_projection_preserves_observed_zero_instead_of_using_fallback():
     assert _first_present_number(0.0, 2.5) == 0.0
     assert _first_present_number(None, 2.5) == 2.5
+
+
+def test_brain_evidence_cannot_be_strong_without_closed_forward_trades():
+    score = evidence_quality_score(
+        {"evidence_grade": "strong"},
+        {"evidence_grade": "strong", "trade_count": 100_000},
+        [],
+        forward_closed_trades=0,
+        forward_expectancy=None,
+    )
+
+    assert score <= 25.0
+
+
+def test_negative_forward_expectancy_materially_reduces_brain_evidence():
+    positive = evidence_quality_score(
+        {"evidence_grade": "medium"},
+        {"evidence_grade": "medium", "trade_count": 75},
+        [object()],
+        forward_closed_trades=75,
+        forward_expectancy=0.25,
+    )
+    negative = evidence_quality_score(
+        {"evidence_grade": "medium"},
+        {"evidence_grade": "medium", "trade_count": 75},
+        [object()],
+        forward_closed_trades=75,
+        forward_expectancy=-0.47,
+    )
+
+    assert negative <= positive - 25.0
 
 
 def test_brain_trading_proof_does_not_lose_closed_trades_behind_recent_candidates():

@@ -32,6 +32,14 @@ class ForexReadinessAssessment:
     threshold_version: str = "forex-alpha-readiness-v1"
 
 
+@dataclass(frozen=True)
+class ForexForwardGate:
+    status: str
+    sample_size: int
+    net_expectancy_r: float | None
+    blockers: tuple[str, ...]
+
+
 class BlumForexLearningEngine:
     minimum_alpha_forward_trades = 100
 
@@ -47,6 +55,44 @@ class BlumForexLearningEngine:
         self.maximum_replay_forward_decay = max(0.0, float(settings.forex_alpha_max_replay_forward_decay))
         self.maximum_currency_concentration = min(1.0, max(0.0, float(settings.forex_alpha_max_currency_concentration)))
         self.threshold_version = settings.forex_alpha_threshold_version
+
+    def forward_gate(
+        self,
+        db: Session,
+        strategy_ids: set[str],
+        *,
+        minimum_sample_size: int = 30,
+    ) -> ForexForwardGate:
+        if not strategy_ids:
+            return ForexForwardGate("NO_EVIDENCE", 0, None, ("MISSING_STRATEGY",))
+        rows = db.scalars(
+            select(ForexLearningEvidence)
+            .where(
+                ForexLearningEvidence.strategy_id.in_(strategy_ids),
+                ForexLearningEvidence.evidence_type == "PAPER_FORWARD_FOREX",
+                ForexLearningEvidence.outcome.in_(("WIN", "LOSS", "BREAKEVEN")),
+                ForexLearningEvidence.realized_result.is_not(None),
+            )
+            .order_by(ForexLearningEvidence.created_at, ForexLearningEvidence.id)
+            .limit(5000)
+        ).all()
+        values = [float(row.realized_result) for row in rows]
+        expectancy = mean(values) if values else None
+        if len(values) >= minimum_sample_size and expectancy is not None and expectancy <= 0:
+            return ForexForwardGate(
+                "QUARANTINED",
+                len(values),
+                expectancy,
+                ("NON_POSITIVE_FORWARD_EXPECTANCY",),
+            )
+        if len(values) < minimum_sample_size:
+            return ForexForwardGate(
+                "OBSERVATION",
+                len(values),
+                expectancy,
+                ("INSUFFICIENT_FORWARD_SAMPLE",),
+            )
+        return ForexForwardGate("ELIGIBLE", len(values), expectancy, ())
 
     def record_outcome(self, db: Session, *, decision_id: int | None, outcome: str, payload: dict) -> ForexLearningEvidence | None:
         if outcome not in TERMINAL_OUTCOMES:

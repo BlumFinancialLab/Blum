@@ -22,6 +22,7 @@ from app.models import (
     LiveForwardPaperTrade,
     LiveForwardPaperTradeEvent,
     PriceHistory,
+    ReplayMarketBar,
     SignalPerformance,
     StrategyMemory,
     TradeLearningEvidence,
@@ -1838,17 +1839,40 @@ def freeze_decision_payload(candidate: dict, feedback: dict, decision_timestamp:
     )
 
 
-def latest_market_price_after(db: Session, ticker: str, timestamp: datetime) -> tuple[date, float] | None:
+def latest_market_price_after(
+    db: Session,
+    ticker: str,
+    timestamp: datetime,
+    *,
+    now: datetime | None = None,
+) -> tuple[date, float] | None:
+    now = now or datetime.utcnow()
     asset = db.scalar(select(Asset).where(Asset.ticker == ticker).limit(1))
     if not asset:
         return None
     row = db.scalar(
         select(PriceHistory)
-        .where(PriceHistory.asset_id == asset.id, PriceHistory.date > timestamp.date())
+        .where(
+            PriceHistory.asset_id == asset.id,
+            PriceHistory.date > timestamp.date(),
+        )
         .order_by(desc(PriceHistory.date))
         .limit(1)
     )
-    return (row.date, safe_float(row.close)) if row else None
+    if row is not None:
+        return row.date, safe_float(row.close)
+    intraday = db.scalar(
+        select(ReplayMarketBar)
+        .where(
+            ReplayMarketBar.asset_id == asset.id,
+            ReplayMarketBar.timeframe.in_(("1h", "15m", "5m", "1m")),
+            ReplayMarketBar.bar_timestamp > timestamp,
+            ReplayMarketBar.bar_timestamp <= now,
+        )
+        .order_by(desc(ReplayMarketBar.bar_timestamp), desc(ReplayMarketBar.id))
+        .limit(1)
+    )
+    return (intraday.bar_timestamp.date(), safe_float(intraday.close)) if intraday else None
 
 
 def price_on_or_before(db: Session, ticker: str | None, target_date: date | None) -> float | None:

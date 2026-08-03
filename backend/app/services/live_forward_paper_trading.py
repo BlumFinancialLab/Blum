@@ -983,13 +983,24 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
                 return round(1.0 / replay_rate if invert else replay_rate, 8)
         return None
 
-    def daily_execution_bars(self, db: Session, ticker: str, after: datetime) -> list[ExecutionMarketBar]:
+    def daily_execution_bars(
+        self,
+        db: Session,
+        ticker: str,
+        after: datetime,
+        *,
+        now: datetime | None = None,
+    ) -> list[ExecutionMarketBar]:
+        now = now or datetime.utcnow()
         asset = db.scalar(select(Asset).where(func.upper(Asset.ticker) == ticker.upper()).limit(1))
         if asset is None:
             return []
         rows = db.scalars(
             select(PriceHistory)
-            .where(PriceHistory.asset_id == asset.id, PriceHistory.date > after.date())
+            .where(
+                PriceHistory.asset_id == asset.id,
+                PriceHistory.date > after.date(),
+            )
             .order_by(PriceHistory.date)
             .limit(32)
         ).all()
@@ -1013,6 +1024,40 @@ class LiveForwardPaperTradingService(_TradingLabLiveForwardService):
                     close=close,
                     volume=volume,
                     spread_bps=spread_bps,
+                    volatility_bps=volatility_bps,
+                )
+            )
+        if bars:
+            return bars
+        intraday_rows = db.scalars(
+            select(ReplayMarketBar)
+            .where(
+                ReplayMarketBar.asset_id == asset.id,
+                ReplayMarketBar.timeframe == "1h",
+                ReplayMarketBar.bar_timestamp > after,
+                ReplayMarketBar.bar_timestamp <= now,
+            )
+            .order_by(ReplayMarketBar.bar_timestamp, ReplayMarketBar.id)
+            .limit(64)
+        ).all()
+        for row in intraday_rows:
+            close = safe_float(row.close)
+            open_price = safe_float(row.open or close)
+            high = safe_float(row.high or max(open_price, close))
+            low = safe_float(row.low or min(open_price, close))
+            volume = safe_float(row.volume)
+            if min(open_price, high, low, close) <= 0 or volume < 0:
+                continue
+            volatility_bps = abs(high - low) / max(close, 0.0001) * 10_000
+            bars.append(
+                ExecutionMarketBar(
+                    timestamp=row.bar_timestamp,
+                    open=open_price,
+                    high=high,
+                    low=low,
+                    close=close,
+                    volume=volume,
+                    spread_bps=max(2.0, min(25.0, volatility_bps * 0.03)),
                     volatility_bps=volatility_bps,
                 )
             )

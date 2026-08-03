@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta
 
 import pytest
@@ -122,34 +123,14 @@ def strategy(*, news_strategy: bool = False) -> ForexStrategyEvidence:
     )
 
 
-def test_empty_registry_bootstraps_non_certified_paper_exploration(db):
+def test_empty_registry_stays_research_only_until_replay_validates_a_strategy(db):
     strategies = ForexStrategyRepository().load(db, ["EURUSD=X"])
 
-    exploratory = strategies["EURUSD=X"]
-    assert exploratory.readiness == ForexReadiness.PAPER_TRADE_ELIGIBLE
-    assert exploratory.sample_size == 0
-    assert exploratory.evidence_lane == "exploration_paper"
-    assert exploratory.certified_for_copy_readiness is False
-    outcome = BlumForexTraderCore().evaluate_input(market_input(), strategy=exploratory)
-    assert outcome.approved is True
-    assert outcome.proposal.direction == ForexDirection.LONG
-    assert outcome.proposal.evidence_lane == "exploration_paper"
-
-    result = BlumForexTraderCore().run_cycle(
-        db,
-        inputs=[market_input()],
-        strategies=strategies,
-        now=NOW,
-        cycle_key="exploration-bootstrap",
-    )
-    position = db.scalar(select(ForexPosition))
-    assert result["trades_opened"] == 1
-    assert position is not None
-    assert position.contract_json["evidence_lane"] == "exploration_paper"
-    assert position.contract_json["certified_for_copy_readiness"] is False
+    assert strategies == {}
+    assert db.scalar(select(ForexPosition)) is None
 
 
-def test_empty_registry_bootstrap_loads_eligible_reinforcement_policy(db):
+def test_empty_registry_cannot_promote_reinforcement_memory_without_replay_validation(db):
     db.add(
         ForexPolicyState(
             policy_key="forex-exploration-bootstrap-v1|LONDON|trend_up|momentum_breakout|LONG",
@@ -168,15 +149,10 @@ def test_empty_registry_bootstrap_loads_eligible_reinforcement_policy(db):
     )
     db.commit()
 
-    strategy_contract = ForexStrategyRepository().load(db, ["EURUSD=X"])["EURUSD=X"]
-
-    policy_cells = strategy_contract.contextual_memory["cells"]
-    assert len(policy_cells) == 1
-    assert policy_cells[0]["source"] == "reinforcement_policy"
-    assert policy_cells[0]["confidence_adjustment"] == pytest.approx(0.041)
+    assert ForexStrategyRepository().load(db, ["EURUSD=X"]) == {}
 
 
-def test_negative_global_bootstrap_policy_rotates_to_pair_specific_challenger(db):
+def test_negative_global_bootstrap_policy_is_quarantined_instead_of_renamed(db):
     db.add(
         ForexPolicyState(
             policy_key="STRATEGY|forex-exploration-bootstrap-v1|ALL|ALL|ALL|ALL",
@@ -200,24 +176,34 @@ def test_negative_global_bootstrap_policy_rotates_to_pair_specific_challenger(db
         ["EURUSD=X", "GBPUSD=X"],
     )
 
-    assert strategies["EURUSD=X"].strategy_id == (
-        "forex-exploration-momentum-breakout-eurusd-v2"
-    )
-    assert strategies["GBPUSD=X"].strategy_id == (
-        "forex-exploration-momentum-breakout-gbpusd-v2"
-    )
-    assert strategies["EURUSD=X"].evidence_lane == "exploration_paper"
-    assert strategies["EURUSD=X"].certified_for_copy_readiness is False
-    assert strategies["EURUSD=X"].contextual_memory["cells"] == []
-    assert (
-        BlumForexTraderCore()
-        .evaluate_input(
-            market_input(),
-            strategy=strategies["EURUSD=X"],
+    assert strategies == {}
+
+
+def test_forward_gate_quarantines_non_positive_strategy_after_30_closed_trades(db):
+    db.add_all(
+        ForexLearningEvidence(
+            strategy_id="losing-forward-strategy",
+            pair="EURUSD=X",
+            outcome="LOSS",
+            realized_result=-0.4,
+            lesson="Forward strategy lost after costs.",
+            evidence_strength=0.8,
+            evidence_type="PAPER_FORWARD_FOREX",
+            payload_json={"evidence_lane": "certified_paper"},
         )
-        .approved
-        is True
+        for _ in range(30)
     )
+    db.commit()
+
+    gate = BlumForexLearningEngine().forward_gate(
+        db,
+        {"losing-forward-strategy"},
+    )
+
+    assert gate.status == "QUARANTINED"
+    assert gate.sample_size == 30
+    assert gate.net_expectancy_r == pytest.approx(-0.4)
+    assert gate.blockers == ("NON_POSITIVE_FORWARD_EXPECTANCY",)
 
 
 def strategy_with_memory(*, grade: str, adjustment: float) -> ForexStrategyEvidence:
@@ -663,16 +649,57 @@ def test_forex_refresh_covers_freshness_budget_and_prioritizes_oldest_pairs(db, 
     assert result["minimum_pairs_required"] == 4
 
 
-def test_no_trade_persists_append_only_learning_and_snapshot_is_read_only(db):
+def test_rejected_forex_decision_is_not_labeled_as_learning_before_counterfactual_matures(db):
     core = BlumForexTraderCore()
     result = core.run_cycle(db, inputs=[market_input(spread_pips=20)], strategies={"EURUSD=X": strategy()}, now=NOW)
     assert result["candidates_rejected"] == 1
     assert db.scalar(select(ForexDecision)).status == "REJECTED"
-    assert db.scalar(select(ForexLearningEvidence)).outcome == "EDGE_DESTROYED_BY_COSTS"
+    assert db.scalar(select(ForexLearningEvidence)) is None
+    assert result["learning_events"] == []
     before = db.query(ForexTraderCycle).count()
     snapshot = ForexTraderSnapshotService().read(db, now=NOW)
     assert snapshot["exact_reason_if_no_trade_is_open"]
     assert db.query(ForexTraderCycle).count() == before
+
+
+def test_repeated_unchanged_rejection_is_not_persisted_inside_cooldown(db):
+    core = BlumForexTraderCore()
+    inputs = [market_input(spread_pips=20)]
+
+    core.run_cycle(db, inputs=inputs, strategies={"EURUSD=X": strategy()}, now=NOW, cycle_key="reject-1")
+    core.run_cycle(
+        db,
+        inputs=inputs,
+        strategies={"EURUSD=X": strategy()},
+        now=NOW + timedelta(minutes=1),
+        cycle_key="reject-2",
+    )
+
+    assert db.query(ForexDecision).count() == 1
+    latest_cycle = db.scalar(
+        select(ForexTraderCycle).where(ForexTraderCycle.cycle_key == "reject-2")
+    )
+    assert latest_cycle.rejected_candidates == [
+        {
+            "pair": "EURUSD=X",
+            "blockers": ["SPREAD_TOO_WIDE", "NO_NET_EDGE"],
+            "deduplicated": True,
+        }
+    ]
+
+
+def test_scheduler_monitors_only_outside_permitted_entry_sessions(db):
+    result = BlumForexTradingScheduler().run_once(
+        db,
+        now=NOW.replace(hour=3),
+        inputs=[replace(market_input(), session="ASIA")],
+        strategies={"EURUSD=X": strategy()},
+        cycle_key="asia-monitor-only",
+    )
+
+    assert result["status"] == "MONITOR_ONLY"
+    assert result["blockers"] == ["SESSION_NOT_ALLOWED"]
+    assert db.query(ForexDecision).count() == 0
 
 
 def test_readiness_promotion_degradation_and_terminal_only_learning(db):

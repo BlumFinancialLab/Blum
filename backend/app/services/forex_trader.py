@@ -43,6 +43,7 @@ from app.services.forex_contracts import (
     ForexDirection,
     ForexOrderRequest,
     ForexQuote,
+    ForexReadiness,
     ForexStrategyEvidence,
     pair_config,
 )
@@ -199,6 +200,17 @@ class BlumForexPositionManagerAgent:
                         "model_council": model_evaluation,
                     }
                     position.contract_json = contract
+                    self.learning.refresh_readiness(
+                        db,
+                        ForexStrategyEvidence(
+                            strategy_id=position.strategy_id,
+                            readiness=ForexReadiness.PAPER_TRADE_ELIGIBLE,
+                            sample_size=int(contract.get("strategy_sample_size") or 0),
+                            net_expectancy_r=float(contract.get("expected_r") or 0.0),
+                            replay_forward_decay=_number(contract.get("replay_forward_decay")),
+                            currency_concentration=_number(contract.get("currency_concentration")),
+                        ),
+                    )
                 game = db.scalar(select(LiveForwardPaperGame).where(LiveForwardPaperGame.status == "active").order_by(desc(LiveForwardPaperGame.started_at)).limit(1))
                 if game:
                     game.current_capital += position.net_pnl
@@ -338,6 +350,20 @@ class BlumForexTraderCore:
                 strategy = ForexStrategyEvidence("unavailable", readiness=_training_level(), sample_size=0, net_expectancy_r=0.0)
             evaluation = self.evaluate_input(market, strategy=strategy)
             agent_outputs[market.pair] = evaluation.agent_outputs
+            if not evaluation.approved and self._recent_equivalent_rejection(
+                db,
+                market=market,
+                strategy=strategy,
+                evaluation=evaluation,
+                now=now,
+            ):
+                rejected.append({
+                    "pair": market.pair,
+                    "blockers": list(evaluation.blockers),
+                    "deduplicated": True,
+                })
+                blockers.extend(evaluation.blockers)
+                continue
             decision_uid = f"{cycle.cycle_uid}:{market.pair}:{strategy.strategy_id}"
             decision = ForexDecision(
                 decision_uid=decision_uid, cycle_id=cycle.id, pair=market.pair, strategy_id=strategy.strategy_id,
@@ -499,20 +525,6 @@ class BlumForexTraderCore:
             if not evaluation.approved:
                 rejected.append({"pair": market.pair, "blockers": list(evaluation.blockers)})
                 blockers.extend(evaluation.blockers)
-                outcome = self._rejection_outcome(evaluation.blockers)
-                evidence = self.learning.record_outcome(db, decision_id=decision.id, outcome=outcome, payload={
-                    "strategy_id": strategy.strategy_id, "pair": market.pair, "session": market.session,
-                    "setup_family": evaluation.proposal.setup_family, "direction": evaluation.proposal.direction.value,
-                    "expected_result": evaluation.proposal.expected_r, "likely_cause": evaluation.blockers[0] if evaluation.blockers else "NO_EDGE",
-                    "regime": evaluation.agent_outputs.get("context", {}).get("regime"),
-                    "timeframe_stack": ["1h", "15m", "5m", "1m"],
-                    "news_state": market.macro_event_impact,
-                    "spread_model": "quoted_or_broker_dynamic_v1",
-                    "slippage_model": "broker_base_x_liquidity_x_volatility_x_event_v1",
-                    "agent_reliability": {"context": evaluation.agent_outputs.get("context", {}).get("confidence"), "price_action": evaluation.agent_outputs.get("price_action", {}).get("confidence"), "macro": evaluation.agent_outputs.get("macro", {}).get("confidence")},
-                })
-                if evidence:
-                    learning_events.append(evidence.outcome)
                 continue
             state = self._portfolio_state(db, candidate_pair=market.pair)
             risk = self.risk.evaluate(evaluation.proposal, state, self.brokers.get())
@@ -725,6 +737,34 @@ class BlumForexTraderCore:
         return "CORRECT_NO_TRADE"
 
     @staticmethod
+    def _recent_equivalent_rejection(
+        db: Session,
+        *,
+        market: AgentMarketInput,
+        strategy: ForexStrategyEvidence,
+        evaluation: EvaluationOutcome,
+        now: datetime,
+    ) -> bool:
+        latest = db.scalar(
+            select(ForexDecision)
+            .where(
+                ForexDecision.pair == market.pair,
+                ForexDecision.strategy_id == strategy.strategy_id,
+                ForexDecision.status == "REJECTED",
+                ForexDecision.decision_timestamp >= now - timedelta(minutes=15),
+                ForexDecision.decision_timestamp <= now,
+            )
+            .order_by(desc(ForexDecision.decision_timestamp), desc(ForexDecision.id))
+            .limit(1)
+        )
+        if latest is None:
+            return False
+        return (
+            tuple(latest.blockers or ()) == tuple(evaluation.blockers)
+            and str(latest.direction or "") == evaluation.proposal.direction.value
+        )
+
+    @staticmethod
     def _next_action(approved, rejected, managed) -> str:
         if approved:
             return "Manage open paper positions against fresh 1m bid/ask evidence."
@@ -828,7 +868,12 @@ class ForexTraderSnapshotService:
             "strategies_in_training": sum(row.readiness_level == "TRAINING_SIGNAL" for row in readiness),
             "paper_eligible_strategies": sum(row.readiness_level == "PAPER_TRADE_ELIGIBLE" for row in readiness),
             "alpha_eligible_strategies": sum(row.readiness_level == "ALPHA_SIGNAL_ELIGIBLE" for row in readiness),
-            "valid_no_trade_decisions": db.scalar(select(func.count(ForexLearningEvidence.id)).where(ForexLearningEvidence.outcome.in_(["CORRECT_NO_TRADE", "EDGE_DESTROYED_BY_COSTS", "NEWS_BLOCK_CORRECT", "RISK_BLOCK_CORRECT"]))) or 0,
+            "valid_no_trade_decisions": db.scalar(
+                select(func.count(ForexLearningEvidence.id)).where(
+                    ForexLearningEvidence.outcome.in_(["CORRECT_NO_TRADE", "EDGE_DESTROYED_BY_COSTS", "NEWS_BLOCK_CORRECT", "RISK_BLOCK_CORRECT"]),
+                    ForexLearningEvidence.realized_result.is_not(None),
+                )
+            ) or 0,
             "exact_reason_if_no_trade_is_open": blocker,
             "active_blockers": latest.blockers if latest else ["NO_COMPLETED_CYCLE"],
             "next_action": latest.next_action if latest else "Wait for the background Forex scheduler; GET does not start trading work.",
@@ -1037,51 +1082,12 @@ class ForexStrategyRepository:
         experimental = [row for row in registry.list_experimental(db, market="FOREX", asset_class="Forex") if tuple(row.timeframe_stack) == required_stack]
         selected = promoted[0] if promoted else experimental[0] if experimental else None
         if selected is None:
-            from app.services.forex_contracts import ForexReadiness
-
-            bootstrap_id = "forex-exploration-bootstrap-v1"
-            failed_global_policy = db.scalar(
-                select(ForexPolicyState.id)
-                .where(
-                    ForexPolicyState.strategy_id == bootstrap_id,
-                    ForexPolicyState.evidence_grade == "POLICY_ELIGIBLE",
-                    ForexPolicyState.confidence_adjustment <= -0.03,
-                )
-                .limit(1)
-            )
-            output: dict[str, ForexStrategyEvidence] = {}
-            for pair in pairs:
-                if failed_global_policy is None:
-                    strategy_id = bootstrap_id
-                else:
-                    pair_slug = "".join(
-                        character.lower()
-                        for character in pair.split("=", 1)[0]
-                        if character.isalnum()
-                    )
-                    strategy_id = (
-                        "forex-exploration-momentum-breakout-"
-                        f"{pair_slug}-v2"
-                    )
-                output[pair] = ForexStrategyEvidence(
-                    strategy_id=strategy_id,
-                    readiness=ForexReadiness.PAPER_TRADE_ELIGIBLE,
-                    sample_size=0,
-                    net_expectancy_r=0.0,
-                    strategy_version=(
-                        "pair-specific-recovery-v2"
-                        if failed_global_policy is not None
-                        else "exploration-v1"
-                    ),
-                    contextual_memory={
-                        "cells": self._policy_cells(db, {strategy_id})
-                    },
-                    evidence_lane="exploration_paper",
-                    certified_for_copy_readiness=False,
-                )
-            return output
+            return {}
         current = db.scalar(select(ForexStrategyReadiness).where(ForexStrategyReadiness.strategy_id == selected.strategy_id))
         if current and current.readiness_level in {"DEGRADED", "SUSPENDED"}:
+            return {}
+        forward_gate = BlumForexLearningEngine().forward_gate(db, {selected.strategy_id})
+        if forward_gate.status == "QUARANTINED":
             return {}
         from app.services.forex_contracts import ForexReadiness
         readiness = ForexReadiness(current.readiness_level) if current and current.readiness_level in {"PAPER_TRADE_ELIGIBLE", "ALPHA_SIGNAL_ELIGIBLE"} else ForexReadiness.PAPER_TRADE_ELIGIBLE
@@ -1223,6 +1229,28 @@ class BlumForexTradingScheduler:
                 refresh_result = {"status": "INJECTED_TEST_DATA", "refreshed": [], "blockers": []}
             if strategies is None:
                 strategies = self.strategies.load(db, [item.pair for item in inputs])
+            if forex_session(now) not in {"LONDON", "LONDON_NEW_YORK_OVERLAP", "NEW_YORK"}:
+                managed = self.core.manager.manage(
+                    db,
+                    {item.pair: item.quote for item in inputs},
+                    now=now,
+                )
+                state = self._state(db)
+                state.scheduler_status = "MARKET_SESSION_MONITOR_ONLY"
+                state.current_cycle_key = None
+                state.lock_expires_at = None
+                state.next_run_after = now + timedelta(minutes=1)
+                state.heartbeat_at = now
+                db.commit()
+                ForexTraderSnapshotService().publish(db, now=now)
+                return {
+                    "status": "MONITOR_ONLY",
+                    **managed,
+                    "blockers": ["SESSION_NOT_ALLOWED"],
+                    "market_refresh": refresh_result,
+                    "reinforcement_replay": reinforcement_replay,
+                    "next_action": "Monitor open paper positions; defer new entries until a permitted liquid session.",
+                }
             result = self.core.run_cycle(db, inputs=inputs, strategies=strategies, now=now, cycle_key=key)
             state = self._state(db)
             state.scheduler_status = "DATA_BLOCKED" if not inputs else "RESEARCH_ONLY" if not strategies else "RUNNING"

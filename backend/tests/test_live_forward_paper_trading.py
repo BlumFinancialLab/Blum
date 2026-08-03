@@ -22,6 +22,7 @@ from app.models import (
 )
 from app.services.learning_loop import BASE_SIGNAL_WEIGHTS
 from app.services.live_forward_paper_trading import LiveForwardPaperTradingService
+from app.services.trading_intelligence_lab import latest_market_price_after
 from app.services.paper_forward_opportunity_scanner import (
     BLOCKED_CANDIDATE,
     DATA_BLOCKED_CANDIDATE,
@@ -976,6 +977,114 @@ def test_daily_point_in_time_fx_rate_reuses_stored_intraday_fx_evidence(monkeypa
         rate = LiveForwardPaperTradingService().daily_point_in_time_fx_rate(db, "USD", "EUR", at)
 
     assert rate == 1.09
+
+
+def test_equity_trigger_can_mature_from_later_stored_intraday_bar():
+    with setup_db() as db:
+        asset = seed_asset(db)
+        decision_at = datetime.utcnow() - timedelta(hours=2)
+        observed_at = decision_at + timedelta(hours=1)
+        db.add(
+            ReplayMarketBar(
+                asset_id=asset.id,
+                source_symbol=asset.ticker,
+                normalized_symbol=asset.ticker,
+                market="USA",
+                timeframe="1h",
+                bar_timestamp=observed_at,
+                open=101.0,
+                high=103.0,
+                low=100.5,
+                close=102.5,
+                volume=500_000,
+                provider="fixture",
+                acquired_at=observed_at,
+                data_quality_score=95.0,
+            )
+        )
+        db.commit()
+
+        observation = latest_market_price_after(
+            db,
+            asset.ticker,
+            decision_at,
+            now=decision_at + timedelta(hours=1, minutes=5),
+        )
+
+    assert observation == (observed_at.date(), 102.5)
+
+
+def test_equity_trigger_ignores_intraday_bar_after_runtime_now():
+    with setup_db() as db:
+        asset = seed_asset(db)
+        decision_at = datetime.utcnow() - timedelta(hours=2)
+        runtime_now = decision_at + timedelta(minutes=30)
+        db.add(
+            ReplayMarketBar(
+                asset_id=asset.id,
+                source_symbol=asset.ticker,
+                normalized_symbol=asset.ticker,
+                market="USA",
+                timeframe="1h",
+                bar_timestamp=runtime_now + timedelta(minutes=30),
+                open=101.0,
+                high=104.0,
+                low=100.0,
+                close=103.0,
+                volume=500_000,
+                provider="fixture",
+                acquired_at=runtime_now + timedelta(minutes=30),
+                data_quality_score=95.0,
+            )
+        )
+        db.commit()
+
+        observation = latest_market_price_after(
+            db,
+            asset.ticker,
+            decision_at,
+            now=runtime_now,
+        )
+
+    assert observation is None
+
+
+def test_equity_execution_bars_use_only_post_decision_observations_up_to_now():
+    with setup_db() as db:
+        asset = seed_asset(db)
+        decision_at = datetime.utcnow() - timedelta(hours=3)
+        runtime_now = decision_at + timedelta(hours=2)
+        for offset, close in ((-30, 99.0), (30, 101.0), (90, 102.0), (150, 110.0)):
+            timestamp = decision_at + timedelta(minutes=offset)
+            db.add(
+                ReplayMarketBar(
+                    asset_id=asset.id,
+                    source_symbol=asset.ticker,
+                    normalized_symbol=asset.ticker,
+                    market="USA",
+                    timeframe="1h",
+                    bar_timestamp=timestamp,
+                    open=close - 0.5,
+                    high=close + 1.0,
+                    low=close - 1.0,
+                    close=close,
+                    volume=500_000,
+                    provider="fixture",
+                    acquired_at=timestamp,
+                    data_quality_score=95.0,
+                )
+            )
+        db.commit()
+
+        bars = LiveForwardPaperTradingService().daily_execution_bars(
+            db,
+            asset.ticker,
+            decision_at,
+            now=runtime_now,
+        )
+
+    assert [bar.close for bar in bars] == [101.0, 102.0]
+    assert all(decision_at < bar.timestamp <= runtime_now for bar in bars)
 
 
 def test_cost_adjusted_edge_gate_rejects_zero_expectancy_setup():
