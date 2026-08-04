@@ -134,7 +134,11 @@ Open `http://localhost:7860`. The first image build installs CPU machine-learnin
 and quantitative dependencies and can take several minutes.
 
 Without `DATABASE_URL`, the container starts an embedded PostgreSQL instance for
-research use. Use an external PostgreSQL database for durable deployments:
+research use. On deployments with persistent `/data`, BLUM asynchronously keeps
+a physical recovery image for fast local startup and an atomic logical dump as
+fallback. PostgreSQL itself remains on local disk because network-mounted Space
+storage is not a safe database data directory. Use an external PostgreSQL
+database for durable multi-replica deployments:
 
 ```bash
 docker run --rm -p 7860:7860 \

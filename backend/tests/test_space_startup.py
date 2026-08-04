@@ -32,6 +32,49 @@ def test_embedded_postgres_restore_supports_custom_and_bootstrap_fallbacks() -> 
     assert 'psql -d blum < \\"${BLUM_LEGACY_POSTGRES_BACKUP_FILE}\\"' not in source
 
 
+def test_embedded_postgres_prefers_a_local_restore_from_physical_backup() -> None:
+    source = START_SCRIPT.read_text()
+
+    assert 'embedded_postgres_physical/base.tar.gz' in source
+    assert 'embedded_postgres_physical/ready' in source
+    assert 'restore_embedded_postgres_physical_backup' in source
+    assert 'tar -xzf "${BLUM_PHYSICAL_POSTGRES_BASE_BACKUP}"' in source
+    assert 'service postgresql start' in source
+    assert source.index('restore_embedded_postgres_physical_backup') < source.index('service postgresql start')
+    assert 'PHYSICAL_RESTORE_ATTEMPTED=false' in source
+    assert 'Physical PostgreSQL recovery image extraction failed; falling back to logical restore.' in source
+    assert 'reset_local_postgres_cluster' in source
+
+
+def test_physical_backup_is_built_locally_then_published_atomically() -> None:
+    source = START_SCRIPT.read_text()
+
+    assert 'backup_embedded_postgres_physical' in source
+    assert 'publish_embedded_postgres_physical_backup' in source
+    assert 'pg_basebackup -D \'${physical_tmp_dir}\'' in source
+    assert 'BLUM_PHYSICAL_POSTGRES_PUBLISH_DIR' in source
+    assert 'touch "${BLUM_PHYSICAL_POSTGRES_PUBLISH_DIR}/ready"' in source
+    assert 'mv "${BLUM_PHYSICAL_POSTGRES_PUBLISH_DIR}" "${BLUM_PHYSICAL_POSTGRES_BACKUP_DIR}"' in source
+    assert 'mv "${previous_backup_dir}" "${BLUM_PHYSICAL_POSTGRES_BACKUP_DIR}" || true' in source
+    assert 'backup_embedded_postgres_physical || true' in source
+
+
+def test_backup_worker_warms_physical_snapshot_without_blocking_api_start() -> None:
+    source = START_SCRIPT.read_text()
+
+    assert 'BLUM_DB_INITIAL_BACKUP_DELAY_SECONDS="${BLUM_DB_INITIAL_BACKUP_DELAY_SECONDS:-60}"' in source
+    assert 'sleep "${BLUM_DB_INITIAL_BACKUP_DELAY_SECONDS}"' in source
+    assert source.index('alembic -c alembic.ini upgrade head') < source.rindex('start_backup_loop')
+
+
+def test_failed_network_postgres_cluster_is_removed_only_when_recovery_dump_exists() -> None:
+    source = START_SCRIPT.read_text()
+
+    assert 'cleanup_unsupported_persistent_postgres' in source
+    assert 'embedded_postgres_blum.dump' in source
+    assert 'rm -rf "${unsupported_data_dir}"' in source
+
+
 def test_restore_exposes_a_non_blank_status_page_before_the_api_is_ready() -> None:
     source = START_SCRIPT.read_text()
     status_server = RESTORE_STATUS_SERVER.read_text()
