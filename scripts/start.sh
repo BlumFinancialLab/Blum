@@ -96,7 +96,7 @@ start_backup_loop() {
 }
 
 restore_embedded_postgres_physical_backup() {
-  [[ -s "${BLUM_PHYSICAL_POSTGRES_READY_FILE}" ]] || return 1
+  [[ -f "${BLUM_PHYSICAL_POSTGRES_READY_FILE}" ]] || return 1
   [[ -s "${BLUM_PHYSICAL_POSTGRES_BASE_BACKUP}" ]] || return 1
 
   echo "Restoring local PostgreSQL data directory from the physical recovery image."
@@ -137,7 +137,7 @@ if [[ -z "${DATABASE_URL:-}" ]]; then
   mkdir -p "${BLUM_PERSIST_DIR}" || true
   cleanup_unsupported_persistent_postgres
   PHYSICAL_RESTORE_ATTEMPTED=false
-  if [[ -s "${BLUM_PHYSICAL_POSTGRES_READY_FILE}" ]]; then
+  if [[ -f "${BLUM_PHYSICAL_POSTGRES_READY_FILE}" ]]; then
     PHYSICAL_RESTORE_ATTEMPTED=true
     start_restore_status_server
     if restore_embedded_postgres_physical_backup; then

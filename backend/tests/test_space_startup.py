@@ -37,6 +37,7 @@ def test_embedded_postgres_prefers_a_local_restore_from_physical_backup() -> Non
 
     assert 'embedded_postgres_physical/base.tar.gz' in source
     assert 'embedded_postgres_physical/ready' in source
+    assert '[[ -f "${BLUM_PHYSICAL_POSTGRES_READY_FILE}" ]]' in source
     assert 'restore_embedded_postgres_physical_backup' in source
     assert 'tar -xzf "${BLUM_PHYSICAL_POSTGRES_BASE_BACKUP}"' in source
     assert 'service postgresql start' in source
