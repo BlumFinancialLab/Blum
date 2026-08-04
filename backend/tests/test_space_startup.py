@@ -32,6 +32,25 @@ def test_embedded_postgres_restore_supports_custom_and_bootstrap_fallbacks() -> 
     assert 'psql -d blum < \\"${BLUM_LEGACY_POSTGRES_BACKUP_FILE}\\"' not in source
 
 
+def test_embedded_postgres_uses_persistent_cluster_instead_of_restoring_each_deploy() -> None:
+    source = START_SCRIPT.read_text()
+
+    assert 'BLUM_POSTGRES_DATA_DIR="${BLUM_POSTGRES_DATA_DIR:-${BLUM_PERSIST_DIR}/postgresql/15/main}"' in source
+    assert '[[ ! -s "${BLUM_POSTGRES_DATA_DIR}/PG_VERSION" ]]' in source
+    assert "/initdb' -D '${BLUM_POSTGRES_DATA_DIR}'" in source
+    assert "/pg_ctl' -D '${BLUM_POSTGRES_DATA_DIR}'" in source
+    assert 'service postgresql start' not in source
+    assert 'Embedded PostgreSQL already contains tables; skipping restore.' in source
+
+
+def test_embedded_postgres_recovers_only_a_stale_postmaster_pid() -> None:
+    source = START_SCRIPT.read_text()
+
+    assert 'recover_stale_postmaster_pid' in source
+    assert 'kill -0 "${postmaster_pid}"' in source
+    assert 'rm -f "${BLUM_POSTGRES_DATA_DIR}/postmaster.pid"' in source
+
+
 def test_restore_exposes_a_non_blank_status_page_before_the_api_is_ready() -> None:
     source = START_SCRIPT.read_text()
     status_server = RESTORE_STATUS_SERVER.read_text()

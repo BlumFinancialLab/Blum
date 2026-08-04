@@ -5,6 +5,8 @@ export PORT="${PORT:-7860}"
 export BLUM_PERSIST_DIR="${BLUM_PERSIST_DIR:-/data/blum}"
 export BLUM_DB_BACKUP_SECONDS="${BLUM_DB_BACKUP_SECONDS:-1800}"
 export BLUM_DB_RESTORE_JOBS="${BLUM_DB_RESTORE_JOBS:-2}"
+export BLUM_POSTGRES_DATA_DIR="${BLUM_POSTGRES_DATA_DIR:-${BLUM_PERSIST_DIR}/postgresql/15/main}"
+export BLUM_POSTGRES_BIN_DIR="${BLUM_POSTGRES_BIN_DIR:-/usr/lib/postgresql/15/bin}"
 RESTORE_STATUS_PID=""
 
 start_restore_status_server() {
@@ -44,10 +46,39 @@ start_backup_loop() {
   fi
 }
 
+recover_stale_postmaster_pid() {
+  local pid_file="${BLUM_POSTGRES_DATA_DIR}/postmaster.pid"
+  local postmaster_pid=""
+
+  [[ -s "${pid_file}" ]] || return 0
+  postmaster_pid="$(head -n 1 "${pid_file}" | tr -d '[:space:]')"
+  if [[ "${postmaster_pid}" =~ ^[0-9]+$ ]] && kill -0 "${postmaster_pid}" 2>/dev/null; then
+    echo "PostgreSQL process ${postmaster_pid} is still active; preserving its postmaster.pid."
+    return 0
+  fi
+
+  echo "Removing stale PostgreSQL postmaster.pid from persistent storage."
+  rm -f "${BLUM_POSTGRES_DATA_DIR}/postmaster.pid"
+}
+
+start_embedded_postgres() {
+  mkdir -p "${BLUM_POSTGRES_DATA_DIR}"
+  chown -R postgres:postgres "${BLUM_POSTGRES_DATA_DIR}"
+  chmod 700 "${BLUM_POSTGRES_DATA_DIR}"
+
+  if [[ ! -s "${BLUM_POSTGRES_DATA_DIR}/PG_VERSION" ]]; then
+    echo "Initializing persistent PostgreSQL cluster at ${BLUM_POSTGRES_DATA_DIR}."
+    su postgres -c "'${BLUM_POSTGRES_BIN_DIR}/initdb' -D '${BLUM_POSTGRES_DATA_DIR}' --auth-local=trust --auth-host=scram-sha-256"
+  fi
+
+  recover_stale_postmaster_pid
+  su postgres -c "'${BLUM_POSTGRES_BIN_DIR}/pg_ctl' -D '${BLUM_POSTGRES_DATA_DIR}' -o \"-c listen_addresses=127.0.0.1 -p 5432\" -w start"
+}
+
 if [[ -z "${DATABASE_URL:-}" ]]; then
   echo "No DATABASE_URL provided. Starting embedded PostgreSQL for the Hugging Face Docker demo."
   mkdir -p "${BLUM_PERSIST_DIR}" || true
-  service postgresql start
+  start_embedded_postgres
   su postgres -c "psql -tc \"SELECT 1 FROM pg_database WHERE datname='blum'\" | grep -q 1 || createdb blum"
   su postgres -c "psql -c \"ALTER USER postgres PASSWORD 'postgres';\""
   export BLUM_EMBEDDED_POSTGRES_BACKUP_FILE="${BLUM_PERSIST_DIR}/embedded_postgres_blum.dump"
